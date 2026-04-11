@@ -2,42 +2,107 @@ import pandas as pd
 import paho.mqtt.client as mqtt
 import time
 import json
+import sys
 
-# ── MQTT setup ─────────────────────────────────────────
-BROKER   = "localhost"
-PORT     = 1883
+# ─────────────────────────────────────────────────────────
+#  CONFIGURATION
+# ─────────────────────────────────────────────────────────
 
-client = mqtt.Client()
-client.connect(BROKER, PORT)
-client.loop_start()
+BROKER      = "localhost"
+PORT        = 1883
+CSV_FILE    = "sleep_data.csv"
+DELAY       = 1.0          # seconds between each reading (simulate live sensor)
 
-print("Connected to MQTT broker")
+# ── Map these to your actual CSV column names ─────────────
+# Run this first to find your columns:
+# python -c "import pandas as pd; df = pd.read_csv('sleep_data.csv'); print(df.columns.tolist())"
 
-# ── Classification rules ───────────────────────────────
+SPO2_COL   = "bo"         # blood oxygen / SpO2
+HR_COL     = "hr"         # heart rate
+HRV_COL    = "rr"         # HRV or respiration rate
+MOTION_COL = None         # set to column name if you have motion data, else None
 
+# ─────────────────────────────────────────────────────────
+#  QoS CLASSIFICATION ENGINE
+#  Based on clinical thresholds from published literature
+# ─────────────────────────────────────────────────────────
 
 def classify(spo2, heart_rate, hrv):
     """
-    Rule-based QoS classifier based on clinical thresholds.
-    Returns tier string and MQTT QoS level.
+    Rule-based QoS classifier.
+
+    Tier definitions:
+    - CRITICAL   : SpO2 < 90%  OR  HR < 40  OR  HR > 100
+                   → Suspected apnea / oxygen desaturation
+                   → MQTT QoS 2 (guaranteed exactly-once delivery)
+
+    - IMPORTANT  : SpO2 90-94%  OR  HR 40-50 / 90-100  OR  HRV < 20ms
+                   → Abnormal physiological trend
+                   → MQTT QoS 1 (at least once delivery)
+
+    - NORMAL     : SpO2 95-99%, HR 50-90, HRV stable
+                   → Routine sleep data
+                   → MQTT QoS 0 (best effort, buffered)
+
+    - BACKGROUND : All other readings (motion, stats)
+                   → Aggregated statistics
+                   → MQTT QoS 0 (batch upload)
+
+    Clinical references:
+    - Wang et al. (2022) Nat. Sci. Sleep — SpO2 < 90% threshold
+    - Xu et al. (2023) PMC10250969 — T90% diagnostic marker
+    - Tran et al. (2023) Medicina MDPI — HRV and OSA correlation
     """
-    # CRITICAL — immediate danger
+
+    # ── CRITICAL tier ─────────────────────────────────────
     if spo2 < 90:
-        return "Critical", 2
+        return "Critical", 2, "SpO2 below 90% — apnea suspected"
 
-    # IMPORTANT — abnormal trend
-    if spo2 < 95 or heart_rate < 40 or heart_rate > 100 or hrv < 20:
-        return "Important", 1
+    if heart_rate < 40:
+        return "Critical", 2, "HR below 40 bpm — severe bradycardia"
 
-    # NORMAL — routine sleep
-    if spo2 >= 95 and 40 <= heart_rate <= 100:
-        return "Normal", 0
+    if heart_rate > 100:
+        return "Critical", 2, "HR above 100 bpm — nocturnal tachycardia"
 
-    # BACKGROUND — statistics only
-    return "Background", 0
+    # ── IMPORTANT tier ────────────────────────────────────
+    if 90 <= spo2 < 95:
+        return "Important", 1, "SpO2 90-94% — monitoring zone"
+
+    if heart_rate < 50 or heart_rate > 90:
+        return "Important", 1, "HR outside normal sleep range"
+
+    if hrv < 20:
+        return "Important", 1, "HRV low — possible autonomic stress"
+
+    # ── NORMAL tier ───────────────────────────────────────
+    if spo2 >= 95 and 50 <= heart_rate <= 90:
+        return "Normal", 0, "Routine sleep reading"
+
+    # ── BACKGROUND tier ───────────────────────────────────
+    return "Background", 0, "Background statistics"
 
 
-# ── Topic map ──────────────────────────────────────────
+# ─────────────────────────────────────────────────────────
+#  MQTT SETUP
+# ─────────────────────────────────────────────────────────
+
+def on_connect(client, userdata, flags, rc):
+    if rc == 0:
+        print("✓ Connected to MQTT broker at localhost:1883")
+    else:
+        print(f"✗ Connection failed with code {rc}")
+        sys.exit(1)
+
+client = mqtt.Client()
+client.on_connect = on_connect
+client.connect(BROKER, PORT)
+client.loop_start()
+time.sleep(1)  # wait for connection
+
+# ─────────────────────────────────────────────────────────
+#  TOPIC MAP
+# ─────────────────────────────────────────────────────────
+
 TOPICS = {
     "Critical":   "sleep/critical",
     "Important":  "sleep/important",
@@ -45,61 +110,127 @@ TOPICS = {
     "Background": "sleep/background",
 }
 
+# Tier colours for terminal output
+TIER_COLORS = {
+    "Critical":   "\033[91m",   # red
+    "Important":  "\033[93m",   # yellow
+    "Normal":     "\033[92m",   # green
+    "Background": "\033[90m",   # gray
+}
+RESET = "\033[0m"
 
-# ── Load dataset ───────────────────────────────────────
-print("Loading dataset...")
-df = pd.read_csv("sleep_data.csv")
-print(f"Loaded {len(df)} rows")
-print(f"Columns: {list(df.columns)}")
+# ─────────────────────────────────────────────────────────
+#  LOAD DATASET
+# ─────────────────────────────────────────────────────────
 
+print(f"\nLoading dataset: {CSV_FILE}")
+try:
+    df = pd.read_csv(CSV_FILE)
+except FileNotFoundError:
+    print(f"✗ File not found: {CSV_FILE}")
+    print("  Make sure sleep_data.csv is in the same folder as classifier.py")
+    sys.exit(1)
 
-# ── Map your dataset columns here ─────────────────────
-# Check what your CSV columns are called and map them below.
-# Common names: 'spo2', 'sr' (stress rate), 'rr' (respiration rate),
-#               'hr' (heart rate), 'hrv', 'bo' (blood oxygen)
+print(f"✓ Loaded {len(df)} rows")
+print(f"  Columns: {list(df.columns)}\n")
 
-# CHANGE THESE to match your actual column names
-SPO2_COL  = "bo"     # blood oxygen / SpO2 column
-HR_COL    = "hr"     # heart rate column  
-HRV_COL   = "rr"     # HRV or respiration rate column
+# ─────────────────────────────────────────────────────────
+#  SESSION STATISTICS TRACKER
+# ─────────────────────────────────────────────────────────
 
+stats = {
+    "Critical":   0,
+    "Important":  0,
+    "Normal":     0,
+    "Background": 0,
+    "total":      0,
+}
 
-# ── Replay loop ────────────────────────────────────────
-print("\nStarting data replay... Press Ctrl+C to stop.\n")
+# ─────────────────────────────────────────────────────────
+#  REPLAY LOOP — main engine
+# ─────────────────────────────────────────────────────────
 
-for index, row in df.iterrows():
+print("Starting data replay — press Ctrl+C to stop\n")
+print(f"{'Row':<6} {'SpO2':>6} {'HR':>6} {'HRV':>6}  {'Tier':<12} {'Reason'}")
+print("─" * 70)
 
-    try:
-        spo2       = float(row[SPO2_COL])
-        heart_rate = float(row[HR_COL])
-        hrv        = float(row[HRV_COL])
-    except (KeyError, ValueError):
-        print(f"Row {index} skipped — missing values")
-        continue
+try:
+    for index, row in df.iterrows():
 
-    tier, qos = classify(spo2, heart_rate, hrv)
-    topic     = TOPICS[tier]
+        # ── Extract values ─────────────────────────────
+        try:
+            spo2       = float(row[SPO2_COL])
+            heart_rate = float(row[HR_COL])
+            hrv        = float(row[HRV_COL])
+            motion     = float(row[MOTION_COL]) if MOTION_COL else 0.0
+        except (KeyError, ValueError) as e:
+            print(f"Row {index} skipped — {e}")
+            continue
 
-    # Build the message payload
-    payload = json.dumps({
-        "index":      index,
-        "spo2":       round(spo2, 1),
-        "heartRate":  round(heart_rate, 1),
-        "hrv":        round(hrv, 1),
-        "tier":       tier,
-        "topic":      topic,
-        "timestamp":  time.strftime("%I:%M %p"),
-    })
+        # ── Classify ───────────────────────────────────
+        tier, qos, reason = classify(spo2, heart_rate, hrv)
+        topic             = TOPICS[tier]
+        color             = TIER_COLORS[tier]
 
-    # Publish with appropriate QoS
-    client.publish(topic, payload=payload, qos=qos)
+        # ── Build payload ──────────────────────────────
+        payload = json.dumps({
+            "index":      int(index),
+            "spo2":       round(spo2, 1),
+            "heartRate":  round(heart_rate, 1),
+            "hrv":        round(hrv, 1),
+            "motion":     round(motion, 1),
+            "tier":       tier,
+            "topic":      topic,
+            "qos":        qos,
+            "reason":     reason,
+            "timestamp":  time.strftime("%I:%M %p"),
+            "stats": {
+                "critical":   stats["Critical"],
+                "important":  stats["Important"],
+                "normal":     stats["Normal"],
+                "background": stats["Background"],
+                "total":      stats["total"],
+            }
+        })
 
-    print(f"Row {index:4d} | SpO2={spo2:5.1f}% | HR={heart_rate:5.1f} | "
-          f"Tier={tier:10s} | Topic={topic}")
+        # ── Publish to MQTT ────────────────────────────
+        result = client.publish(topic, payload=payload, qos=qos)
 
-    # 1 second delay — simulates live sensor sending one reading per second
-    time.sleep(1)
+        # ── Update stats ───────────────────────────────
+        stats[tier]    += 1
+        stats["total"] += 1
 
-print("\nDataset replay complete.")
-client.loop_stop()
-client.disconnect()
+        # ── Terminal output ────────────────────────────
+        print(
+            f"{color}"
+            f"{index:<6} "
+            f"SpO2={spo2:5.1f}% "
+            f"HR={heart_rate:5.1f} "
+            f"HRV={hrv:5.1f}  "
+            f"{tier:<12} "
+            f"{reason}"
+            f"{RESET}"
+        )
+
+        time.sleep(DELAY)
+
+except KeyboardInterrupt:
+    print("\n\nStopped by user.")
+
+finally:
+    # ── Print session summary ──────────────────────────
+    print("\n" + "─" * 70)
+    print("SESSION SUMMARY")
+    print("─" * 70)
+    print(f"  Total readings  : {stats['total']}")
+    print(f"  Critical events : {stats['Critical']}")
+    print(f"  Important events: {stats['Important']}")
+    print(f"  Normal readings : {stats['Normal']}")
+    print(f"  Background      : {stats['Background']}")
+    if stats['total'] > 0:
+        pct = round((stats['Critical'] / stats['total']) * 100, 1)
+        print(f"  Critical rate   : {pct}%")
+    print("─" * 70)
+    client.loop_stop()
+    client.disconnect()
+    print("Disconnected from MQTT broker.")
