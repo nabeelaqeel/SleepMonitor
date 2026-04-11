@@ -3,6 +3,8 @@ import { NavigationContainer } from '@react-navigation/native';
 import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 
+import { MaterialCommunityIcons } from '@expo/vector-icons';
+
 import { SleepProvider } from './context/SleepContext';
 
 import HomeScreen    from './screens/HomeScreen';
@@ -31,10 +33,18 @@ export default function App() {
               tabBarInactiveTintColor: '#444',
             }}
           >
-            <Tab.Screen name="Home"    component={HomeScreen}    />
-            <Tab.Screen name="Alerts"  component={AlertsScreen}  />
-            <Tab.Screen name="Report"  component={ReportScreen}  />
-            <Tab.Screen name="Network" component={NetworkScreen} />
+            <Tab.Screen name="Home" component={HomeScreen}
+              options={{ tabBarIcon: ({ color, size }) => <MaterialCommunityIcons name="home" color={color} size={size} /> }}
+            />
+            <Tab.Screen name="Alerts" component={AlertsScreen}
+              options={{ tabBarIcon: ({ color, size }) => <MaterialCommunityIcons name="bell-alert" color={color} size={size} /> }}
+            />
+            <Tab.Screen name="Report" component={ReportScreen}
+              options={{ tabBarIcon: ({ color, size }) => <MaterialCommunityIcons name="chart-bar" color={color} size={size} /> }}
+            />
+            <Tab.Screen name="Network" component={NetworkScreen}
+              options={{ tabBarIcon: ({ color, size }) => <MaterialCommunityIcons name="wifi" color={color} size={size} /> }}
+            />
           </Tab.Navigator>
         </NavigationContainer>
       </SleepProvider>
