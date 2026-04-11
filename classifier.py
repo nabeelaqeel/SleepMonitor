@@ -14,6 +14,8 @@ client.loop_start()
 print("Connected to MQTT broker")
 
 # ── Classification rules ───────────────────────────────
+
+
 def classify(spo2, heart_rate, hrv):
     """
     Rule-based QoS classifier based on clinical thresholds.

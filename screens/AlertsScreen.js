@@ -8,7 +8,6 @@ import {
   TouchableOpacity,
 } from 'react-native';
 
-// Mock event log — replace with real MQTT message history later
 const MOCK_EVENTS = [
   { id: '1', tier: 'Critical',   time: '02:14 AM', spo2: 87, hr: 52, duration: '2m 10s', topic: 'sleep/critical'   },
   { id: '2', tier: 'Important',  time: '02:08 AM', spo2: 91, hr: 58, duration: '45s',    topic: 'sleep/important'  },
@@ -36,14 +35,12 @@ export default function AlertsScreen() {
     ? MOCK_EVENTS
     : MOCK_EVENTS.filter(e => e.tier === filter);
 
-  // Summary counts
   const criticalCount  = MOCK_EVENTS.filter(e => e.tier === 'Critical').length;
   const importantCount = MOCK_EVENTS.filter(e => e.tier === 'Important').length;
 
   return (
     <SafeAreaView style={styles.container}>
 
-      {/* Header */}
       <View style={styles.header}>
         <Text style={styles.title}>Tonight's events</Text>
         <Text style={styles.subtitle}>
@@ -51,7 +48,6 @@ export default function AlertsScreen() {
         </Text>
       </View>
 
-      {/* Filter pills */}
       <View style={styles.filterRow}>
         {FILTERS.map(f => (
           <TouchableOpacity
@@ -66,7 +62,6 @@ export default function AlertsScreen() {
         ))}
       </View>
 
-      {/* Event list */}
       <FlatList
         data={filtered}
         keyExtractor={item => item.id}
@@ -87,8 +82,6 @@ function EventItem({ event }) {
 
   return (
     <View style={[styles.card, { borderLeftColor: style.border }]}>
-
-      {/* Top row */}
       <View style={styles.cardTop}>
         <Text style={styles.cardTime}>{event.time}</Text>
         <View style={[styles.badge, { backgroundColor: style.badge }]}>
@@ -98,7 +91,6 @@ function EventItem({ event }) {
         </View>
       </View>
 
-      {/* Values row */}
       <View style={styles.cardValues}>
         <Text style={styles.valueText}>SpO2 {event.spo2}%</Text>
         <Text style={styles.valueSep}>·</Text>
@@ -111,9 +103,7 @@ function EventItem({ event }) {
         )}
       </View>
 
-      {/* MQTT topic */}
       <Text style={styles.topic}>{event.topic}</Text>
-
     </View>
   );
 }
@@ -164,7 +154,12 @@ const styles = StyleSheet.create({
   badge:          { borderRadius: 12, paddingVertical: 3, paddingHorizontal: 9 },
   badgeText:      { fontSize: 10, fontWeight: '700' },
 
-  cardValues:     { flexDirection: 'row', alignItems: 'center', gap: 5, marginBottom: 6 },
+  cardValues:     {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 5,
+    marginBottom: 6,
+  },
   valueText:      { fontSize: 13, color: '#e5e5e5', fontWeight: '500' },
   valueSep:       { fontSize: 13, color: '#444' },
 
