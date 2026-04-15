@@ -5,7 +5,7 @@ let client = null;
 // ── Replace with your laptop IP address ───────────────
 // Windows: open cmd → ipconfig → find IPv4 Address
 // Mac:     open terminal → ifconfig | grep "inet "
-const BROKER_IP = '192.168.1.139';  // CHANGE THIS to your laptop IP
+const BROKER_IP = '10.89.237.252';  // CHANGE THIS to your laptop IP
 const BROKER_PORT = 9001;          // WebSocket port — important, use 9001 not 1883
 
 export function connectMQTT(onMessage) {
