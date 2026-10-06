@@ -1,0 +1,15 @@
+# Credentials — never bake into the image
+passwd
+*.pem
+*.key
+*.crt
+*.p12
+
+# Git and CI
+.git
+.github
+.gitignore
+
+# OS artifacts
+.DS_Store
+Thumbs.db

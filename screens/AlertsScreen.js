@@ -1,8 +1,9 @@
-import React, { useState } from 'react';
+import { useState } from 'react';
 import {
   View, Text, StyleSheet,
-  FlatList, SafeAreaView, TouchableOpacity,
+  FlatList, TouchableOpacity,
 } from 'react-native';
+import { SafeAreaView } from 'react-native-safe-area-context';
 import { useSleep } from '../context/SleepContext';
 
 const TIER_STYLE = {

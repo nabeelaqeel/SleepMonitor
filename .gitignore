@@ -32,6 +32,12 @@ yarn-error.*
 
 # local env files
 .env*.local
+.env.development
+.env.staging
+.env.production
+
+# Docker credentials — never commit
+mosquitto/passwd
 
 # typescript
 *.tsbuildinfo
@@ -39,3 +45,6 @@ yarn-error.*
 # generated native folders
 /ios
 /android
+
+# Claude Code agent config — local only
+.claude/

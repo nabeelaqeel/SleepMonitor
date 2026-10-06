@@ -11,10 +11,45 @@ const TIER_CONFIG = {
                 label: 'NORMAL — routine sleep',    dot: '#22c55e' },
 };
 
+const HISTORY_TYPE_CONFIG = {
+  Diagnosis:    { bg: '#1a1a3a', border: '#2a2a5a', text: '#818cf8' },
+  Medication:   { bg: '#2d1f07', border: '#78350f', text: '#fbbf24' },
+  'Lab Result': { bg: '#0a2010', border: '#14532d', text: '#4ade80' },
+};
+
 function deriveTier(spo2) {
   if (spo2 < 90) return 'Critical';
   if (spo2 < 95) return 'Important';
   return 'Normal';
+}
+
+function computeBmi(weight, height) {
+  const h = height / 100;
+  return (weight / (h * h)).toFixed(1);
+}
+
+function bmiColor(bmi) {
+  const b = parseFloat(bmi);
+  if (b < 18.5) return '#fbbf24';
+  if (b < 25)   return '#4ade80';
+  if (b < 30)   return '#fbbf24';
+  return '#f87171';
+}
+
+function MedicalHistoryItem({ record }) {
+  const cfg = HISTORY_TYPE_CONFIG[record.type] || HISTORY_TYPE_CONFIG.Diagnosis;
+  return (
+    <View style={histStyles.item}>
+      <View style={histStyles.topRow}>
+        <Text style={histStyles.date}>{record.date}</Text>
+        <View style={[histStyles.typeBadge, { backgroundColor: cfg.bg, borderColor: cfg.border }]}>
+          <Text style={[histStyles.typeText, { color: cfg.text }]}>{record.type}</Text>
+        </View>
+      </View>
+      <Text style={histStyles.note}>{record.note}</Text>
+      <Text style={histStyles.doctor}>{record.doctor}</Text>
+    </View>
+  );
 }
 
 export default function PatientDetailScreen({ route }) {
@@ -26,6 +61,7 @@ export default function PatientDetailScreen({ route }) {
   const spo2Color = patient.lastSpo2 < 90 ? '#f87171'
                   : patient.lastSpo2 < 95 ? '#fbbf24' : '#4ade80';
   const hrColor   = patient.lastHr < 40 || patient.lastHr > 100 ? '#f87171' : '#4ade80';
+  const bmi       = computeBmi(patient.weight, patient.height);
 
   return (
     <ScrollView
@@ -75,6 +111,23 @@ export default function PatientDetailScreen({ route }) {
           value={patient.status.charAt(0).toUpperCase() + patient.status.slice(1)}
           color="#9ca3af"
         />
+      </View>
+
+      {/* Physical metrics */}
+      <Text style={styles.sectionLabel}>Physical metrics</Text>
+      <View style={styles.grid}>
+        <VitalCard label="Age"    value={`${patient.age} yrs`}   color="#9ca3af" />
+        <VitalCard label="Weight" value={`${patient.weight} kg`}  color="#9ca3af" />
+        <VitalCard label="Height" value={`${patient.height} cm`}  color="#9ca3af" />
+        <VitalCard label="BMI"    value={bmi}                     color={bmiColor(bmi)} />
+      </View>
+
+      {/* Medical history */}
+      <Text style={styles.sectionLabel}>Medical history</Text>
+      <View style={{ marginBottom: 22 }}>
+        {(patient.medicalHistory || []).map(r => (
+          <MedicalHistoryItem key={r.id} record={r} />
+        ))}
       </View>
 
       {/* Critical events callout */}
@@ -227,5 +280,47 @@ const styles = StyleSheet.create({
     fontSize: 12,
     color: '#444',
     fontStyle: 'italic',
+  },
+});
+
+const histStyles = StyleSheet.create({
+  item: {
+    backgroundColor: '#0d0d18',
+    borderRadius: 12,
+    borderWidth: 0.5,
+    borderColor: '#1e1e30',
+    padding: 14,
+    marginBottom: 10,
+  },
+  topRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 8,
+  },
+  date: {
+    fontSize: 12,
+    color: '#555',
+  },
+  typeBadge: {
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+    borderRadius: 6,
+    borderWidth: 1,
+  },
+  typeText: {
+    fontSize: 10,
+    fontWeight: '600',
+    letterSpacing: 0.3,
+  },
+  note: {
+    fontSize: 13,
+    color: '#c4c4d4',
+    lineHeight: 19,
+    marginBottom: 6,
+  },
+  doctor: {
+    fontSize: 11,
+    color: '#444',
   },
 });

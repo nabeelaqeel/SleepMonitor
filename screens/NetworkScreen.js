@@ -1,8 +1,8 @@
-import React from 'react';
 import {
   View, Text, StyleSheet,
-  ScrollView, SafeAreaView,
+  ScrollView,
 } from 'react-native';
+import { SafeAreaView } from 'react-native-safe-area-context';
 import { useSleep } from '../context/SleepContext';
 
 export default function NetworkScreen() {

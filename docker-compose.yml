@@ -1,0 +1,194 @@
+# =============================================================
+# Sleep Monitor — docker-compose.yml
+#
+# Usage:
+#   cp .env.example .env.development   # first time only
+#   make mqtt-passwd                   # create mosquitto/passwd
+#   docker compose --env-file .env.development up --build
+#
+# Services:
+#   mosquitto       — MQTT broker (TCP :1883, WebSocket :9001)
+#   python-publisher — reads sleep_data.csv, publishes to MQTT
+#   backend-api     — Node.js REST API (Phase 2)
+#   postgres        — local dev DB (use RDS in production)
+#
+# The React Native Expo app runs on a mobile device and is
+# NOT containerized. It connects to:
+#   MQTT  → ws://localhost:9001
+#   API   → http://localhost:3000
+# =============================================================
+
+version: "3.9"
+
+volumes:
+  mosquitto_data:
+    driver: local
+  postgres_data:
+    driver: local
+
+networks:
+  sleep_net:
+    driver: bridge
+
+services:
+
+  # ── 1. Mosquitto MQTT Broker ──────────────────────────────
+  mosquitto:
+    image: ${MOSQUITTO_IMAGE:-sleep-monitor/mosquitto:latest}
+    build:
+      context: ./mosquitto
+      dockerfile: Dockerfile
+    container_name: sleep-mosquitto
+    restart: unless-stopped
+    networks:
+      - sleep_net
+    ports:
+      - "1883:1883"   # Plain MQTT  — Python publisher
+      - "9001:9001"   # WebSocket   — React Native app
+    volumes:
+      # passwd is generated locally and mounted at runtime.
+      # Run `make mqtt-passwd` to create it.
+      - ./mosquitto/passwd:/mosquitto/config/passwd:ro
+      - mosquitto_data:/mosquitto/data
+    environment:
+      MQTT_USER:     ${MQTT_USER}
+      MQTT_PASSWORD: ${MQTT_PASSWORD}
+    healthcheck:
+      test:
+        - "CMD"
+        - "mosquitto_sub"
+        - "-h"
+        - "localhost"
+        - "-p"
+        - "1883"
+        - "-t"
+        - "$$SYS/broker/uptime"
+        - "-u"
+        - "${MQTT_USER}"
+        - "-P"
+        - "${MQTT_PASSWORD}"
+        - "-C"
+        - "1"
+        - "-W"
+        - "5"
+      interval: 30s
+      timeout: 10s
+      start_period: 15s
+      retries: 3
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  # ── 2. Python Publisher / Classifier ─────────────────────
+  python-publisher:
+    image: ${PUBLISHER_IMAGE:-sleep-monitor/python-publisher:latest}
+    build:
+      context: ./python-publisher
+      dockerfile: Dockerfile
+    container_name: sleep-publisher
+    restart: unless-stopped
+    networks:
+      - sleep_net
+    depends_on:
+      mosquitto:
+        condition: service_healthy
+    volumes:
+      # Mount the CSV so it can be swapped without rebuilding.
+      # Also mounts the original project CSV for convenience.
+      - ./sleep_data.csv:/app/data/sleep_data.csv:ro
+    environment:
+      MQTT_HOST:        ${MQTT_HOST:-mosquitto}
+      MQTT_PORT:        ${MQTT_PORT:-1883}
+      MQTT_USER:        ${MQTT_USER}
+      MQTT_PASSWORD:    ${MQTT_PASSWORD}
+      PATIENT_ID:       ${PATIENT_ID:-patient-001}
+      CSV_PATH:         /app/data/sleep_data.csv
+      PUBLISH_INTERVAL: ${PUBLISH_INTERVAL:-1.0}
+      LOOP_CSV:         ${LOOP_CSV:-true}
+      STATS_INTERVAL:   ${STATS_INTERVAL:-10}
+    healthcheck:
+      test: ["CMD", "pgrep", "-f", "publisher.py"]
+      interval: 60s
+      timeout: 10s
+      start_period: 30s
+      retries: 3
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  # ── 3. Backend API (Node.js Express — Phase 2) ───────────
+  backend-api:
+    image: ${API_IMAGE:-sleep-monitor/backend-api:latest}
+    build:
+      context: ./backend-api
+      dockerfile: Dockerfile
+    container_name: sleep-api
+    restart: unless-stopped
+    networks:
+      - sleep_net
+    ports:
+      - "${API_PORT:-3000}:3000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      mosquitto:
+        condition: service_healthy
+    environment:
+      NODE_ENV:      ${NODE_ENV:-development}
+      PORT:          3000
+      LOG_LEVEL:     ${LOG_LEVEL:-info}
+      DATABASE_URL:  ${DATABASE_URL}
+      JWT_SECRET:    ${JWT_SECRET}
+      MQTT_HOST:     ${MQTT_HOST:-mosquitto}
+      MQTT_PORT:     ${MQTT_PORT:-1883}
+      MQTT_USER:     ${MQTT_USER}
+      MQTT_PASSWORD: ${MQTT_PASSWORD}
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:3000/health"]
+      interval: 30s
+      timeout: 10s
+      start_period: 20s
+      retries: 3
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  # ── 4. PostgreSQL (local dev only) ───────────────────────
+  # In production this is replaced by Amazon RDS.
+  # Swap DATABASE_URL in .env.production — nothing else changes.
+  postgres:
+    image: postgres:16-alpine
+    container_name: sleep-postgres
+    restart: unless-stopped
+    networks:
+      - sleep_net
+    ports:
+      # Expose on host so pgAdmin / DBeaver can connect during development
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      # SQL files in init/ run alphabetically on first container start
+      - ./postgres/init:/docker-entrypoint-initdb.d:ro
+    environment:
+      POSTGRES_DB:       ${POSTGRES_DB:-sleep_monitor}
+      POSTGRES_USER:     ${POSTGRES_USER:-sleep_user}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+    healthcheck:
+      test:
+        - "CMD-SHELL"
+        - "pg_isready -U ${POSTGRES_USER:-sleep_user} -d ${POSTGRES_DB:-sleep_monitor}"
+      interval: 10s
+      timeout: 5s
+      start_period: 20s
+      retries: 5
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"

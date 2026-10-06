@@ -1,0 +1,194 @@
+# =============================================================
+# Sleep Monitor — CI/CD Pipeline
+#
+# Triggers when a semantic version git tag is pushed:
+#   git tag -a v1.2.0 -m "Release 1.2.0"
+#   git push origin v1.2.0
+#
+# Steps:
+#   1. Build all Docker images
+#   2. Tag with version, git SHA, and 'latest'
+#   3. Push to Amazon ECR
+#   4. SSH into EC2 and do a rolling restart
+#
+# Required GitHub Secrets (Settings → Secrets → Actions):
+#   AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY
+#   AWS_REGION, AWS_ACCOUNT_ID
+#   EC2_HOST, EC2_SSH_KEY
+#   MQTT_PASSWORD, POSTGRES_PASSWORD, JWT_SECRET, DATABASE_URL
+# =============================================================
+
+name: Build · Push · Deploy
+
+on:
+  push:
+    tags:
+      - "v[0-9]+.[0-9]+.[0-9]+"        # v1.0.0, v1.3.0, v2.0.0
+
+  workflow_dispatch:
+    inputs:
+      image_tag:
+        description: "Image tag to deploy (e.g. v1.3.0)"
+        required: true
+
+env:
+  AWS_REGION:   ${{ secrets.AWS_REGION }}
+  ECR_REGISTRY: ${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.${{ secrets.AWS_REGION }}.amazonaws.com
+  IMAGE_TAG:    ${{ github.ref_name }}
+
+# ══════════════════════════════════════════════════════════════
+jobs:
+
+  # ── Job 1: Build and push all images to ECR ───────────────
+  build-and-push:
+    name: Build and Push to ECR
+    runs-on: ubuntu-24.04
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Get short git SHA
+        id: sha
+        run: echo "short=$(git rev-parse --short HEAD)" >> $GITHUB_OUTPUT
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id:     ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region:            ${{ env.AWS_REGION }}
+
+      - name: Login to Amazon ECR
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      # ── Mosquitto ──────────────────────────────────────────
+      - name: Build and push Mosquitto
+        uses: docker/build-push-action@v5
+        with:
+          context:   ./mosquitto
+          file:      ./mosquitto/Dockerfile
+          push:      true
+          tags: |
+            ${{ env.ECR_REGISTRY }}/sleep-monitor/mosquitto:${{ env.IMAGE_TAG }}
+            ${{ env.ECR_REGISTRY }}/sleep-monitor/mosquitto:sha-${{ steps.sha.outputs.short }}
+            ${{ env.ECR_REGISTRY }}/sleep-monitor/mosquitto:latest
+          cache-from: type=gha,scope=mosquitto
+          cache-to:   type=gha,scope=mosquitto,mode=max
+          labels: |
+            org.opencontainers.image.version=${{ env.IMAGE_TAG }}
+            org.opencontainers.image.revision=${{ github.sha }}
+
+      # ── Python Publisher ───────────────────────────────────
+      - name: Build and push Python Publisher
+        uses: docker/build-push-action@v5
+        with:
+          context:   ./python-publisher
+          file:      ./python-publisher/Dockerfile
+          push:      true
+          tags: |
+            ${{ env.ECR_REGISTRY }}/sleep-monitor/python-publisher:${{ env.IMAGE_TAG }}
+            ${{ env.ECR_REGISTRY }}/sleep-monitor/python-publisher:sha-${{ steps.sha.outputs.short }}
+            ${{ env.ECR_REGISTRY }}/sleep-monitor/python-publisher:latest
+          cache-from: type=gha,scope=python-publisher
+          cache-to:   type=gha,scope=python-publisher,mode=max
+
+      # ── Backend API ────────────────────────────────────────
+      - name: Build and push Backend API
+        uses: docker/build-push-action@v5
+        with:
+          context:   ./backend-api
+          file:      ./backend-api/Dockerfile
+          push:      true
+          tags: |
+            ${{ env.ECR_REGISTRY }}/sleep-monitor/backend-api:${{ env.IMAGE_TAG }}
+            ${{ env.ECR_REGISTRY }}/sleep-monitor/backend-api:sha-${{ steps.sha.outputs.short }}
+            ${{ env.ECR_REGISTRY }}/sleep-monitor/backend-api:latest
+          cache-from: type=gha,scope=backend-api
+          cache-to:   type=gha,scope=backend-api,mode=max
+
+  # ── Job 2: Deploy to EC2 via SSH ──────────────────────────
+  deploy:
+    name: Deploy to EC2
+    runs-on: ubuntu-24.04
+    needs: build-and-push
+    environment: production    # optional: requires manual approval in GitHub
+
+    steps:
+      - name: Deploy via SSH
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host:     ${{ secrets.EC2_HOST }}
+          username: ubuntu
+          key:      ${{ secrets.EC2_SSH_KEY }}
+          timeout:  120s
+          script: |
+            set -euo pipefail
+
+            IMAGE_TAG="${{ env.IMAGE_TAG }}"
+            ECR_REGISTRY="${{ env.ECR_REGISTRY }}"
+            AWS_REGION="${{ env.AWS_REGION }}"
+
+            echo "==> Deploying version ${IMAGE_TAG}"
+
+            # Authenticate Docker to ECR
+            aws ecr get-login-password --region ${AWS_REGION} \
+              | docker login --username AWS --password-stdin ${ECR_REGISTRY}
+
+            # Pull new images
+            docker pull ${ECR_REGISTRY}/sleep-monitor/mosquitto:${IMAGE_TAG}
+            docker pull ${ECR_REGISTRY}/sleep-monitor/python-publisher:${IMAGE_TAG}
+            docker pull ${ECR_REGISTRY}/sleep-monitor/backend-api:${IMAGE_TAG}
+
+            # Update image tags in the production env file
+            cd /opt/sleep-monitor
+            sed -i "s|MOSQUITTO_IMAGE=.*|MOSQUITTO_IMAGE=${ECR_REGISTRY}/sleep-monitor/mosquitto:${IMAGE_TAG}|"        .env.production
+            sed -i "s|PUBLISHER_IMAGE=.*|PUBLISHER_IMAGE=${ECR_REGISTRY}/sleep-monitor/python-publisher:${IMAGE_TAG}|" .env.production
+            sed -i "s|API_IMAGE=.*|API_IMAGE=${ECR_REGISTRY}/sleep-monitor/backend-api:${IMAGE_TAG}|"                  .env.production
+
+            # Rolling restart — compose only recreates changed services
+            docker compose --env-file .env.production up -d --no-build
+
+            # Wait for health checks
+            echo "==> Waiting 20s for services to settle..."
+            sleep 20
+
+            # Fail the deploy if any service is unhealthy
+            UNHEALTHY=$(docker compose --env-file .env.production ps --format json \
+              | python3 -c "
+            import sys, json
+            lines = [l for l in sys.stdin if l.strip()]
+            bad = [json.loads(l)['Service'] for l in lines
+                   if json.loads(l).get('Health','') not in ('healthy','')]
+            print('\n'.join(bad))
+            ")
+
+            if [ -n "$UNHEALTHY" ]; then
+              echo "ERROR: Unhealthy after deploy: $UNHEALTHY"
+              exit 1
+            fi
+
+            echo "==> ${IMAGE_TAG} deployed successfully"
+
+            # Clean up images older than 72 hours
+            docker image prune -f --filter "until=72h"
+
+  # ── Job 3: Notify on failure ──────────────────────────────
+  notify-failure:
+    name: Notify on failure
+    runs-on: ubuntu-24.04
+    needs: [build-and-push, deploy]
+    if: failure()
+    steps:
+      - name: Print rollback instructions
+        run: |
+          echo "::error::Pipeline failed for ${{ env.IMAGE_TAG }}"
+          echo ""
+          echo "To roll back to the previous version immediately (no rebuild):"
+          echo "  ssh ubuntu@\$EC2_HOST"
+          echo "  cd /opt/sleep-monitor"
+          echo "  sed -i 's|:${{ env.IMAGE_TAG }}|:v<PREVIOUS_TAG>|g' .env.production"
+          echo "  docker compose --env-file .env.production up -d --no-build"
