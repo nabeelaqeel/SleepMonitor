@@ -1,4 +1,4 @@
-import React, { createContext, useContext, useState, useEffect } from 'react';
+import { createContext, useContext, useState, useEffect } from 'react';
 import { connectMQTT, disconnectMQTT } from '../services/mqttService';
 
 const SleepContext = createContext(null);
@@ -29,6 +29,8 @@ export function SleepProvider({ children }) {
   );
 
   const [eventLog, setEventLog] = useState([]);
+
+  const [sleepTimeline, setSleepTimeline] = useState([]);
 
   const [networkStats, setNetworkStats] = useState({
     connected:   false,
@@ -70,6 +72,20 @@ export function SleepProvider({ children }) {
       setSpo2History(prev => {
         const updated = [...prev, data.spo2];
         return updated.slice(-10);
+      });
+
+      // Append to sleep timeline (capped at 120 entries)
+      setSleepTimeline(prev => {
+        const entry = {
+          ts:        now,
+          time:      data.timestamp,
+          spo2:      data.spo2,
+          heartRate: data.heartRate,
+          hrv:       data.hrv,
+          motion:    data.motion || 0,
+          tier:      data.tier,
+        };
+        return [...prev, entry].slice(-120);
       });
 
       // Add to event log — only Critical and Important
@@ -116,6 +132,7 @@ export function SleepProvider({ children }) {
       spo2History,
       eventLog,
       networkStats,
+      sleepTimeline,
     }}>
       {children}
     </SleepContext.Provider>
