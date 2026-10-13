@@ -11,6 +11,7 @@ A QoS-aware real-time sleep monitoring system built as a Final Year Project (FYP
 - [Prerequisites](#prerequisites)
 - [Installation](#installation)
 - [Broker Setup (Mosquitto)](#broker-setup-mosquitto)
+- [Database & Ingest (PostgreSQL)](#database--ingest-postgresql)
 - [Running the App](#running-the-app)
 - [Test Credentials](#test-credentials)
 - [Project Structure](#project-structure)
@@ -79,6 +80,7 @@ SleepContext.js  (React Context — single source of truth)
 - **Expo Go** app on your phone (iOS / Android), or an emulator
 - **Mosquitto** MQTT broker installed on your laptop
 - **Python 3** with `paho-mqtt` installed (for the classifier/publisher)
+- **Docker** + **Docker Compose** (for the PostgreSQL ingest database — optional)
 - Your laptop and phone must be on the **same Wi-Fi network**
 
 ---
@@ -162,6 +164,42 @@ mosquitto_pub -h <YOUR_IP> -p 1883 -t "sleep/normal" \
 
 ---
 
+## Database & Ingest (PostgreSQL)
+
+Optional durable store for the MQTT stream. A Python **ingest worker** subscribes to the broker and writes readings, alerts, and per-session QoS delivery stats to PostgreSQL. Mosquitto stays native — only Postgres runs in Docker.
+
+**Flow:** `publisher → Mosquitto :1883 → ingest/worker.py → PostgreSQL :5432`
+
+```bash
+# 1. Config (first time only — .env.development is gitignored)
+cp .env.example .env.development
+
+# 2. Start PostgreSQL (schema applied automatically on first boot)
+docker compose --env-file .env.development up -d
+
+# 3. Python deps in a host venv
+python3 -m venv .venv-dev
+.venv-dev/bin/pip install -r ingest/requirements.txt -r python-publisher/requirements.txt
+
+# 4. Run the ingest worker (leave running)
+.venv-dev/bin/python ingest/worker.py
+
+# 5. In another shell, run the publisher against the realistic dataset
+set -a && . ./.env.development && set +a
+CSV_PATH=sleep_data_realistic.csv LOOP_CSV=false PUBLISH_INTERVAL=0.05 \
+  .venv-dev/bin/python python-publisher/publisher.py
+
+# 6. Inspect the results
+docker exec sleep-postgres psql -U sleep_user -d sleep_monitor \
+  -c "SELECT * FROM session_stats;"
+```
+
+`session_stats.missing_readings` measures QoS 0 loss: with the worker stopped during a run, only the QoS 1/2 messages are redelivered on restart. To re-apply schema changes, wipe the volume with `docker compose --env-file .env.development down -v`.
+
+See [`docs/DATABASE.md`](docs/DATABASE.md) for the schema, payload fields, and design details.
+
+---
+
 ## Running the App
 
 ```bash
@@ -196,7 +234,8 @@ SleepMonitor/
 ├── App.js                          # Root — auth state, role-based routing
 ├── index.js                        # Expo entry point
 ├── app.json                        # Expo config (new arch enabled, package IDs)
-├── sleep_data.csv                  # Sample dataset for the Python classifier
+├── sleep_data.csv                  # Dataset for the classifier (has sleep-stage labels)
+├── sleep_data_realistic.csv        # Dataset used for demos + DB ingestion
 │
 ├── auth/
 │   └── mockAuth.js                 # In-memory login, AsyncStorage session persistence
@@ -213,15 +252,22 @@ SleepMonitor/
 ├── components/
 │   └── VitalCard.js                # Reusable vital metric display card
 │
-└── screens/
-    ├── LoginScreen.js
-    ├── HomeScreen.js               # Live vitals + SpO2 sparkline (patient)
-    ├── AlertsScreen.js             # Event log, Critical/Important filter (patient)
-    ├── ReportScreen.js             # Session statistics + QoS summary (patient)
-    ├── NetworkScreen.js            # Broker status + per-topic metrics (patient)
-    └── doctor/
-        ├── PatientListScreen.js    # Patient list (mock data — Phase 2)
-        └── PatientDetailScreen.js  # Individual patient vitals (mock data — Phase 2)
+├── screens/
+│   ├── LoginScreen.js
+│   ├── HomeScreen.js               # Live vitals + SpO2 sparkline (patient)
+│   ├── AlertsScreen.js             # Event log, Critical/Important filter (patient)
+│   ├── ReportScreen.js             # Session statistics + QoS summary (patient)
+│   ├── NetworkScreen.js            # Broker status + per-topic metrics (patient)
+│   └── doctor/
+│       ├── PatientListScreen.js    # Patient list (mock data — Phase 2)
+│       └── PatientDetailScreen.js  # Individual patient vitals (mock data — Phase 2)
+│
+├── python-publisher/               # MQTT publisher + tier classifier (the real pipeline)
+├── ingest/                         # MQTT → PostgreSQL ingest worker
+├── postgres/init/01_schema.sql     # Database schema (applied on first boot)
+├── docker-compose.yml              # PostgreSQL service (Docker)
+├── .env.example                    # Environment template (copy to .env.development)
+└── docs/                           # ARCHITECTURE, DATA_MODEL, DATABASE, MQTT_SETUP
 ```
 
 ---
