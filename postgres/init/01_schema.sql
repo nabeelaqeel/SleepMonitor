@@ -37,17 +37,24 @@ CREATE TABLE sessions (
 
 -- ── Time-series sensor readings ────────────────────────────────
 -- High-volume table. One row per MQTT message received.
+-- `seq` is the publisher-assigned monotonic counter for the session;
+-- UNIQUE(session_id, seq) makes redelivered MQTT messages idempotent.
+-- `published_at` is the publisher's send time (epoch ms) and enables
+-- true end-to-end latency measurement.
 CREATE TABLE readings (
-    reading_id  BIGSERIAL PRIMARY KEY,
-    session_id  UUID NOT NULL REFERENCES sessions(session_id) ON DELETE CASCADE,
-    patient_id  UUID NOT NULL REFERENCES users(user_id) ON DELETE CASCADE,
-    ts          TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    spo2        FLOAT,
-    heart_rate  FLOAT,
-    hrv         FLOAT,
-    motion      FLOAT,
-    tier        VARCHAR(20) CHECK (tier IN ('Critical', 'Important', 'Normal', 'Background')),
-    qos         SMALLINT CHECK (qos IN (0, 1, 2))
+    reading_id   BIGSERIAL PRIMARY KEY,
+    session_id   UUID NOT NULL REFERENCES sessions(session_id) ON DELETE CASCADE,
+    patient_id   UUID NOT NULL REFERENCES users(user_id) ON DELETE CASCADE,
+    seq          INT NOT NULL,
+    ts           TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    published_at TIMESTAMPTZ,
+    spo2         FLOAT,
+    heart_rate   FLOAT,
+    hrv          FLOAT,
+    motion       FLOAT,
+    tier         VARCHAR(20) CHECK (tier IN ('Critical', 'Important', 'Normal', 'Background')),
+    qos          SMALLINT CHECK (qos IN (0, 1, 2)),
+    UNIQUE (session_id, seq)
 );
 
 -- Composite index for time-range queries per patient
@@ -61,6 +68,7 @@ CREATE TABLE alerts (
     alert_id    BIGSERIAL PRIMARY KEY,
     session_id  UUID NOT NULL REFERENCES sessions(session_id) ON DELETE CASCADE,
     patient_id  UUID NOT NULL REFERENCES users(user_id) ON DELETE CASCADE,
+    seq         INT NOT NULL,
     ts          TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     severity    VARCHAR(20) NOT NULL CHECK (severity IN ('Critical', 'Important')),
     spo2        FLOAT,
@@ -68,7 +76,8 @@ CREATE TABLE alerts (
     hrv         FLOAT,
     reason      TEXT,
     mqtt_topic  VARCHAR(100),
-    raw_payload JSONB
+    raw_payload JSONB,
+    UNIQUE (session_id, seq)
 );
 
 CREATE INDEX idx_alerts_patient_ts  ON alerts (patient_id, ts DESC);
@@ -78,14 +87,19 @@ CREATE INDEX idx_alerts_session_sev ON alerts (session_id, severity);
 -- Computed summary per session. Updated by the backend API
 -- or a background job when a session ends.
 CREATE TABLE session_stats (
-    session_id      UUID PRIMARY KEY REFERENCES sessions(session_id) ON DELETE CASCADE,
-    avg_spo2        FLOAT,
-    min_spo2        FLOAT,
-    avg_heart_rate  FLOAT,
-    total_readings  INT NOT NULL DEFAULT 0,
-    critical_count  INT NOT NULL DEFAULT 0,
-    important_count INT NOT NULL DEFAULT 0,
-    computed_at     TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    session_id        UUID PRIMARY KEY REFERENCES sessions(session_id) ON DELETE CASCADE,
+    avg_spo2          FLOAT,
+    min_spo2          FLOAT,
+    avg_heart_rate    FLOAT,
+    total_readings    INT NOT NULL DEFAULT 0,
+    critical_count    INT NOT NULL DEFAULT 0,
+    important_count   INT NOT NULL DEFAULT 0,
+    -- QoS delivery accounting: expected = last seq + 1, received = rows
+    -- persisted, missing = QoS 0 packets dropped in transit.
+    expected_readings INT NOT NULL DEFAULT 0,
+    received_readings INT NOT NULL DEFAULT 0,
+    missing_readings  INT NOT NULL DEFAULT 0,
+    computed_at       TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
 -- ── Seed data for local development ───────────────────────────

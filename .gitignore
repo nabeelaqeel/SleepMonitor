@@ -36,6 +36,13 @@ yarn-error.*
 .env.staging
 .env.production
 
+# Python dev virtualenv for the ingest worker
+.venv-dev/
+
+# Python bytecode
+__pycache__/
+*.py[cod]
+
 # Docker credentials — never commit
 mosquitto/passwd
 

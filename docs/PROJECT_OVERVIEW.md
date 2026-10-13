@@ -2,7 +2,7 @@
 
 A QoS-aware real-time sleep monitoring system built as a Final Year Project (FYP).
 
-**Last updated:** 2026-10-12
+**Last updated:** 2026-10-13
 
 ---
 
@@ -91,16 +91,21 @@ components/VitalCard.js     reusable vital metric card
 navigation/DoctorNavigator.js
 
 python-publisher/           THE REAL PIPELINE
-  publisher.py              reads CSV, publishes MQTT
+  publisher.py              reads CSV, owns session lifecycle, publishes MQTT
   classifier.py             tier rules (SpO2 thresholds only)
   Dockerfile, requirements.txt
 
+ingest/                     DATABASE INGEST (new)
+  worker.py                 MQTT → Postgres, persistent session, single writer
+  db.py                     idempotent Postgres access layer
+  requirements.txt
+
 backend-api/                STUB — Dockerfile only, src/ is empty        [infra]
 mosquitto/                  broker config + Dockerfile                  [infra]
-postgres/init/01_schema.sql database schema
-docker-compose.yml          mosquitto + publisher + backend + postgres  [infra]
+postgres/init/01_schema.sql database schema (seq, published_at, delivery columns)
+docker-compose.yml          postgres only (this branch); full stack is   [infra]
 Makefile                    common dev tasks                           [infra]
-.env.example                environment template (no secrets)          [infra]
+.env.example                environment template (no secrets)
 
 evaluation.py               A/B QoS experiment harness
 evaluation_results.json     output of evaluation.py
@@ -109,7 +114,7 @@ test.py, generate_data.py   scratch scripts
 sleep_data.csv              primary dataset
 sleep_data_realistic.csv    alternate dataset (different schema)
 
-docs/                       ARCHITECTURE, DATA_MODEL, MQTT_SETUP (+ DOCKER, AWS_MIGRATION [infra])
+docs/                       ARCHITECTURE, DATA_MODEL, DATABASE, MQTT_SETUP (+ DOCKER, AWS_MIGRATION [infra])
 ```
 
 ---
@@ -125,13 +130,14 @@ docs/                       ARCHITECTURE, DATA_MODEL, MQTT_SETUP (+ DOCKER, AWS_
 | Patient — Report | Untested | Timeline chart + PDF export (`expo-print` / `expo-sharing`); on-device check pending |
 | Doctor dashboards | Not live | Hardcoded `MOCK_PATIENTS`; not connected to MQTT |
 | MQTT client | Partial | Hardcoded broker IP, no reconnect, subscribes at QoS 0 |
-| Python publisher | Partial | Runs, but HRV is always 35 (see Issue 3) |
+| Python publisher | Partial | Runs; owns session lifecycle + `seq`/`publishedAt`. HRV still always 35 (Issue 3) |
 | Classifier | Inconsistent | `python-publisher/classifier.py` uses SpO2 only; `evaluation.py` uses SpO2 + HR + HRV |
-| Mosquitto broker | Working | Docker or system install |
+| Mosquitto broker | Working | System install on `:1883` / `:9001` (anonymous, localhost) |
 | `backend-api` | Stub | No source, no `package.json` — Docker build fails |
-| PostgreSQL schema | Exists | `01_schema.sql` present; unused by the app |
+| PostgreSQL schema | Working | Extended with `seq`, `published_at`, unique keys, delivery columns |
+| Ingest worker | Working | `ingest/worker.py` — MQTT → Postgres, verified end-to-end (see `docs/DATABASE.md`) |
 | `evaluation.py` | Misleading | Produces output, but the numbers are simulated constants |
-| Docker / compose | Parked | Not on this branch; on `feature/docker-cicd-infra` (broken by the `backend-api` stub) |
+| Docker / compose | Partial | `docker-compose.yml` on this branch runs Postgres only; the full stack is parked |
 | CI/CD pipeline | Parked | Not on this branch; on `feature/docker-cicd-infra`; commercial-AWS design, incompatible with AWS Academy Learner Lab |
 | Latency metrics | Fabricated | Hardcoded `12 / 28 / 45 ms` — and inverted vs real MQTT behaviour |
 
@@ -285,6 +291,7 @@ and slightly higher latency. This directly tests the thesis claim.
 | `README.md` | Setup, running instructions, payload schema, limitations |
 | `docs/ARCHITECTURE.md` | App bootstrapping, state shape, component responsibilities |
 | `docs/DATA_MODEL.md` | Payload fields and app state mapping |
+| `docs/DATABASE.md` | Postgres schema, ingest worker, QoS delivery accounting |
 | `docs/MQTT_SETUP.md` | Broker configuration and topic layout |
 | `docs/DOCKER.md` | Containers, image tagging, CI/CD, branching *(on `feature/docker-cicd-infra`)* |
 | `docs/AWS_MIGRATION.md` | Target AWS architecture *(on `feature/docker-cicd-infra`)* |
