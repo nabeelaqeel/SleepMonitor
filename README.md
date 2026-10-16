@@ -332,22 +332,27 @@ SleepMonitor/
 │   ├── context/
 │   │   └── SleepContext.js           # Global MQTT state — useSleep() hook
 │   ├── services/
-│   │   └── mqttService.js            # Paho WebSocket MQTT client + publish()
+│   │   ├── mqttService.js            # Paho WebSocket MQTT client + publish()
+│   │   └── exportSessionReport.js    # Session PDF builder + share sheet (patient + doctor)
+│   ├── data/
+│   │   └── patients.js               # Seeded roster; one entry carries a patientId
 │   ├── navigation/
-│   │   └── DoctorNavigator.js        # Stack navigator for the doctor role
+│   │   └── DoctorNavigator.js        # Doctor tabs: Patients stack + Alerts
 │   ├── components/
-│   │   └── VitalCard.js              # Reusable vital metric display card
+│   │   ├── VitalCard.js              # Reusable vital metric display card
+│   │   └── EventLog.js               # Shared alert/event list (patient + doctor)
 │   ├── hooks/
 │   │   └── useNow.js                 # 1 s re-render tick (LIVE badges, last seen)
 │   └── screens/
 │       ├── LoginScreen.js
 │       ├── HomeScreen.js             # Live vitals + SpO2 sparkline (patient)
-│       ├── AlertsScreen.js           # Event log, Critical/Important filter (patient)
-│       ├── ReportScreen.js           # Session statistics + QoS summary (patient)
+│       ├── AlertsScreen.js           # Event log (thin wrapper around EventLog)
+│       ├── ReportScreen.js           # Session statistics + PDF export (patient)
 │       ├── NetworkScreen.js          # Broker status + measured metrics (patient)
 │       └── doctor/
 │           ├── PatientListScreen.js  # Roster — live values for the streaming patientId
-│           └── PatientDetailScreen.js# Patient detail — live overlay or seeded record
+│           ├── PatientDetailScreen.js# Patient detail — live overlay + report export
+│           └── DoctorAlertsScreen.js # Alert inbox for the live session
 │
 ├── data/                             # Datasets
 │   ├── sleep_data.csv                # ML/training set (has sleep-stage labels)
@@ -430,6 +435,6 @@ Every message published to any `sleep/*` topic is a JSON object:
 | Issue | Impact | Planned Fix |
 |---|---|---|
 | Mock authentication | Passwords hardcoded in source; no expiry | Replace with Supabase Auth or Clerk |
-| Doctor roster is mostly mock | Only the patient whose `patientId` is streaming shows live vitals (one at a time); the other entries are seeded records | Later: per-patient topics + backend for true multi-patient |
+| Doctor roster is mostly mock | Only the patient whose `patientId` is streaming shows live vitals; the Alerts tab and report export cover that single live session (one at a time) | Later: per-patient topics + backend for true multi-patient |
 | No tests | No safety net for regressions | Add Jest unit tests + Maestro E2E |
 | Android package is `com.anonymous.*` | Cannot be submitted to Play Store | Update `app.json` before release |

@@ -162,12 +162,14 @@ Logout button injected via `screenOptions.headerRight` — visible on all tabs.
 
 ### DoctorNavigator (`app/navigation/DoctorNavigator.js`)
 
-Native stack navigator (`@react-navigation/native-stack`).
+Bottom tab navigator with two tabs, mirroring the patient-side tab bar:
 
-```
-PatientList  →  PatientDetail
-  (title: "Doctor Dashboard")     (title: patient.name)
-```
+| Tab | Content |
+|---|---|
+| Patients | Native stack (`@react-navigation/native-stack`): `PatientList` (title "Doctor Dashboard") → `PatientDetail` (title: `patient.name`) |
+| Alerts | `DoctorAlertsScreen` — the live session's event log |
+
+The tab navigator sets `headerShown: false`: the Patients stack renders its own headers (logout button on the roster), and the Alerts screen renders its own in-screen header.
 
 `PatientListScreen` calls `navigation.navigate('PatientDetail', { patient: item })` — the full patient object is passed as a route param.
 
@@ -182,14 +184,14 @@ Both navigators have their own `NavigationContainer` and mount exclusively (neve
 - **Key UI:** Tier status card, vitals grid (4× VitalCard), SpO2 sparkline (inline `SparkLine` component), critical alert box (conditional), MQTT topic footer
 - **Colour logic:** SpO2 < 90 → red; < 95 → amber; else green. HR outside 40–100 → red. HRV < 20 → amber.
 
-### AlertsScreen
+### AlertsScreen (patient)
 - **Reads:** `eventLog`, `sessionStats`
-- **Local state:** `filter` — `'All' | 'Critical' | 'Important'`
-- **Key UI:** Pill filter buttons, `FlatList` of event cards. Empty state distinguishes "no data yet" from "no matches for filter". Only Critical and Important events appear (context filters Normal/Background at ingestion).
+- **Key UI:** Header with live counts, then the shared `EventLog` component. Empty state distinguishes "no data yet" from "no matches for filter". Only Critical and Important events appear (context filters Normal/Background at ingestion).
 
 ### ReportScreen
-- **Reads:** `sessionStats`, `currentData`
-- **Key UI:** 3×2 summary card grid, per-tier bar rows (TierBar), stacked proportional bar, QoS transmission table. Percentage guard: `total` defaults to 1 to avoid division by zero.
+- **Reads:** `sessionStats`, `currentData`, `sleepTimeline`
+- **Key UI:** 3×2 summary card grid, per-tier bar rows (TierBar), stacked proportional bar, QoS transmission table, SpO2/HR timelines, "Export PDF" button. Percentage guard: `total` defaults to 1 to avoid division by zero.
+- **Export:** delegates to `services/exportSessionReport` (`expo-print` HTML → PDF → OS share sheet).
 
 ### NetworkScreen
 - **Reads:** `networkStats`, `sessionStats`, `latencyStats`
@@ -202,14 +204,20 @@ Both navigators have their own `NavigationContainer` and mount exclusively (neve
 - **Flow:** 500 ms artificial delay → synchronous `login()` → `storeUser()` → `onLoginSuccess(user)` callback to App.
 
 ### PatientListScreen (doctor)
-- **Reads:** `patientSnapshots` + `sessionStats` (live overlay); the roster itself is the hardcoded `MOCK_PATIENTS` array
+- **Reads:** `patientSnapshots` + `sessionStats` (live overlay); the roster itself is the seeded `MOCK_PATIENTS` array from `app/data/patients.js`
 - **Live rule:** a roster entry whose `patientId` matches incoming payloads shows a LIVE badge and live values while messages keep arriving (10 s window, `PATIENT_LIVE_WINDOW_MS`); once a session has been observed the card also shows a "last seen" time
 - **Navigation:** Taps a card → `navigation.navigate('PatientDetail', { patient })`
 
 ### PatientDetailScreen (doctor)
-- **Reads:** `route.params.patient` + the same `patientSnapshots` overlay
+- **Reads:** `route.params.patient`, the same `patientSnapshots` overlay, plus `sessionStats`, `currentData` and `sleepTimeline` for the report export
 - **Live overlay:** when the route patient is streaming, vitals, tier (from the payload), critical count and the last message topic come from the live snapshot; otherwise the seeded record is shown
 - **Tier:** payload tier when live, `deriveTier(spo2)` for seeded records
+- **Report export:** the "Export PDF" button calls `services/exportSessionReport`, which stamps the patient's name/ID into the PDF header; enabled only once this patient has streamed during this app run (otherwise disabled with "No session to export")
+
+### DoctorAlertsScreen (doctor)
+- **Reads:** `eventLog`, `sessionStats`, `patientSnapshots`
+- **Key UI:** In-screen header (live counts + a caption naming the roster patient), then the shared `EventLog`
+- **Caption rule:** fresh snapshot (10 s window) → "Live session — …"; older → "Session ended — …"; no session at all → `EventLog` empty state
 
 ---
 
@@ -225,6 +233,19 @@ Props:
 ```
 
 Width: `47%` — designed for a 2-column `flexWrap: 'wrap'` grid with `gap: 10`. Used in HomeScreen (live readings) and PatientDetailScreen (live or seeded readings).
+
+### EventLog
+
+Shared event list used by the patient's Alerts tab and the doctor's Alerts tab.
+
+```
+Props:
+  events        array    — context eventLog entries
+  emptyMessage  string   — shown when no events have arrived at all
+  patientLabel  string?  — reserved for multi-patient streams (renders a chip per card; unused today)
+```
+
+Manages its own `filter` state (`'All' | 'Critical' | 'Important'`); the "no matches for filter" empty state is handled internally.
 
 ---
 
@@ -243,4 +264,4 @@ All colours are inline — no shared theme file. The canonical palette:
 | Normal (green) | `#22c55e` / `#4ade80` |
 | Background tier (grey) | `#6b7280` / `#9ca3af` |
 
-The same `TIER_CONFIG` / `TIER_STYLE` object is duplicated in `HomeScreen`, `AlertsScreen`, and `PatientDetailScreen` — there is no shared constants file.
+The same `TIER_CONFIG` / `TIER_STYLE` object is duplicated in `HomeScreen`, `EventLog`, and `PatientDetailScreen` — there is no shared constants file.

@@ -1,8 +1,10 @@
-import { View, Text, ScrollView, StyleSheet } from 'react-native';
+import { useState } from 'react';
+import { View, Text, ScrollView, TouchableOpacity, ActivityIndicator, StyleSheet } from 'react-native';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
 import VitalCard from '../../components/VitalCard';
 import { useSleep, PATIENT_LIVE_WINDOW_MS } from '../../context/SleepContext';
 import { useNow } from '../../hooks/useNow';
+import { exportSessionReport } from '../../services/exportSessionReport';
 
 const TIER_CONFIG = {
   Critical:   { bg: '#3d1010', text: '#f87171', border: '#7f1d1d',
@@ -56,7 +58,8 @@ function MedicalHistoryItem({ record }) {
 
 export default function PatientDetailScreen({ route }) {
   const { patient } = route.params;
-  const { patientSnapshots, sessionStats } = useSleep();
+  const { patientSnapshots, sessionStats, currentData, sleepTimeline } = useSleep();
+  const [exporting, setExporting] = useState(false);
   const now = useNow();
 
   // Live overlay: only the patient whose patientId is streaming gets fresh
@@ -75,6 +78,28 @@ export default function PatientDetailScreen({ route }) {
                   : spo2 < 95 ? '#fbbf24' : '#4ade80';
   const hrColor   = hr < 40 || hr > 100 ? '#f87171' : '#4ade80';
   const bmi       = computeBmi(patient.weight, patient.height);
+
+  // The PDF export reuses the patient-side report (services/exportSessionReport).
+  // It can only cover this patient if they have streamed during this app run,
+  // so the button stays disabled for records that never had a session.
+  const canExport = !!snapshot;
+
+  async function handleExportReport() {
+    setExporting(true);
+    try {
+      await exportSessionReport({
+        sessionStats,
+        currentData,
+        sleepTimeline,
+        patientName: patient.name,
+        patientId: patient.patientId,
+      });
+    } catch (e) {
+      console.error('PDF export failed:', e);
+    } finally {
+      setExporting(false);
+    }
+  }
 
   return (
     <ScrollView
@@ -157,6 +182,26 @@ export default function PatientDetailScreen({ route }) {
           </View>
         </View>
       )}
+
+      {/* Session report export */}
+      <TouchableOpacity
+        style={[styles.exportBtn, (!canExport || exporting) && styles.exportBtnDisabled]}
+        onPress={handleExportReport}
+        disabled={!canExport || exporting}
+        activeOpacity={0.75}
+      >
+        {exporting
+          ? <ActivityIndicator size="small" color="#818cf8" />
+          : <MaterialCommunityIcons name="file-pdf-box" size={18} color={canExport ? '#818cf8' : '#444'} />
+        }
+        <Text style={[styles.exportText, !canExport && { color: '#444' }]}>
+          {exporting
+            ? 'Exporting...'
+            : canExport
+              ? (isLive ? 'Export PDF' : 'Export PDF (last session)')
+              : 'No session to export'}
+        </Text>
+      </TouchableOpacity>
 
       {/* MQTT topic row */}
       <View style={styles.mqttRow}>
@@ -274,6 +319,28 @@ const styles = StyleSheet.create({
     fontSize: 12,
     color: '#888',
     lineHeight: 18,
+  },
+
+  // Report export
+  exportBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+    backgroundColor: '#13131f',
+    borderWidth: 1,
+    borderColor: '#2a2a4a',
+    borderRadius: 10,
+    paddingVertical: 12,
+    marginBottom: 16,
+  },
+  exportBtnDisabled: {
+    opacity: 0.5,
+  },
+  exportText: {
+    fontSize: 13,
+    fontWeight: '600',
+    color: '#818cf8',
   },
 
   // MQTT row

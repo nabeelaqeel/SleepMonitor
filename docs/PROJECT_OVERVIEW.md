@@ -50,7 +50,7 @@ app/context/SleepContext.js  (React Context — single source of truth)
       ├── AlertsScreen   filterable Critical/Important event log
       ├── ReportScreen   session statistics + timeline + PDF export
       ├── NetworkScreen  broker status + measured delivery/latency
-      └── DoctorNavigator → PatientListScreen → PatientDetailScreen
+      └── DoctorNavigator → tabs: Patients (list → detail) + Alerts
 ```
 
 ### Role-based routing
@@ -61,7 +61,7 @@ of three branches:
 | State | Rendered UI |
 |---|---|
 | Not logged in | `LoginScreen` |
-| `role === 'doctor'` | `DoctorNavigator` — stack: Patient List → Patient Detail |
+| `role === 'doctor'` | `DoctorNavigator` — tabs: Patients (list → detail, PDF export) and Alerts |
 | `role === 'patient'` | `PatientNavigator` — bottom tabs: Home / Alerts / Report / Network |
 
 ---
@@ -85,11 +85,15 @@ app/                        Expo React Native app (own project root)
     AlertsScreen.js         Critical/Important event log
     ReportScreen.js         session stats, timeline, PDF export
     NetworkScreen.js        broker status + measured delivery/latency
-    doctor/PatientListScreen.js    mock patient list
-    doctor/PatientDetailScreen.js  mock patient detail
+    doctor/PatientListScreen.js    seeded patient list + live overlay
+    doctor/PatientDetailScreen.js  patient detail + session PDF export
+    doctor/DoctorAlertsScreen.js   live-session alert inbox
 
   components/VitalCard.js   reusable vital metric card
-  navigation/DoctorNavigator.js
+  components/EventLog.js    shared event list (patient + doctor)
+  services/exportSessionReport.js  session PDF builder + share sheet
+  data/patients.js          seeded doctor roster
+  navigation/DoctorNavigator.js   doctor tabs (Patients stack + Alerts)
 
 data/                       datasets
   sleep_data.csv            primary ML/training dataset (sleep-stage labels)
@@ -130,7 +134,7 @@ docs/                       ARCHITECTURE, DATA_MODEL, DATABASE, MQTT_SETUP, PROJ
 | Patient — Alerts | Working | Filterable event log |
 | Patient — Network | Working | Delivery measured from `seq` vs publisher `stats`; latency is estimated `RTT/2` via `echo.py` |
 | Patient — Report | Untested | Timeline chart + PDF export (`expo-print` / `expo-sharing`); on-device check pending |
-| Doctor dashboards | Partial | Mock roster with a live overlay: the entry whose `patientId` matches the live stream shows LIVE vitals; the others stay seeded records (one patient streams at a time) |
+| Doctor dashboards | Partial | Seeded roster with a live overlay, plus an Alerts tab and session PDF export for the live patient; one patient streams at a time (true multi-patient needs per-patient topics) |
 | MQTT client | Working | Per-install persisted client ID, `cleanSession: false`, `sleep/#` + `qos/pong` at QoS 2, exponential-backoff reconnect |
 | Python publisher | Partial | Runs; owns session lifecycle + `seq`/`publishedAt`. HRV still always 35 (Issue 3) |
 | Classifier | Inconsistent | `python-publisher/classifier.py` uses SpO2 only; `benchmark/evaluation.py` uses SpO2 + HR + HRV |
