@@ -36,7 +36,8 @@ yarn-error.*
 .env.staging
 .env.production
 
-# Python dev virtualenv for the ingest worker
+# Python virtualenvs (never track these — .venv/ was committed by accident once)
+.venv/
 .venv-dev/
 
 # Python bytecode
@@ -55,3 +56,4 @@ mosquitto/passwd
 
 # Claude Code agent config — local only
 .claude/
+CLAUDE.md
