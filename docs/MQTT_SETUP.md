@@ -173,6 +173,9 @@ Terminal 1 should print the topic and payload. If it does, the broker is working
 | `sleep/important` | 1 | At least once (PUBACK) | SpO2 90–94% — abnormal trend |
 | `sleep/normal` | 0 | Best effort (fire and forget) | SpO2 ≥ 95% — routine readings |
 | `sleep/background` | 0 | Best effort | Session statistics batch |
+| `qos/ping` | 2 | Exactly once | App latency probe (published by the app) |
+| `qos/pong` | 2 | Exactly once | Probe echo (`python-publisher/echo.py`) |
+| `session/start` / `session/end` | 1 | At least once | Publisher session lifecycle (+ Last Will) |
 
 ### QoS 2 — Exactly Once
 
@@ -186,13 +189,14 @@ The broker retransmits until it receives a PUBACK. The message is guaranteed to 
 
 The publisher sends once and moves on. No acknowledgement, no retransmission. Acceptable for high-frequency routine readings where the next sample arrives in seconds.
 
-> **Subscribe QoS note:** The current app subscribes to all topics without specifying a QoS level, which defaults to QoS 0. This means the broker-to-app leg of `sleep/critical` messages is QoS 0 even though the publisher sends at QoS 2. To fix this, update `mqttService.js`:
+> **Subscribe QoS:** The app subscribes with a single wildcard at QoS 2, so the
+> broker-to-app leg is never downgraded (effective QoS = min(publish QoS, 2)).
+> It also connects with `cleanSession: false`, so QoS 1/2 messages are queued while
+> the app is offline and redelivered on reconnect.
 >
 > ```js
-> client.subscribe('sleep/critical',   { qos: 2 });
-> client.subscribe('sleep/important',  { qos: 1 });
-> client.subscribe('sleep/normal',     { qos: 0 });
-> client.subscribe('sleep/background', { qos: 0 });
+> client.subscribe('sleep/#', { qos: 2 });
+> client.subscribe('qos/pong', { qos: 2 });
 > ```
 
 ---

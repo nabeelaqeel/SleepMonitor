@@ -58,18 +58,24 @@ python3 -m venv .venv-dev
 # 3. Ingest worker (leave running)
 .venv-dev/bin/python ingest/worker.py
 
-# 4. Publisher — in another shell, with env exported
-set -a && . ./.env.development && set +a
-CSV_PATH=sleep_data_realistic.csv LOOP_CSV=false PUBLISH_INTERVAL=0.05 \
+# 4. Latency echo responder (leave running; beside the broker)
+.venv-dev/bin/python python-publisher/echo.py
+
+# 5. Publisher — in another shell (it reads .env.development itself)
+LOOP_CSV=false PUBLISH_INTERVAL=0.05 \
   .venv-dev/bin/python python-publisher/publisher.py
 
-# 5. Inspect
+# 6. Inspect
 docker exec sleep-postgres psql -U sleep_user -d sleep_monitor \
   -c "SELECT * FROM session_stats;"
 ```
 
-The worker must run from the repository root so that `load_dotenv(".env.development")`
-resolves; it imports `db.py` from the `ingest/` package relative to the script.
+The worker, `echo.py`, and the publisher must run from the repository root so that
+`load_dotenv(".env.development")` resolves; the worker imports `db.py` from the
+`ingest/` package relative to the script. `CSV_PATH` is relative to the working
+directory, so the publisher needs the same starting point.
+`echo.py` only feeds the app's estimated latency readout — the ingest worker does
+not depend on it.
 
 ---
 
@@ -89,7 +95,7 @@ resolves; it imports `db.py` from the `ingest/` package relative to the script.
 | `FLUSH_INTERVAL` / `FLUSH_MAX` | worker | Batch flush trigger (seconds / rows) |
 | `PATIENT_UUID` | worker | FK target; matches the seeded patient (`…0002`) |
 | `DEVICE_ID` | worker, publisher | Session device label |
-| `CSV_PATH` | publisher | Dataset path (relative to the working directory) |
+| `CSV_PATH` | publisher | Dataset path (relative to the working directory); set in `.env.development` |
 | `LOOP_CSV` / `PUBLISH_INTERVAL` | publisher | Replay once (`false`) or loop; seconds between rows |
 
 ---
@@ -170,6 +176,23 @@ The worker connects with MQTTv5, `clean_start=False`, and
 broker therefore **queues QoS 1 and QoS 2 messages while the worker is offline**
 and redelivers them on reconnect. QoS 0 is best-effort and is not queued
 (mosquitto's `queue_qos0_messages` defaults to false).
+
+### Broker-side session retention
+
+The worker sets an explicit `SessionExpiryInterval`, but the **app** speaks MQTT
+3.1.1 (Paho JS) and cannot set one — it relies purely on `cleanSession: false`.
+To bound how long those sessions accumulate on the host, add to
+`/etc/mosquitto/mosquitto.conf` (a host file, not tracked in this repo) and
+restart Mosquitto:
+
+```
+persistent_client_expiration 2h
+```
+
+This reaps abandoned sessions after 2 hours while leaving any short disconnect
+well inside the window, so queued QoS 1/2 still arrive when the app reconnects.
+Mosquitto's own `persistence true` is already set in this config, so queued
+messages also survive a broker restart.
 
 ### Threading
 

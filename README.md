@@ -184,17 +184,24 @@ python3 -m venv .venv-dev
 # 4. Run the ingest worker (leave running)
 .venv-dev/bin/python ingest/worker.py
 
-# 5. In another shell, run the publisher against the realistic dataset
-set -a && . ./.env.development && set +a
-CSV_PATH=sleep_data_realistic.csv LOOP_CSV=false PUBLISH_INTERVAL=0.05 \
+# 5. Run the latency echo responder on the broker host (leave running)
+.venv-dev/bin/python python-publisher/echo.py
+
+# 6. In another shell, run the publisher against the realistic dataset
+#    (it reads .env.development itself — no shell export needed)
+LOOP_CSV=false PUBLISH_INTERVAL=0.05 \
   .venv-dev/bin/python python-publisher/publisher.py
 
-# 6. Inspect the results
+# 7. Inspect the results
 docker exec sleep-postgres psql -U sleep_user -d sleep_monitor \
   -c "SELECT * FROM session_stats;"
 ```
 
-`session_stats.missing_readings` measures QoS 0 loss: with the worker stopped during a run, only the QoS 1/2 messages are redelivered on restart. To re-apply schema changes, wipe the volume with `docker compose --env-file .env.development down -v`.
+`session_stats.missing_readings` measures QoS 0 loss: with the worker stopped during a run, only the QoS 1/2 messages are redelivered on restart.
+
+`echo.py` powers the app's estimated latency readout (it relays `qos/ping` → `qos/pong`). Without it, latency shows `—`. The broker should retain app sessions long enough to survive a disconnect — add `persistent_client_expiration 2h` to `/etc/mosquitto/mosquitto.conf` and restart Mosquitto so abandoned sessions are reaped while queued QoS 1/2 messages still survive.
+
+To re-apply schema changes, wipe the volume with `docker compose --env-file .env.development down -v`.
 
 See [`docs/DATABASE.md`](docs/DATABASE.md) for the schema, payload fields, and design details.
 
@@ -262,7 +269,7 @@ SleepMonitor/
 │       ├── PatientListScreen.js    # Patient list (mock data — Phase 2)
 │       └── PatientDetailScreen.js  # Individual patient vitals (mock data — Phase 2)
 │
-├── python-publisher/               # MQTT publisher + tier classifier (the real pipeline)
+├── python-publisher/               # MQTT publisher + tier classifier + echo.py (latency probe relay)
 ├── ingest/                         # MQTT → PostgreSQL ingest worker
 ├── postgres/init/01_schema.sql     # Database schema (applied on first boot)
 ├── docker-compose.yml              # PostgreSQL service (Docker)
@@ -314,13 +321,15 @@ Every message published to any `sleep/*` topic is a JSON object:
 
 ### QoS Rationale
 
-| QoS | Guarantee | Latency (est.) | Used for |
+| QoS | Guarantee | Est. latency (RTT/2) | Used for |
 |---|---|---|---|
-| 2 | Exactly once (4-way handshake) | ~12 ms | Critical — apnea events; must not be lost or duplicated |
-| 1 | At least once (PUBACK) | ~28 ms | Important — borderline readings; duplicates tolerable |
-| 0 | Best effort (fire and forget) | ~45 ms | Normal + Background — high-frequency routine data |
+| 2 | Exactly once (4-way handshake) | measured live | Critical — apnea events; must not be lost or duplicated |
+| 1 | At least once (PUBACK) | measured live | Important — borderline readings; duplicates tolerable |
+| 0 | Best effort (fire and forget) | measured live | Normal + Background — high-frequency routine data |
 
-> **Important:** The Paho client currently subscribes without an explicit QoS option, so subscriptions default to QoS 0. To get end-to-end QoS 2 on the critical topic, update `mqttService.js` to subscribe with `{ qos: 2 }`.
+> **Latency** figures in the app are **estimated** from round-trip ping/echo (`RTT/2`) via `python-publisher/echo.py`; they are an on-device indicator, not the thesis measurement. The authoritative figures come from the single-clock benchmark (producer and consumer timestamps on one host clock).
+
+> **Note:** The app subscribes `sleep/#` at QoS 2 and connects with `cleanSession: false`, so the broker does not downgrade critical/important traffic and queues QoS 1/2 while the app is offline.
 
 ---
 
@@ -329,13 +338,8 @@ Every message published to any `sleep/*` topic is a JSON object:
 | Issue | Impact | Planned Fix |
 |---|---|---|
 | `BROKER_IP` is hardcoded | App breaks on a different network | Move to env var / settings screen |
-| No reconnection logic | Connection silently dies after dropout | Add exponential-backoff reconnect in `onConnectionLost` |
-| `connected` flag never resets | NetworkScreen shows "Connected" even after dropout | Reset to `false` in `onConnectionLost` |
-| Subscribe QoS defaults to 0 | QoS 2 guarantee only applies publisher→broker, not broker→app | Pass explicit `{ qos: N }` per topic |
 | Mock authentication | Passwords hardcoded in source; no expiry | Replace with Supabase Auth or Clerk |
 | Doctor screens use static data | Patient list and vitals are not live | Phase 2: subscribe per-patient MQTT topics + backend |
-| Latency values are simulated | NetworkScreen shows fixed figures, not real RTT | Embed `publishedAt` timestamp; compute on receipt |
-| Delivery rates are hardcoded | Not measured from real packet loss | Track sequence numbers or use MQTT diagnostics |
 | `mqtt` package installed but unused | Unnecessary bundle weight | `npm uninstall mqtt` |
 | `react-native-vector-icons` unused | `@expo/vector-icons` (Expo built-in) is used instead | Remove from `package.json` |
 | No tests | No safety net for regressions | Add Jest unit tests + Maestro E2E |

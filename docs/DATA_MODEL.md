@@ -210,17 +210,30 @@ The log is newest-first and capped at 50 entries. Only Critical and Important ev
 ```js
 {
   connected:   boolean,
-  critical:    { count: number, latency: number },
-  important:   { count: number, latency: number },
-  normal:      { count: number, latency: number },
-  background:  { count: number, latency: number },
+  critical:    { count: number, delivery: number|null },
+  important:   { count: number, delivery: number|null },
+  normal:      { count: number, delivery: number|null },
+  background:  { count: number, delivery: number|null },
 }
 ```
 
-`connected` is set to `true` on the first received message and never reset (see known limitations in README). `latency` is a static value looked up from `data.qos`, not a measured round-trip time:
+`connected` reflects the live connection state (set on connect, cleared on loss while the client reconnects). `count` is the number of **distinct** `seq` values received for that tier since the app joined the session; `delivery` is measured, not hardcoded:
 
-| `data.qos` | Latency shown |
-|---|---|
-| 2 | 12 ms |
-| 1 | 28 ms |
-| 0 | 45 ms |
+```
+delivery = round(count / (stats[tier] - baseline) × 100)     // capped at 100
+baseline = stats[tier] - 1  at the first message for that tier
+```
+
+The baseline is captured at join, so a late-joining app starts near 100%; it resets when `data.sessionId` changes.
+
+## SleepContext — latencyStats Shape
+
+```js
+{
+  0: { ms: number|null, samples: number },
+  1: { ms: number|null, samples: number },
+  2: { ms: number|null, samples: number },
+}
+```
+
+Estimated latency (**RTT/2**) per QoS level. `ms` is the **window median** of completed round trips (rounded to 2 dp), `samples` the number of live samples. Samples older than 15 s are dropped; an empty window yields `null`, which the UI renders as `—`. These are on-device estimates — the authoritative latency figures come from the single-clock benchmark.

@@ -23,7 +23,7 @@ from dotenv import load_dotenv
 
 from classifier import classify
 
-load_dotenv()
+load_dotenv(".env.development")
 
 logging.basicConfig(
     level=logging.INFO,

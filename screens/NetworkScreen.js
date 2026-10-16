@@ -5,8 +5,19 @@ import {
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useSleep } from '../context/SleepContext';
 
+// Sub-millisecond-aware formatting.
+function formatLatency(ms) {
+  if (ms === null || ms === undefined) return '—';
+  if (ms < 10) return `${ms.toFixed(2)} ms`;
+  return `${Math.round(ms)} ms`;
+}
+
+function formatDelivery(delivery) {
+  return (delivery === null || delivery === undefined) ? '—' : `${delivery}%`;
+}
+
 export default function NetworkScreen() {
-  const { networkStats, sessionStats } = useSleep();
+  const { networkStats, sessionStats, latencyStats } = useSleep();
 
   const totalMessages = sessionStats.total || 0;
 
@@ -14,46 +25,38 @@ export default function NetworkScreen() {
     {
       name:      'sleep/critical',
       qos:       2,
+      tierKey:   'critical',
       qosLabel:  'QoS 2 — guaranteed',
-      count:     networkStats.critical?.count  || 0,
-      latency:   networkStats.critical?.latency || 0,
-      delivery:  100,
       color:     '#f87171',
       badgeBg:   '#3d1010',
     },
     {
       name:      'sleep/important',
       qos:       1,
+      tierKey:   'important',
       qosLabel:  'QoS 1 — at least once',
-      count:     networkStats.important?.count  || 0,
-      latency:   networkStats.important?.latency || 0,
-      delivery:  98,
       color:     '#fbbf24',
       badgeBg:   '#2d1f07',
     },
     {
       name:      'sleep/normal',
       qos:       0,
+      tierKey:   'normal',
       qosLabel:  'QoS 0 — best effort',
-      count:     networkStats.normal?.count  || 0,
-      latency:   networkStats.normal?.latency || 0,
-      delivery:  91,
       color:     '#4ade80',
       badgeBg:   '#0a2010',
     },
     {
       name:      'sleep/background',
       qos:       0,
+      tierKey:   'background',
       qosLabel:  'QoS 0 — batch',
-      count:     networkStats.background?.count  || 0,
-      latency:   networkStats.background?.latency || 0,
-      delivery:  84,
       color:     '#9ca3af',
       badgeBg:   '#1a1a1a',
     },
   ];
 
-  const criticalLatency = networkStats.critical?.latency || 0;
+  const criticalLatency = latencyStats[2]?.ms ?? null;
 
   return (
     <SafeAreaView style={styles.container}>
@@ -95,8 +98,8 @@ export default function NetworkScreen() {
             <StatBox label="Total messages" value={totalMessages} />
             <StatBox label="Active topics"  value={4}             />
             <StatBox
-              label="Critical latency"
-              value={criticalLatency > 0 ? `${criticalLatency}ms` : '—'}
+              label="Est. latency (RTT/2)"
+              value={formatLatency(criticalLatency)}
               color="#4ade80"
             />
           </View>
@@ -105,7 +108,12 @@ export default function NetworkScreen() {
         {/* Topic cards */}
         <Text style={styles.sectionLabel}>Topic delivery rates</Text>
         {topics.map(topic => (
-          <TopicCard key={topic.name} topic={topic} />
+          <TopicCard
+            key={topic.name}
+            topic={topic}
+            stats={networkStats[topic.tierKey] || { count: 0, delivery: null }}
+            latency={latencyStats[topic.qos] || { ms: null, samples: 0 }}
+          />
         ))}
 
         {/* QoS comparison table */}
@@ -114,24 +122,24 @@ export default function NetworkScreen() {
           <CompareRow
             level="QoS 2"
             color="#f87171"
-            delivery="100%"
-            latency="~12ms"
+            delivery={formatDelivery(networkStats.critical?.delivery)}
+            latency={formatLatency(latencyStats[2]?.ms)}
             useCase="Critical — apnea events"
           />
           <View style={styles.compareDivider} />
           <CompareRow
             level="QoS 1"
             color="#fbbf24"
-            delivery="98%"
-            latency="~28ms"
+            delivery={formatDelivery(networkStats.important?.delivery)}
+            latency={formatLatency(latencyStats[1]?.ms)}
             useCase="Important — abnormal trends"
           />
           <View style={styles.compareDivider} />
           <CompareRow
             level="QoS 0"
             color="#4ade80"
-            delivery="84–91%"
-            latency="~45ms"
+            delivery={formatDelivery(networkStats.normal?.delivery)}
+            latency={formatLatency(latencyStats[0]?.ms)}
             useCase="Normal + Background data"
           />
         </View>
@@ -156,6 +164,11 @@ export default function NetworkScreen() {
           />
         </View>
 
+        <Text style={styles.disclaimer}>
+          Latency is an app-side estimate (RTT/2). Authoritative figures come
+          from the single-clock benchmark.
+        </Text>
+
       </ScrollView>
     </SafeAreaView>
   );
@@ -172,7 +185,7 @@ function StatBox({ label, value, color = '#ffffff' }) {
   );
 }
 
-function TopicCard({ topic }) {
+function TopicCard({ topic, stats, latency }) {
   return (
     <View style={[styles.topicCard, { borderLeftColor: topic.color }]}>
       <View style={styles.topicTop}>
@@ -185,14 +198,17 @@ function TopicCard({ topic }) {
       </View>
 
       <View style={styles.topicStats}>
-        <TopicStat label="Messages" value={topic.count} />
-        <TopicStat label="Delivery"  value={`${topic.delivery}%`} />
-        <TopicStat label="Latency"   value={topic.latency > 0 ? `${topic.latency}ms` : '—'} />
+        <TopicStat label="Messages" value={stats.count} />
+        <TopicStat label="Delivery"  value={formatDelivery(stats.delivery)} />
+        <TopicStat
+          label={latency.samples > 0 ? `Est. latency (RTT/2) · n=${latency.samples}` : 'Est. latency (RTT/2)'}
+          value={formatLatency(latency.ms)}
+        />
       </View>
 
       <View style={styles.deliveryTrack}>
         <View style={[styles.deliveryFill, {
-          width:           `${topic.delivery}%`,
+          width:           `${stats.delivery ?? 0}%`,
           backgroundColor: topic.color,
         }]} />
       </View>
@@ -219,7 +235,7 @@ function CompareRow({ level, color, delivery, latency, useCase }) {
         <Text style={styles.compareUseCase}>{useCase}</Text>
         <View style={styles.compareMetrics}>
           <Text style={styles.compareMetric}>Delivery: {delivery}</Text>
-          <Text style={styles.compareMetric}>Latency: {latency}</Text>
+          <Text style={styles.compareMetric}>Est. latency (RTT/2): {latency}</Text>
         </View>
       </View>
     </View>
@@ -268,7 +284,7 @@ const styles = StyleSheet.create({
   statusText:      { fontSize: 12, fontWeight: '600' },
   divider:         { height: 0.5, backgroundColor: '#1e1e30', marginVertical: 14 },
   statRow:         { flexDirection: 'row', justifyContent: 'space-around' },
-  statBox:         { alignItems: 'center' },
+  statBox:         { alignItems: 'center', flex: 1 },
   statValue:       { fontSize: 20, fontWeight: '700', color: '#fff', marginBottom: 3 },
   statLabel:       { fontSize: 10, color: '#555', textAlign: 'center' },
 
@@ -308,7 +324,7 @@ const styles = StyleSheet.create({
   levelText:       { fontSize: 11, fontWeight: '700' },
   compareDetails:  { flex: 1 },
   compareUseCase:  { fontSize: 12, color: '#ccc', fontWeight: '500', marginBottom: 3 },
-  compareMetrics:  { flexDirection: 'row', gap: 12 },
+  compareMetrics:  { flexDirection: 'row', gap: 12, flexWrap: 'wrap' },
   compareMetric:   { fontSize: 11, color: '#555' },
 
   explainCard:     {
@@ -323,4 +339,9 @@ const styles = StyleSheet.create({
   },
   explainLevel:    { fontSize: 11, fontWeight: '700' },
   explainDesc:     { fontSize: 12, color: '#888', flex: 1, lineHeight: 18 },
+
+  disclaimer:      {
+    fontSize: 10, color: '#444', marginTop: 16,
+    lineHeight: 15, textAlign: 'center',
+  },
 });
