@@ -22,6 +22,11 @@ export const PATIENT_LIVE_WINDOW_MS = 10000;
 
 const INSTANCE_ID = Math.random().toString(36).slice(2, 8);
 
+// Event-log ids are derived from the ingest timestamp, but a timestamp alone
+// can collide when messages arrive in a burst (queued QoS 1/2 redelivery
+// after a reconnect, fast replay, batched delivery) — duplicate React keys.
+let eventIdCounter = 0;
+
 function median(sorted) {
   const n = sorted.length;
   if (n === 0) return null;
@@ -201,7 +206,7 @@ export function SleepProvider({ children }) {
       if (data.tier === 'Critical' || data.tier === 'Important') {
         setEventLog(prev => {
           const newEvent = {
-            id:        String(now),
+            id:        `${now}-${++eventIdCounter}`,
             tier:      data.tier,
             time:      data.timestamp,
             spo2:      data.spo2,
