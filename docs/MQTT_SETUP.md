@@ -2,6 +2,8 @@
 
 This guide covers everything needed to run the full SleepMonitor data pipeline: Mosquitto broker, the React Native app, and the Python publisher.
 
+> **Quick runbook:** the README's [Run the Full Stack](../README.md#run-the-full-stack) section has the terminal-by-terminal version; this document is the reference detail for each piece.
+
 ---
 
 ## System Overview

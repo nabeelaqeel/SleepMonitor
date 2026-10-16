@@ -10,6 +10,7 @@ A QoS-aware real-time sleep monitoring system built as a Final Year Project (FYP
 - [Architecture](#architecture)
 - [Prerequisites](#prerequisites)
 - [Installation](#installation)
+- [Run the Full Stack](#run-the-full-stack)
 - [Broker Setup (Mosquitto)](#broker-setup-mosquitto)
 - [Database & Ingest (PostgreSQL)](#database--ingest-postgresql)
 - [Running the App](#running-the-app)
@@ -108,6 +109,80 @@ Python commands are all run **from the repository root** — the scripts resolve
 
 ---
 
+## Run the Full Stack
+
+Five processes make up a complete demo. Only two are required for live data in
+the app — the others add latency measurement and database persistence.
+
+| # | Process | Optional? | Run from |
+|---|---|---|---|
+| 1 | PostgreSQL (Docker) | Optional — DB demo only | repo root |
+| 2 | Ingest worker | Optional — DB demo only | repo root |
+| 3 | Echo responder | Optional — latency readout only | repo root |
+| 4 | Publisher | **Required** | repo root |
+| 5 | Expo app | **Required** | `app/` |
+
+Prerequisites: Mosquitto is running (a system service — no terminal needed), and
+the one-time setup is done (`.env.development`, `.venv-dev/`, `app/.env.development`;
+see [Installation](#installation) and [Broker Setup](#broker-setup-mosquitto)).
+
+### Terminal 1 — PostgreSQL (optional)
+
+```bash
+docker compose --env-file .env.development up -d
+docker ps --filter name=sleep-postgres   # wait until STATUS shows "healthy"
+```
+
+### Terminal 2 — Ingest worker (optional, leave running)
+
+```bash
+.venv-dev/bin/python ingest/worker.py
+```
+
+### Terminal 3 — Echo responder (optional, leave running)
+
+```bash
+.venv-dev/bin/python python-publisher/echo.py
+```
+
+It answers the app's latency probes. Without it the Network screen shows `—` for
+latency; everything else keeps working.
+
+### Terminal 4 — Publisher (leave running)
+
+```bash
+.venv-dev/bin/python python-publisher/publisher.py
+```
+
+You should see `Loaded 526 rows from data/sleep_data_realistic.csv`, then one line
+per published reading. For a fast replay (handy for DB demos):
+
+```bash
+PUBLISH_INTERVAL=0.05 .venv-dev/bin/python python-publisher/publisher.py
+```
+
+### Terminal 5 — Expo app
+
+```bash
+cd app && npx expo start
+```
+
+Scan the QR code with Expo Go on your phone (same Wi-Fi), then log in as
+`patient@sleep.com` / `1234`. Home shows live vitals; Network shows measured
+delivery and estimated latency.
+
+### Sanity check (optional)
+
+```bash
+# Raw MQTT tap — prints every message the broker routes
+mosquitto_sub -h localhost -p 1883 -t "sleep/#" -v
+```
+
+Start order does not matter — the app can join a publisher session mid-stream
+(the delivery baseline is recorded when the app joins).
+
+---
+
 ## Broker Setup (Mosquitto)
 
 ### 1. Install Mosquitto
@@ -194,18 +269,12 @@ docker compose --env-file .env.development up -d
 python3 -m venv .venv-dev
 .venv-dev/bin/pip install -r ingest/requirements.txt -r python-publisher/requirements.txt
 
-# 4. Run the ingest worker (leave running)
-.venv-dev/bin/python ingest/worker.py
-
-# 5. Run the latency echo responder on the broker host (leave running)
-.venv-dev/bin/python python-publisher/echo.py
-
-# 6. In another shell, run the publisher against the realistic dataset
-#    (it reads .env.development itself — no shell export needed)
+# 4. Run the ingest worker and publisher — terminals 2 and 4 of
+#    "Run the Full Stack" in the README. For DB demos a fast replay is convenient:
 LOOP_CSV=false PUBLISH_INTERVAL=0.05 \
   .venv-dev/bin/python python-publisher/publisher.py
 
-# 7. Inspect the results
+# 5. Inspect the results
 docker exec sleep-postgres psql -U sleep_user -d sleep_monitor \
   -c "SELECT * FROM session_stats;"
 ```
