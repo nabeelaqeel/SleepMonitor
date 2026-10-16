@@ -8,7 +8,7 @@ This guide covers everything needed to run the full SleepMonitor data pipeline: 
 
 ```
 Python Publisher  ──TCP:1883──►  Mosquitto  ──WS:9001──►  React Native App
-(sleep_data.csv)                 (broker)                  (Expo / Paho JS)
+(data/*.csv)                     (broker)                  (app/, Expo / Paho JS)
 ```
 
 The Python publisher connects to the broker over plain TCP (port 1883). The React Native app connects over WebSocket (port 9001) — required because the Expo/React Native JS runtime has no raw TCP socket API.
@@ -119,12 +119,16 @@ Example output: `192.168.1.139`
 
 ## 4. Configuring the App
 
-Edit `services/mqttService.js`:
+The app reads the broker host from `EXPO_PUBLIC_BROKER_IP` in `app/.env.development` (gitignored — start from the `app/.env.example` template):
 
-```js
-const BROKER_IP   = '192.168.1.139';  // ← your laptop's LAN IP
-const BROKER_PORT = 9001;             // WebSocket port — do NOT use 1883 here
+```bash
+# app/.env.development
+EXPO_PUBLIC_BROKER_IP=192.168.1.139   # ← your laptop's LAN IP
 ```
+
+The WebSocket port is fixed at 9001 in `app/services/mqttService.js` — do **not** use 1883 there; that is the raw TCP port the Python publisher uses.
+
+Expo inlines `EXPO_PUBLIC_*` variables at bundle time, so restart `npx expo start` after changing the file.
 
 Your phone and laptop must be on the **same Wi-Fi network** (same subnet).
 
@@ -162,6 +166,17 @@ mosquitto_pub -h 192.168.1.139 -p 1883 -t "sleep/normal" \
 ```
 
 Terminal 1 should print the topic and payload. If it does, the broker is working. Open the app — the HomeScreen should update.
+
+### Running the echo responder (latency probes)
+
+The Network screen shows estimated latency measured by `qos/ping` → `qos/pong` probes. Run the echo responder beside the broker so it can answer them:
+
+```bash
+# from the repository root
+.venv-dev/bin/python python-publisher/echo.py
+```
+
+Without it, pings go unanswered and the Network screen shows `—` for latency; everything else keeps working.
 
 ---
 
@@ -203,7 +218,7 @@ The publisher sends once and moves on. No acknowledgement, no retransmission. Ac
 
 ## 7. Python Publisher — Example
 
-Below is a minimal publisher that replays `sleep_data.csv` and classifies each row:
+Below is a minimal publisher that replays a dataset such as `data/sleep_data.csv` and classifies each row:
 
 ```python
 import csv, time, json
@@ -217,7 +232,7 @@ client.connect(BROKER, PORT)
 
 stats = {'critical': 0, 'important': 0, 'normal': 0, 'background': 0, 'total': 0}
 
-with open('sleep_data.csv') as f:
+with open('data/sleep_data.csv') as f:
     reader = csv.DictReader(f)
     for row in reader:
         spo2       = float(row['bo'])      # processed SpO2 column
@@ -258,21 +273,15 @@ with open('sleep_data.csv') as f:
 
 ---
 
-## 8. Reconnection (Current Limitation)
+## 8. Reconnection (Implemented)
 
-The app currently does **not** reconnect after a dropout. `onConnectionLost` only logs the error. Until this is fixed, restart the app if the broker restarts or the network changes.
+The app reconnects automatically. `onConnectionLost` marks the connection as down and schedules a retry with exponential backoff — `reconnectDelay` starts at 1 s and doubles up to `MAX_RECONNECT_DELAY` (10 s) — then re-subscribes to `sleep/#` and `qos/pong` at QoS 2.
 
-A minimal fix for `mqttService.js`:
+Because the client connects with `cleanSession: false` (stable per-install client ID persisted in `AsyncStorage`) and Mosquitto runs with `persistence true`, QoS 1/2 messages published while the app was offline are queued and redelivered on reconnect. QoS 0 messages are not queued by design.
 
-```js
-client.onConnectionLost = (response) => {
-  console.log('MQTT connection lost:', response.errorMessage);
-  // Simple fixed retry after 3 seconds
-  setTimeout(() => connectMQTT(onMessage), 3000);
-};
-```
+The backoff constants live at the top of `app/services/mqttService.js`.
 
-For production, use exponential backoff (1s → 2s → 4s → … up to 60s cap).
+> **Broker side:** queued messages are held for a client only as long as its session exists. Mosquitto's default `persistent_client_expiration` is unset (never expire); set it in `mosquitto.conf` if you want stale sessions reaped.
 
 ---
 
@@ -282,4 +291,4 @@ The current setup uses unencrypted WebSocket (`useSSL: false`). This is acceptab
 
 1. Generate a certificate for your broker (self-signed for dev, CA-signed for prod).
 2. Configure Mosquitto to use it on port 8883 (MQTTS) or 443 (WSS).
-3. In `mqttService.js`: set `BROKER_PORT = 8883` and `useSSL: true`.
+3. In `app/services/mqttService.js`: set `BROKER_PORT = 8883` and `useSSL: true`.

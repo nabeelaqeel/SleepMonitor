@@ -1,7 +1,8 @@
 """
 Sleep Monitor — MQTT Publisher
-Reads sleep_data.csv row by row and publishes each reading as a JSON
-payload to the Mosquitto broker, simulating a live sensor stream.
+Reads the configured CSV (data/sleep_data_realistic.csv by default) row by row
+and publishes each reading as a JSON payload to the Mosquitto broker,
+simulating a live sensor stream.
 
 Configuration is via environment variables (see .env.development).
 """
@@ -37,7 +38,7 @@ MQTT_HOST        = os.getenv("MQTT_HOST", "mosquitto")
 MQTT_PORT        = int(os.getenv("MQTT_PORT", "1883"))
 MQTT_USER        = os.getenv("MQTT_USER", "admin")
 MQTT_PASSWORD    = os.getenv("MQTT_PASSWORD", "changeme")
-CSV_PATH         = os.getenv("CSV_PATH", "/app/data/sleep_data.csv")
+CSV_PATH         = os.getenv("CSV_PATH", "data/sleep_data.csv")
 PUBLISH_INTERVAL = float(os.getenv("PUBLISH_INTERVAL", "1.0"))
 LOOP_CSV         = os.getenv("LOOP_CSV", "true").lower() == "true"
 PATIENT_ID       = os.getenv("PATIENT_ID", "patient-001")

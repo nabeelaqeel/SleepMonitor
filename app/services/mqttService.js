@@ -11,10 +11,12 @@ let connecting = false;
 // teardown (or a late broker callback) can't resurrect a connection.
 let generation = 0;
 
-// ── Replace with your laptop IP address ───────────────
-// Windows: open cmd → ipconfig → find IPv4 Address
-// Mac:     open terminal → ifconfig | grep "inet "
-const BROKER_IP = '192.168.68.68';  // CHANGE THIS to your laptop IP
+// ── Broker host ───────────────────────────────────────
+// Set EXPO_PUBLIC_BROKER_IP in app/.env.development (gitignored) — see
+// app/.env.example. It is inlined at bundle time, so restart `npx expo start`
+// after changing it. Find your laptop's LAN IP with `hostname -I` (Linux) or
+// `ipconfig` (Windows); the phone must be on the same network.
+const BROKER_IP = process.env.EXPO_PUBLIC_BROKER_IP || '192.168.68.68';
 const BROKER_PORT = 9001;          // WebSocket port — important, use 9001 not 1883
 
 const CLIENT_ID_KEY = 'mqtt_client_id';

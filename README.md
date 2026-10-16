@@ -1,6 +1,6 @@
 # SleepMonitor
 
-A QoS-aware real-time sleep monitoring system built as a Final Year Project (FYP). The mobile app receives live physiological data (SpO2, heart rate, HRV, motion) from an external Python classifier via MQTT and displays it to patients and doctors with role-based dashboards.
+A QoS-aware real-time sleep monitoring system built as a Final Year Project (FYP). The mobile app receives live physiological data (SpO2, heart rate, HRV, motion) from a Python publisher (`python-publisher/`) via MQTT and displays it to patients and doctors with role-based dashboards.
 
 ---
 
@@ -31,18 +31,18 @@ SleepMonitor classifies sleep readings into four tiers and transmits them over M
 | Normal | ≥ 95% | `sleep/normal` | 0 — Best effort | Green |
 | Background | Stats / batch | `sleep/background` | 0 — Best effort | Grey |
 
-The Python classifier reads `sleep_data.csv`, assigns a tier, and publishes JSON payloads to the Mosquitto broker. The React Native app subscribes over WebSocket and renders live vitals, an event log, session reports, and network diagnostics.
+The Python publisher reads `data/sleep_data_realistic.csv`, assigns a tier, and publishes JSON payloads to the Mosquitto broker. The React Native app in `app/` subscribes over WebSocket and renders live vitals, an event log, session reports, and network diagnostics.
 
 ---
 
 ## Architecture
 
 ```
-sleep_data.csv
+data/sleep_data_realistic.csv
       │
       ▼
-Python Classifier (external)
-  Reads rows → applies SpO2 thresholds → publishes JSON
+Python Publisher  (python-publisher/)
+  Reads rows → applies tier rules → publishes JSON
       │
       │  TCP :1883
       ▼
@@ -50,15 +50,15 @@ Mosquitto Broker  (your laptop LAN IP)
       │
       │  WebSocket :9001
       ▼
-mqttService.js  (Paho JS client)
+app/services/mqttService.js  (Paho JS client)
       │
       ▼
-SleepContext.js  (React Context — single source of truth)
+app/context/SleepContext.js  (React Context — single source of truth)
       │
       ├── HomeScreen    — live vitals + SpO2 sparkline
       ├── AlertsScreen  — filterable Critical/Important event log
       ├── ReportScreen  — session statistics + tier distribution
-      └── NetworkScreen — broker status + per-topic delivery rates
+      └── NetworkScreen — broker status + measured per-topic delivery/latency
 ```
 
 ### Role-based routing
@@ -76,10 +76,10 @@ SleepContext.js  (React Context — single source of truth)
 ## Prerequisites
 
 - **Node.js** ≥ 18
-- **Expo CLI** — `npm install -g expo-cli` or use `npx expo`
+- **Expo CLI** — use `npx expo` (no global install needed)
 - **Expo Go** app on your phone (iOS / Android), or an emulator
 - **Mosquitto** MQTT broker installed on your laptop
-- **Python 3** with `paho-mqtt` installed (for the classifier/publisher)
+- **Python 3** with `paho-mqtt` installed (for the publisher and ingest worker)
 - **Docker** + **Docker Compose** (for the PostgreSQL ingest database — optional)
 - Your laptop and phone must be on the **same Wi-Fi network**
 
@@ -92,9 +92,19 @@ SleepContext.js  (React Context — single source of truth)
 git clone <repo-url>
 cd SleepMonitor
 
-# Install dependencies
+# Install app dependencies (the Expo project lives in app/)
+cd app
 npm install
 ```
+
+The repository has **two runtimes**:
+
+| Runtime | Where | How to run |
+|---|---|---|
+| Expo app | `app/` | `cd app && npx expo start` |
+| Python (publisher, echo, ingest) | repo root | `.venv-dev/bin/python <script>` |
+
+Python commands are all run **from the repository root** — the scripts resolve `.env.development` and dataset paths relative to it.
 
 ---
 
@@ -145,11 +155,14 @@ ip addr show   # or: ifconfig | grep "inet "
 ipconfig       # look for IPv4 Address
 ```
 
-Edit `services/mqttService.js` line 8:
+Set the broker IP in `app/.env.development` (gitignored — copy `app/.env.example` to create it):
 
-```js
-const BROKER_IP = '192.168.x.x';  // replace with your actual LAN IP
+```bash
+# app/.env.development
+EXPO_PUBLIC_BROKER_IP=192.168.x.x
 ```
+
+Expo inlines `EXPO_PUBLIC_*` variables at bundle time, so **restart `npx expo start`** after changing it. The app falls back to a built-in default if the variable is missing.
 
 ### 4. Verify the broker is routing messages
 
@@ -210,6 +223,8 @@ See [`docs/DATABASE.md`](docs/DATABASE.md) for the schema, payload fields, and d
 ## Running the App
 
 ```bash
+cd app
+
 # Start the Expo dev server
 npx expo start
 
@@ -238,43 +253,47 @@ Sessions persist across app restarts via `AsyncStorage`.
 
 ```
 SleepMonitor/
-├── App.js                          # Root — auth state, role-based routing
-├── index.js                        # Expo entry point
-├── app.json                        # Expo config (new arch enabled, package IDs)
-├── sleep_data.csv                  # Dataset for the classifier (has sleep-stage labels)
-├── sleep_data_realistic.csv        # Dataset used for demos + DB ingestion
+├── app/                              # Expo React Native app (own project root)
+│   ├── App.js                        # Root — auth state, role-based routing
+│   ├── index.js                      # Expo entry point
+│   ├── app.json                      # Expo config (new arch enabled, package IDs)
+│   ├── .env.example                  # EXPO_PUBLIC_BROKER_IP template
+│   ├── auth/
+│   │   └── mockAuth.js               # In-memory login, AsyncStorage session persistence
+│   ├── context/
+│   │   └── SleepContext.js           # Global MQTT state — useSleep() hook
+│   ├── services/
+│   │   └── mqttService.js            # Paho WebSocket MQTT client + publish()
+│   ├── navigation/
+│   │   └── DoctorNavigator.js        # Stack navigator for the doctor role
+│   ├── components/
+│   │   └── VitalCard.js              # Reusable vital metric display card
+│   └── screens/
+│       ├── LoginScreen.js
+│       ├── HomeScreen.js             # Live vitals + SpO2 sparkline (patient)
+│       ├── AlertsScreen.js           # Event log, Critical/Important filter (patient)
+│       ├── ReportScreen.js           # Session statistics + QoS summary (patient)
+│       ├── NetworkScreen.js          # Broker status + measured metrics (patient)
+│       └── doctor/
+│           ├── PatientListScreen.js  # Patient list (mock data — Phase 2)
+│           └── PatientDetailScreen.js# Individual patient vitals (mock data — Phase 2)
 │
-├── auth/
-│   └── mockAuth.js                 # In-memory login, AsyncStorage session persistence
+├── data/                             # Datasets
+│   ├── sleep_data.csv                # ML/training set (has sleep-stage labels)
+│   └── sleep_data_realistic.csv      # Demo + DB ingestion set
 │
-├── context/
-│   └── SleepContext.js             # Global MQTT state — useSleep() hook
+├── python-publisher/                 # MQTT publisher
+│   ├── publisher.py                  # Session lifecycle, seq/publishedAt, stats
+│   ├── classifier.py                 # Tier rules (SpO2 thresholds)
+│   └── echo.py                       # qos/ping → qos/pong latency relay
 │
-├── services/
-│   └── mqttService.js              # Paho WebSocket MQTT client (configure BROKER_IP here)
-│
-├── navigation/
-│   └── DoctorNavigator.js          # Stack navigator for the doctor role
-│
-├── components/
-│   └── VitalCard.js                # Reusable vital metric display card
-│
-├── screens/
-│   ├── LoginScreen.js
-│   ├── HomeScreen.js               # Live vitals + SpO2 sparkline (patient)
-│   ├── AlertsScreen.js             # Event log, Critical/Important filter (patient)
-│   ├── ReportScreen.js             # Session statistics + QoS summary (patient)
-│   ├── NetworkScreen.js            # Broker status + per-topic metrics (patient)
-│   └── doctor/
-│       ├── PatientListScreen.js    # Patient list (mock data — Phase 2)
-│       └── PatientDetailScreen.js  # Individual patient vitals (mock data — Phase 2)
-│
-├── python-publisher/               # MQTT publisher + tier classifier + echo.py (latency probe relay)
-├── ingest/                         # MQTT → PostgreSQL ingest worker
-├── postgres/init/01_schema.sql     # Database schema (applied on first boot)
-├── docker-compose.yml              # PostgreSQL service (Docker)
-├── .env.example                    # Environment template (copy to .env.development)
-└── docs/                           # ARCHITECTURE, DATA_MODEL, DATABASE, MQTT_SETUP
+├── ingest/                           # MQTT → PostgreSQL ingest worker
+├── postgres/init/01_schema.sql       # Database schema (applied on first boot)
+├── ml/                               # Dataset generation (training work lands here)
+├── benchmark/                        # Latency benchmark harness (single-clock)
+├── docker-compose.yml                # PostgreSQL service (Docker)
+├── .env.example                      # Python env template (copy to .env.development)
+└── docs/                             # ARCHITECTURE, DATA_MODEL, DATABASE, MQTT_SETUP
 ```
 
 ---
@@ -337,10 +356,7 @@ Every message published to any `sleep/*` topic is a JSON object:
 
 | Issue | Impact | Planned Fix |
 |---|---|---|
-| `BROKER_IP` is hardcoded | App breaks on a different network | Move to env var / settings screen |
 | Mock authentication | Passwords hardcoded in source; no expiry | Replace with Supabase Auth or Clerk |
 | Doctor screens use static data | Patient list and vitals are not live | Phase 2: subscribe per-patient MQTT topics + backend |
-| `mqtt` package installed but unused | Unnecessary bundle weight | `npm uninstall mqtt` |
-| `react-native-vector-icons` unused | `@expo/vector-icons` (Expo built-in) is used instead | Remove from `package.json` |
 | No tests | No safety net for regressions | Add Jest unit tests + Maestro E2E |
 | Android package is `com.anonymous.*` | Cannot be submitted to Play Store | Update `app.json` before release |

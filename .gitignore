@@ -44,15 +44,18 @@ yarn-error.*
 __pycache__/
 *.py[cod]
 
+# Generated benchmark output
+evaluation_results.json
+
 # Docker credentials — never commit
 mosquitto/passwd
 
 # typescript
 *.tsbuildinfo
 
-# generated native folders
-/ios
-/android
+# generated native folders (the Expo project now lives in app/)
+app/ios
+app/android
 
 # Claude Code agent config — local only
 .claude/

@@ -11,7 +11,7 @@ import statistics
 
 BROKER   = "localhost"
 PORT     = 1883
-CSV_FILE = "sleep_data.csv"
+CSV_FILE = "data/sleep_data.csv"
 
 # Column names — same as your classifier.py
 SPO2_COL = "bo"
@@ -356,10 +356,10 @@ output = {
     }
 }
 
-with open("evaluation_results.json", "w") as f:
+with open("benchmark/evaluation_results.json", "w") as f:
     json.dump(output, f, indent=2)
 
-print("Results saved to evaluation_results.json")
+print("Results saved to benchmark/evaluation_results.json")
 
 client.loop_stop()
 client.disconnect()

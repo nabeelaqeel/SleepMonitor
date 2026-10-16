@@ -58,7 +58,7 @@ for minute in range(TOTAL_MINUTES):
     })
 
 df = pd.DataFrame(rows)
-df.to_csv('sleep_data_realistic.csv', index=False)
+df.to_csv('data/sleep_data_realistic.csv', index=False)
 print(f"Generated {len(df)} rows")
 print(f"SpO2 range: {df['spo2'].min()} – {df['spo2'].max()}")
 print(f"Critical rows (SpO2 < 90): {len(df[df['spo2'] < 90])}")

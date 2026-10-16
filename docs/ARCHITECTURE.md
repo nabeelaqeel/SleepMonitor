@@ -1,5 +1,8 @@
 # Architecture
 
+> **Path convention:** app source paths in this document are relative to `app/`
+> (the Expo project root). Repository-level paths are written in full.
+
 ## App Bootstrapping
 
 `index.js` calls `registerRootComponent(App)` which mounts `App.js` as the root.
@@ -20,7 +23,7 @@ App
 
 ## State Management
 
-All live sensor data is held in `SleepContext` (`context/SleepContext.js`). No external state library is used.
+All live sensor data is held in `SleepContext` (`app/context/SleepContext.js`). No external state library is used.
 
 ### State shape
 
@@ -102,7 +105,7 @@ Every context consumer re-renders on every MQTT message. At the current scale (o
 
 ## MQTT Connection
 
-**File:** `services/mqttService.js` (Paho WebSocket client, port 9001)
+**File:** `app/services/mqttService.js` (Paho WebSocket client, port 9001)
 
 | Aspect | Behaviour |
 |---|---|
@@ -112,13 +115,13 @@ Every context consumer re-renders on every MQTT message. At the current scale (o
 | Publish | `publish(topic, payload, qos)` — used for latency probes; no-op when disconnected |
 | Reconnect | `onConnectionLost` sets `connected = false` and retries with exponential backoff (1 s → 10 s cap) |
 
-> **Note:** `BROKER_IP` (line 8) must be set to the broker host's LAN IP. Only one app instance per browser profile should run, since browser tabs share the persisted client ID.
+> **Note:** the broker host comes from `EXPO_PUBLIC_BROKER_IP` in `app/.env.development` (template: `app/.env.example`). Expo inlines it at bundle time, so restart Metro after changing it. Only one app instance per browser profile should run, since browser tabs share the persisted client ID.
 
 ---
 
 ## Authentication
 
-**File:** `auth/mockAuth.js`
+**File:** `app/auth/mockAuth.js`
 
 Entirely client-side — no backend.
 
@@ -153,7 +156,7 @@ Bottom tab navigator (`@react-navigation/bottom-tabs`). Each tab is a flat scree
 
 Logout button injected via `screenOptions.headerRight` — visible on all tabs.
 
-### DoctorNavigator (`navigation/DoctorNavigator.js`)
+### DoctorNavigator (`app/navigation/DoctorNavigator.js`)
 
 Native stack navigator (`@react-navigation/native-stack`).
 

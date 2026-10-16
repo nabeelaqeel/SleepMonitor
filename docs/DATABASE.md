@@ -258,7 +258,7 @@ GROUP BY tier;
 
 ## Verification
 
-Two full replays of `sleep_data_realistic.csv` (526 rows) were run.
+Two full replays of `data/sleep_data_realistic.csv` (526 rows) were run.
 
 **Scenario A — worker up throughout:**
 
@@ -309,7 +309,7 @@ of urgent data under an unreliable consumer.
   detect a dropped trailing QoS 0 run. The publisher always sends `totalReadings`,
   so this only applies to a Last-Will close with no clean `session/end`.
 * **HRV is still a constant.** `publisher.py` uses `row.get("hrv", 35)` and
-  `sleep_data_realistic.csv` has no `hrv` column (`minute,bo,hr,rr,motion,event`).
+  `data/sleep_data_realistic.csv` has no `hrv` column (`minute,bo,hr,rr,motion,event`).
   Deferred by design.
 * **`.env.development` is reused** as the compose env-file and the worker's
   dotenv source; a production setup should separate these.
