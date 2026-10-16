@@ -168,7 +168,7 @@ export default function PatientDetailScreen({ route }) {
         <VitalCard label="Age"    value={`${patient.age} yrs`}   color="#9ca3af" />
         <VitalCard label="Weight" value={`${patient.weight} kg`}  color="#9ca3af" />
         <VitalCard label="Height" value={`${patient.height} cm`}  color="#9ca3af" />
-        <VitalCard label="BMI"    value={bmi}                     color={bmiColor(bmi)} />
+        <VitalCard label="BMI"    value={bmi}                     color={isLive ? bmiColor(bmi) : RECORD_COLOR} />
       </View>
 
       {/* Medical history */}

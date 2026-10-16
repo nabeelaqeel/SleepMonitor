@@ -96,7 +96,7 @@ function PatientCard({ patient, snapshot, liveCritical, now, onPress }) {
         <View style={styles.vitalSep} />
         <View style={styles.vitalItem}>
           <Text style={styles.vitalLabel}>BMI</Text>
-          <Text style={[styles.vitalValue, { color: bmiColor(bmi) }]}>{bmi}</Text>
+          <Text style={[styles.vitalValue, { color: isLive ? bmiColor(bmi) : RECORD_COLOR }]}>{bmi}</Text>
         </View>
       </View>
 
