@@ -205,13 +205,13 @@ Both navigators have their own `NavigationContainer` and mount exclusively (neve
 
 ### PatientListScreen (doctor)
 - **Reads:** `patientSnapshots` + `sessionStats` (live overlay); the roster itself is the seeded `MOCK_PATIENTS` array from `app/data/patients.js`
-- **Live rule:** a roster entry whose `patientId` matches incoming payloads shows a LIVE badge and live values while messages keep arriving (10 s window, `PATIENT_LIVE_WINDOW_MS`); once a session has been observed the card also shows a "last seen" time
+- **Live rule:** a roster entry whose `patientId` matches incoming payloads shows a LIVE badge and live values while messages keep arriving (10 s window, `PATIENT_LIVE_WINDOW_MS`); once a session has been observed the card also shows a "last seen" time. Non-live cards read a grey "Offline" badge and render SpO2/HR/Critical in neutral grey — the seeded `status` is record data, not current state
 - **Navigation:** Taps a card → `navigation.navigate('PatientDetail', { patient })`
 
 ### PatientDetailScreen (doctor)
 - **Reads:** `route.params.patient`, the same `patientSnapshots` overlay, plus `sessionStats`, `currentData` and `sleepTimeline` for the report export
-- **Live overlay:** when the route patient is streaming, vitals, tier (from the payload), critical count and the last message topic come from the live snapshot; otherwise the seeded record is shown
-- **Tier:** payload tier when live, `deriveTier(spo2)` for seeded records
+- **Live overlay:** when the route patient is streaming, vitals, tier (from the payload), critical count and the last message topic come from the live snapshot; otherwise the seeded record is shown with neutral (grey) values
+- **Tier:** payload tier when live (fallback `deriveTier(spo2)`); non-live records show a neutral "OFFLINE — no live session" banner instead of deriving a severity from the record
 - **Report export:** the "Export PDF" button calls `services/exportSessionReport`, which stamps the patient's name/ID into the PDF header; enabled only once this patient has streamed during this app run (otherwise disabled with "No session to export")
 
 ### DoctorAlertsScreen (doctor)

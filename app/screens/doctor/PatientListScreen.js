@@ -4,14 +4,16 @@ import { useSleep, PATIENT_LIVE_WINDOW_MS } from '../../context/SleepContext';
 import { useNow } from '../../hooks/useNow';
 import { MOCK_PATIENTS } from '../../data/patients';
 
-const STATUS_CONFIG = {
-  active:   { bg: '#0a2010', border: '#14532d', dot: '#22c55e', text: '#4ade80', label: 'Active'   },
-  sleeping: { bg: '#0a0f2a', border: '#1e3a5f', dot: '#60a5fa', text: '#93c5fd', label: 'Sleeping' },
-  critical: { bg: '#3d1010', border: '#7f1d1d', dot: '#ef4444', text: '#f87171', label: 'Critical' },
-};
+// Neutral grey for record values on a card that is not streaming — the
+// seeded vitals are history, not a current reading.
+const RECORD_COLOR = '#9ca3af';
 
 // Shown in place of the static status pill while the patient is streaming.
 const LIVE_CONFIG = { bg: '#0a2010', border: '#14532d', dot: '#22c55e', text: '#4ade80', label: 'LIVE' };
+
+// Every non-live card reads "Offline": the seeded record statuses
+// (active/sleeping/critical) are no longer presented as current state.
+const OFFLINE_CONFIG = { bg: '#13131f', border: '#2a2a4a', dot: '#6b7280', text: RECORD_COLOR, label: 'Offline' };
 
 function formatClock(ts) {
   const d   = new Date(ts);
@@ -34,13 +36,14 @@ function bmiColor(bmi) {
 
 function PatientCard({ patient, snapshot, liveCritical, now, onPress }) {
   // A patient is live only while fresh messages bearing its patientId arrive;
-  // otherwise the card falls back to the seeded record.
+  // otherwise the card shows an Offline badge over the seeded record values.
   const isLive   = !!snapshot && (now - snapshot.lastSeen) < PATIENT_LIVE_WINDOW_MS;
   const spo2     = isLive && snapshot.spo2 != null ? Math.round(snapshot.spo2) : patient.lastSpo2;
   const hr       = isLive && snapshot.heartRate != null ? Math.round(snapshot.heartRate) : patient.lastHr;
   const critical = isLive ? liveCritical : patient.criticalEvents;
-  const status   = isLive ? LIVE_CONFIG : (STATUS_CONFIG[patient.status] || STATUS_CONFIG.active);
-  const spo2Color = spo2 < 90 ? '#f87171'
+  const status   = isLive ? LIVE_CONFIG : OFFLINE_CONFIG;
+  const spo2Color = !isLive ? RECORD_COLOR
+                  : spo2 < 90 ? '#f87171'
                   : spo2 < 95 ? '#fbbf24' : '#4ade80';
   const bmi      = computeBmi(patient.weight, patient.height);
   const lastSeen = snapshot ? ` · last seen ${formatClock(snapshot.lastSeen)}` : '';
@@ -78,14 +81,14 @@ function PatientCard({ patient, snapshot, liveCritical, now, onPress }) {
         <View style={styles.vitalSep} />
         <View style={styles.vitalItem}>
           <Text style={styles.vitalLabel}>Heart Rate</Text>
-          <Text style={styles.vitalValue}>{hr} bpm</Text>
+          <Text style={[styles.vitalValue, !isLive && { color: RECORD_COLOR }]}>{hr} bpm</Text>
         </View>
         <View style={styles.vitalSep} />
         <View style={styles.vitalItem}>
           <Text style={styles.vitalLabel}>Critical</Text>
           <Text style={[
             styles.vitalValue,
-            { color: critical > 0 ? '#f87171' : '#4ade80' },
+            { color: !isLive ? RECORD_COLOR : critical > 0 ? '#f87171' : '#4ade80' },
           ]}>
             {critical}
           </Text>

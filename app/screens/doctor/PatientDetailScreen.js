@@ -21,6 +21,13 @@ const HISTORY_TYPE_CONFIG = {
   'Lab Result': { bg: '#0a2010', border: '#14532d', text: '#4ade80' },
 };
 
+// Non-live records carry no current severity, so the tier banner shows a
+// neutral offline state instead of deriving a tier from the seeded record.
+const OFFLINE_TIER = { bg: '#13131f', border: '#2a2a4a', text: '#9ca3af',
+                       dot: '#6b7280', label: 'OFFLINE — no live session' };
+
+const RECORD_COLOR = '#9ca3af';   // neutral grey for non-live (record) values
+
 function deriveTier(spo2) {
   if (spo2 < 90) return 'Critical';
   if (spo2 < 95) return 'Important';
@@ -71,12 +78,16 @@ export default function PatientDetailScreen({ route }) {
   const hr   = isLive && snapshot.heartRate != null ? Math.round(snapshot.heartRate) : patient.lastHr;
   const criticalCount = isLive ? sessionStats.critical : patient.criticalEvents;
 
+  // Live: payload tier when valid, else derived from the live SpO2.
+  // Not live: no severity is being measured, so show the offline banner.
   const tierKey  = isLive && TIER_CONFIG[snapshot.tier] ? snapshot.tier : deriveTier(spo2);
-  const tier     = TIER_CONFIG[tierKey];
+  const tier     = isLive ? TIER_CONFIG[tierKey] : OFFLINE_TIER;
 
-  const spo2Color = spo2 < 90 ? '#f87171'
+  const spo2Color = !isLive ? RECORD_COLOR
+                  : spo2 < 90 ? '#f87171'
                   : spo2 < 95 ? '#fbbf24' : '#4ade80';
-  const hrColor   = hr < 40 || hr > 100 ? '#f87171' : '#4ade80';
+  const hrColor   = !isLive ? RECORD_COLOR
+                  : hr < 40 || hr > 100 ? '#f87171' : '#4ade80';
   const bmi       = computeBmi(patient.weight, patient.height);
 
   // The PDF export reuses the patient-side report (services/exportSessionReport).
@@ -142,12 +153,12 @@ export default function PatientDetailScreen({ route }) {
         <VitalCard
           label="Critical Events"
           value={`${criticalCount}`}
-          color={criticalCount > 0 ? '#f87171' : '#4ade80'}
+          color={!isLive ? RECORD_COLOR : criticalCount > 0 ? '#f87171' : '#4ade80'}
         />
         <VitalCard
           label="Status"
-          value={isLive ? 'Live now' : patient.status.charAt(0).toUpperCase() + patient.status.slice(1)}
-          color={isLive ? '#4ade80' : '#9ca3af'}
+          value={isLive ? 'Live now' : 'Offline'}
+          color={isLive ? '#4ade80' : RECORD_COLOR}
         />
       </View>
 
@@ -169,7 +180,7 @@ export default function PatientDetailScreen({ route }) {
       </View>
 
       {/* Critical events callout */}
-      {criticalCount > 0 && (
+      {isLive && criticalCount > 0 && (
         <View style={styles.alertBox}>
           <MaterialCommunityIcons name="alert-circle" size={16} color="#f87171" />
           <View style={{ flex: 1 }}>

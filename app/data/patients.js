@@ -5,6 +5,10 @@
 // The entry that carries a `patientId` is the one that can go LIVE: it
 // matches the publisher's PATIENT_ID, so SleepContext tracks its snapshots
 // and the roster/detail/alerts screens overlay live values on top of it.
+//
+// Each entry also carries a seeded `status` and last-record vitals. That
+// `status` documents the patient's record state only — the doctor UI no
+// longer presents it as current (cards show LIVE or Offline instead).
 export const MOCK_PATIENTS = [
   {
     id: '2',
@@ -14,7 +18,7 @@ export const MOCK_PATIENTS = [
     lastSpo2: 96,
     lastHr: 58,
     criticalEvents: 2,
-    status: 'active',
+    status: 'active',           // seeded record state — not displayed
     weight: 78,
     height: 175,
     medicalHistory: [
@@ -30,7 +34,7 @@ export const MOCK_PATIENTS = [
     lastSpo2: 94,
     lastHr: 62,
     criticalEvents: 0,
-    status: 'sleeping',
+    status: 'sleeping',         // seeded record state — not displayed
     weight: 55,
     height: 160,
     medicalHistory: [
@@ -45,7 +49,7 @@ export const MOCK_PATIENTS = [
     lastSpo2: 88,
     lastHr: 71,
     criticalEvents: 5,
-    status: 'critical',
+    status: 'critical',         // seeded record state — not displayed
     weight: 95,
     height: 168,
     medicalHistory: [
