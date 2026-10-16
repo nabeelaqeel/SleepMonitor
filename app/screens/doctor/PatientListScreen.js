@@ -1,10 +1,13 @@
 import { View, Text, FlatList, TouchableOpacity, StyleSheet } from 'react-native';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
+import { useSleep, PATIENT_LIVE_WINDOW_MS } from '../../context/SleepContext';
+import { useNow } from '../../hooks/useNow';
 
 const MOCK_PATIENTS = [
   {
     id: '2',
     name: 'Ali Hassan',
+    patientId: 'patient-001',   // matches the publisher's PATIENT_ID — this row goes live
     age: 34,
     lastSpo2: 96,
     lastHr: 58,
@@ -58,6 +61,15 @@ const STATUS_CONFIG = {
   critical: { bg: '#3d1010', border: '#7f1d1d', dot: '#ef4444', text: '#f87171', label: 'Critical' },
 };
 
+// Shown in place of the static status pill while the patient is streaming.
+const LIVE_CONFIG = { bg: '#0a2010', border: '#14532d', dot: '#22c55e', text: '#4ade80', label: 'LIVE' };
+
+function formatClock(ts) {
+  const d   = new Date(ts);
+  const pad = n => String(n).padStart(2, '0');
+  return `${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
+}
+
 function computeBmi(weight, height) {
   const h = height / 100;
   return (weight / (h * h)).toFixed(1);
@@ -71,11 +83,18 @@ function bmiColor(bmi) {
   return '#f87171';
 }
 
-function PatientCard({ patient, onPress }) {
-  const status   = STATUS_CONFIG[patient.status] || STATUS_CONFIG.active;
-  const spo2Color = patient.lastSpo2 < 90 ? '#f87171'
-                  : patient.lastSpo2 < 95 ? '#fbbf24' : '#4ade80';
+function PatientCard({ patient, snapshot, liveCritical, now, onPress }) {
+  // A patient is live only while fresh messages bearing its patientId arrive;
+  // otherwise the card falls back to the seeded record.
+  const isLive   = !!snapshot && (now - snapshot.lastSeen) < PATIENT_LIVE_WINDOW_MS;
+  const spo2     = isLive && snapshot.spo2 != null ? Math.round(snapshot.spo2) : patient.lastSpo2;
+  const hr       = isLive && snapshot.heartRate != null ? Math.round(snapshot.heartRate) : patient.lastHr;
+  const critical = isLive ? liveCritical : patient.criticalEvents;
+  const status   = isLive ? LIVE_CONFIG : (STATUS_CONFIG[patient.status] || STATUS_CONFIG.active);
+  const spo2Color = spo2 < 90 ? '#f87171'
+                  : spo2 < 95 ? '#fbbf24' : '#4ade80';
   const bmi      = computeBmi(patient.weight, patient.height);
+  const lastSeen = snapshot ? ` · last seen ${formatClock(snapshot.lastSeen)}` : '';
 
   return (
     <TouchableOpacity
@@ -90,7 +109,7 @@ function PatientCard({ patient, onPress }) {
         </View>
         <View style={styles.nameBlock}>
           <Text style={styles.patientName}>{patient.name}</Text>
-          <Text style={styles.patientAge}>Age {patient.age}</Text>
+          <Text style={styles.patientAge}>Age {patient.age}{lastSeen}</Text>
         </View>
         <View style={[styles.badge, { backgroundColor: status.bg, borderColor: status.border }]}>
           <View style={[styles.badgeDot, { backgroundColor: status.dot }]} />
@@ -105,21 +124,21 @@ function PatientCard({ patient, onPress }) {
       <View style={styles.vitalsRow}>
         <View style={styles.vitalItem}>
           <Text style={styles.vitalLabel}>SpO2</Text>
-          <Text style={[styles.vitalValue, { color: spo2Color }]}>{patient.lastSpo2}%</Text>
+          <Text style={[styles.vitalValue, { color: spo2Color }]}>{spo2}%</Text>
         </View>
         <View style={styles.vitalSep} />
         <View style={styles.vitalItem}>
           <Text style={styles.vitalLabel}>Heart Rate</Text>
-          <Text style={styles.vitalValue}>{patient.lastHr} bpm</Text>
+          <Text style={styles.vitalValue}>{hr} bpm</Text>
         </View>
         <View style={styles.vitalSep} />
         <View style={styles.vitalItem}>
           <Text style={styles.vitalLabel}>Critical</Text>
           <Text style={[
             styles.vitalValue,
-            { color: patient.criticalEvents > 0 ? '#f87171' : '#4ade80' },
+            { color: critical > 0 ? '#f87171' : '#4ade80' },
           ]}>
-            {patient.criticalEvents}
+            {critical}
           </Text>
         </View>
         <View style={styles.vitalSep} />
@@ -141,6 +160,9 @@ function PatientCard({ patient, onPress }) {
 }
 
 export default function PatientListScreen({ navigation }) {
+  const { patientSnapshots, sessionStats } = useSleep();
+  const now = useNow();
+
   return (
     <View style={styles.root}>
       {/* Section header */}
@@ -157,6 +179,9 @@ export default function PatientListScreen({ navigation }) {
         renderItem={({ item }) => (
           <PatientCard
             patient={item}
+            snapshot={item.patientId ? patientSnapshots[item.patientId] : null}
+            liveCritical={sessionStats.critical}
+            now={now}
             onPress={() => navigation.navigate('PatientDetail', { patient: item })}
           />
         )}

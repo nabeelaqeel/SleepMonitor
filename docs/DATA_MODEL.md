@@ -9,6 +9,7 @@ All four MQTT topics share the same JSON payload schema. The publisher construct
 ```json
 {
   "sessionId":   "9b87cfb7-5159-4eed-9722-edecd5d4de3f",
+  "patientId":   "patient-001",
   "seq":         42,
   "publishedAt": 1760342451533,
   "tier":      "Critical",
@@ -35,6 +36,7 @@ All four MQTT topics share the same JSON payload schema. The publisher construct
 | Field | Type | Required | Description |
 |---|---|---|---|
 | `sessionId` | string (UUID) | Yes | Session the reading belongs to; minted per publisher run. Used by the ingest worker as one half of the dedup key `(session_id, seq)` |
+| `patientId` | string | Yes | Identifies the monitored patient (e.g. `"patient-001"`). The app's doctor roster matches this to light up the LIVE entry |
 | `seq` | number | Yes | Monotonic per-session counter starting at 0. Gaps reveal QoS 0 loss |
 | `publishedAt` | number | Yes | Publish time as epoch milliseconds. Enables real end-to-end latency (`ts - published_at`) |
 | `tier` | string | Yes | `"Critical"` / `"Important"` / `"Normal"` / `"Background"` — drives all UI logic |
@@ -48,7 +50,7 @@ All four MQTT topics share the same JSON payload schema. The publisher construct
 | `topic` | string | Yes | MQTT topic name, echoed inside the payload and shown in the event log |
 | `stats` | object | No | Cumulative session counters maintained by the publisher |
 
-`sleep/background` messages carry `sessionId` and `publishedAt` but **no `seq`**;
+`sleep/background` messages carry `sessionId`, `patientId` and `publishedAt` but **no `seq`**;
 the ingest worker ignores them (session statistics are computed from the readings
 themselves). See `docs/DATABASE.md`.
 
@@ -106,6 +108,7 @@ The table below maps each payload field to the context state it updates:
 | `spo2` | `spo2History` (appended, last 10 kept) |
 | `tier`, `spo2`, `heartRate`, `timestamp`, `reason`, `topic` | `eventLog` (Critical and Important only) |
 | `tier`, `qos` | `networkStats` (count + latency) |
+| `patientId` | `patientSnapshots` (per-patient last reading — the doctor roster's LIVE overlay) |
 
 ---
 

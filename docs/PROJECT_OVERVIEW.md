@@ -130,7 +130,7 @@ docs/                       ARCHITECTURE, DATA_MODEL, DATABASE, MQTT_SETUP, PROJ
 | Patient — Alerts | Working | Filterable event log |
 | Patient — Network | Working | Delivery measured from `seq` vs publisher `stats`; latency is estimated `RTT/2` via `echo.py` |
 | Patient — Report | Untested | Timeline chart + PDF export (`expo-print` / `expo-sharing`); on-device check pending |
-| Doctor dashboards | Not live | Hardcoded `MOCK_PATIENTS`; not connected to MQTT |
+| Doctor dashboards | Partial | Mock roster with a live overlay: the entry whose `patientId` matches the live stream shows LIVE vitals; the others stay seeded records (one patient streams at a time) |
 | MQTT client | Working | Per-install persisted client ID, `cleanSession: false`, `sleep/#` + `qos/pong` at QoS 2, exponential-backoff reconnect |
 | Python publisher | Partial | Runs; owns session lifecycle + `seq`/`publishedAt`. HRV still always 35 (Issue 3) |
 | Classifier | Inconsistent | `python-publisher/classifier.py` uses SpO2 only; `benchmark/evaluation.py` uses SpO2 + HR + HRV |

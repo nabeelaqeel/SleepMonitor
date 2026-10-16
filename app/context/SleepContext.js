@@ -16,6 +16,10 @@ const SAMPLE_TTL_MS     = 15000;  // forget completed samples older than this �
 const MAX_SAMPLES       = 21;     // hard cap per QoS window
 const QoS_CYCLE         = [2, 1, 0];
 
+// Doctor roster: a patient counts as "live" while messages bearing its
+// patientId keep arriving; after this gap the roster shows "last seen".
+export const PATIENT_LIVE_WINDOW_MS = 10000;
+
 const INSTANCE_ID = Math.random().toString(36).slice(2, 8);
 
 function median(sorted) {
@@ -69,6 +73,10 @@ export function SleepProvider({ children }) {
     1: { ms: null, samples: 0 },
     2: { ms: null, samples: 0 },
   });
+
+  // Last reading per payload patientId — powers the doctor roster's LIVE
+  // badge. Only the patient that is actually streaming updates here.
+  const [patientSnapshots, setPatientSnapshots] = useState({});
 
   // ── Mutable measurement state (no re-render churn) ───────────
   const pendingRef  = useRef({});                       // pingId → { t0, qos, at }
@@ -225,6 +233,29 @@ export function SleepProvider({ children }) {
       connected: true,
       [key]: { count, delivery },
     }));
+
+    // Per-patient snapshot for the doctor roster. Background messages carry
+    // no vitals, so they only refresh lastSeen.
+    if (data.patientId) {
+      setPatientSnapshots(prev => {
+        const prior = prev[data.patientId] || {};
+        return {
+          ...prev,
+          [data.patientId]: isStatsOnly
+            ? { ...prior, lastSeen: now }
+            : {
+                ...prior,
+                lastSeen:  now,
+                tier:      data.tier,
+                spo2:      data.spo2,
+                heartRate: data.heartRate,
+                hrv:       data.hrv,
+                topic:     data.topic,
+                timestamp: data.timestamp,
+              },
+        };
+      });
+    }
   };
 
   useEffect(() => {
@@ -278,6 +309,7 @@ export function SleepProvider({ children }) {
       networkStats,
       latencyStats,
       sleepTimeline,
+      patientSnapshots,
     }}>
       {children}
     </SleepContext.Provider>

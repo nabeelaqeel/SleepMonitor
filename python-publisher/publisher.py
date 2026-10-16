@@ -175,6 +175,7 @@ def publish_reading(client: mqtt.Client, row: pd.Series, row_idx: int) -> None:
     topic   = f"sleep/{tier_key}"
     payload = json.dumps({
         "sessionId":   SESSION_ID,
+        "patientId":   PATIENT_ID,
         "seq":         seq,
         "publishedAt": now_ms(),
         "tier":        tier,
@@ -198,6 +199,7 @@ def publish_background_stats(client: mqtt.Client) -> None:
     topic   = "sleep/background"
     payload = json.dumps({
         "sessionId": SESSION_ID,
+        "patientId": PATIENT_ID,
         "publishedAt": now_ms(),
         "tier":      "Background",
         "spo2":      0,

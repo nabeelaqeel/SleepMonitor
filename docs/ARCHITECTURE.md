@@ -66,6 +66,10 @@ latencyStats: {
   1: { ms: number|null, samples: number },
   2: { ms: number|null, samples: number },
 }
+
+patientSnapshots: {              // keyed by payload patientId (doctor roster)
+  [patientId]: { tier, spo2, heartRate, topic, timestamp, lastSeen }
+}
 ```
 
 ### Update flow (per MQTT message)
@@ -198,13 +202,14 @@ Both navigators have their own `NavigationContainer` and mount exclusively (neve
 - **Flow:** 500 ms artificial delay → synchronous `login()` → `storeUser()` → `onLoginSuccess(user)` callback to App.
 
 ### PatientListScreen (doctor)
-- **Reads:** nothing from context; uses hardcoded `MOCK_PATIENTS` array
+- **Reads:** `patientSnapshots` + `sessionStats` (live overlay); the roster itself is the hardcoded `MOCK_PATIENTS` array
+- **Live rule:** a roster entry whose `patientId` matches incoming payloads shows a LIVE badge and live values while messages keep arriving (10 s window, `PATIENT_LIVE_WINDOW_MS`); once a session has been observed the card also shows a "last seen" time
 - **Navigation:** Taps a card → `navigation.navigate('PatientDetail', { patient })`
 
 ### PatientDetailScreen (doctor)
-- **Reads:** `route.params.patient` (static mock data)
-- **Tier derived locally:** `deriveTier(spo2)` — independent of SleepContext
-- **Phase 2 note:** The displayed MQTT topic `sleep/patient/{id}` is not currently subscribed to anywhere.
+- **Reads:** `route.params.patient` + the same `patientSnapshots` overlay
+- **Live overlay:** when the route patient is streaming, vitals, tier (from the payload), critical count and the last message topic come from the live snapshot; otherwise the seeded record is shown
+- **Tier:** payload tier when live, `deriveTier(spo2)` for seeded records
 
 ---
 
@@ -219,7 +224,7 @@ Props:
   color  string   — value text colour (default: '#ffffff')
 ```
 
-Width: `47%` — designed for a 2-column `flexWrap: 'wrap'` grid with `gap: 10`. Used in HomeScreen (live readings) and PatientDetailScreen (static readings).
+Width: `47%` — designed for a 2-column `flexWrap: 'wrap'` grid with `gap: 10`. Used in HomeScreen (live readings) and PatientDetailScreen (live or seeded readings).
 
 ---
 

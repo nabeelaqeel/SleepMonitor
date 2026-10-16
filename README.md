@@ -337,6 +337,8 @@ SleepMonitor/
 │   │   └── DoctorNavigator.js        # Stack navigator for the doctor role
 │   ├── components/
 │   │   └── VitalCard.js              # Reusable vital metric display card
+│   ├── hooks/
+│   │   └── useNow.js                 # 1 s re-render tick (LIVE badges, last seen)
 │   └── screens/
 │       ├── LoginScreen.js
 │       ├── HomeScreen.js             # Live vitals + SpO2 sparkline (patient)
@@ -344,8 +346,8 @@ SleepMonitor/
 │       ├── ReportScreen.js           # Session statistics + QoS summary (patient)
 │       ├── NetworkScreen.js          # Broker status + measured metrics (patient)
 │       └── doctor/
-│           ├── PatientListScreen.js  # Patient list (mock data — Phase 2)
-│           └── PatientDetailScreen.js# Individual patient vitals (mock data — Phase 2)
+│           ├── PatientListScreen.js  # Roster — live values for the streaming patientId
+│           └── PatientDetailScreen.js# Patient detail — live overlay or seeded record
 │
 ├── data/                             # Datasets
 │   ├── sleep_data.csv                # ML/training set (has sleep-stage labels)
@@ -375,6 +377,7 @@ Every message published to any `sleep/*` topic is a JSON object:
 
 ```json
 {
+  "patientId": "patient-001",
   "tier":      "Critical",
   "spo2":      88,
   "heartRate": 71,
@@ -396,6 +399,7 @@ Every message published to any `sleep/*` topic is a JSON object:
 
 | Field | Type | Description |
 |---|---|---|
+| `patientId` | string | Patient identifier (e.g. `patient-001`) — the doctor roster matches it to decide which entry is live |
 | `tier` | string | `Critical` / `Important` / `Normal` / `Background` |
 | `spo2` | number | Blood oxygen saturation (%) |
 | `heartRate` | number | Heart rate (BPM) |
@@ -426,6 +430,6 @@ Every message published to any `sleep/*` topic is a JSON object:
 | Issue | Impact | Planned Fix |
 |---|---|---|
 | Mock authentication | Passwords hardcoded in source; no expiry | Replace with Supabase Auth or Clerk |
-| Doctor screens use static data | Patient list and vitals are not live | Phase 2: subscribe per-patient MQTT topics + backend |
+| Doctor roster is mostly mock | Only the patient whose `patientId` is streaming shows live vitals (one at a time); the other entries are seeded records | Later: per-patient topics + backend for true multi-patient |
 | No tests | No safety net for regressions | Add Jest unit tests + Maestro E2E |
 | Android package is `com.anonymous.*` | Cannot be submitted to Play Store | Update `app.json` before release |

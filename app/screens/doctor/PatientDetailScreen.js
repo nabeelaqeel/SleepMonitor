@@ -1,6 +1,8 @@
 import { View, Text, ScrollView, StyleSheet } from 'react-native';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
 import VitalCard from '../../components/VitalCard';
+import { useSleep, PATIENT_LIVE_WINDOW_MS } from '../../context/SleepContext';
+import { useNow } from '../../hooks/useNow';
 
 const TIER_CONFIG = {
   Critical:   { bg: '#3d1010', text: '#f87171', border: '#7f1d1d',
@@ -54,13 +56,24 @@ function MedicalHistoryItem({ record }) {
 
 export default function PatientDetailScreen({ route }) {
   const { patient } = route.params;
+  const { patientSnapshots, sessionStats } = useSleep();
+  const now = useNow();
 
-  const tierKey  = deriveTier(patient.lastSpo2);
+  // Live overlay: only the patient whose patientId is streaming gets fresh
+  // values; everyone else shows the seeded record.
+  const snapshot = patient.patientId ? patientSnapshots[patient.patientId] : null;
+  const isLive   = !!snapshot && (now - snapshot.lastSeen) < PATIENT_LIVE_WINDOW_MS;
+
+  const spo2 = isLive && snapshot.spo2 != null ? Math.round(snapshot.spo2) : patient.lastSpo2;
+  const hr   = isLive && snapshot.heartRate != null ? Math.round(snapshot.heartRate) : patient.lastHr;
+  const criticalCount = isLive ? sessionStats.critical : patient.criticalEvents;
+
+  const tierKey  = isLive && TIER_CONFIG[snapshot.tier] ? snapshot.tier : deriveTier(spo2);
   const tier     = TIER_CONFIG[tierKey];
 
-  const spo2Color = patient.lastSpo2 < 90 ? '#f87171'
-                  : patient.lastSpo2 < 95 ? '#fbbf24' : '#4ade80';
-  const hrColor   = patient.lastHr < 40 || patient.lastHr > 100 ? '#f87171' : '#4ade80';
+  const spo2Color = spo2 < 90 ? '#f87171'
+                  : spo2 < 95 ? '#fbbf24' : '#4ade80';
+  const hrColor   = hr < 40 || hr > 100 ? '#f87171' : '#4ade80';
   const bmi       = computeBmi(patient.weight, patient.height);
 
   return (
@@ -76,7 +89,7 @@ export default function PatientDetailScreen({ route }) {
         </View>
         <View>
           <Text style={styles.patientName}>{patient.name}</Text>
-          <Text style={styles.patientMeta}>Age {patient.age} · ID #{patient.id}</Text>
+          <Text style={styles.patientMeta}>Age {patient.age} · ID #{patient.id}{patient.patientId ? ` · ${patient.patientId}` : ''}</Text>
         </View>
       </View>
 
@@ -89,27 +102,27 @@ export default function PatientDetailScreen({ route }) {
       </View>
 
       {/* Vitals grid */}
-      <Text style={styles.sectionLabel}>Last recorded readings</Text>
+      <Text style={styles.sectionLabel}>{isLive ? 'Live readings' : 'Last recorded readings'}</Text>
       <View style={styles.grid}>
         <VitalCard
           label="SpO2"
-          value={`${patient.lastSpo2}%`}
+          value={`${spo2}%`}
           color={spo2Color}
         />
         <VitalCard
           label="Heart Rate"
-          value={`${patient.lastHr} bpm`}
+          value={`${hr} bpm`}
           color={hrColor}
         />
         <VitalCard
           label="Critical Events"
-          value={`${patient.criticalEvents}`}
-          color={patient.criticalEvents > 0 ? '#f87171' : '#4ade80'}
+          value={`${criticalCount}`}
+          color={criticalCount > 0 ? '#f87171' : '#4ade80'}
         />
         <VitalCard
           label="Status"
-          value={patient.status.charAt(0).toUpperCase() + patient.status.slice(1)}
-          color="#9ca3af"
+          value={isLive ? 'Live now' : patient.status.charAt(0).toUpperCase() + patient.status.slice(1)}
+          color={isLive ? '#4ade80' : '#9ca3af'}
         />
       </View>
 
@@ -131,12 +144,12 @@ export default function PatientDetailScreen({ route }) {
       </View>
 
       {/* Critical events callout */}
-      {patient.criticalEvents > 0 && (
+      {criticalCount > 0 && (
         <View style={styles.alertBox}>
           <MaterialCommunityIcons name="alert-circle" size={16} color="#f87171" />
           <View style={{ flex: 1 }}>
             <Text style={styles.alertTitle}>
-              {patient.criticalEvents} critical event{patient.criticalEvents > 1 ? 's' : ''} recorded
+              {criticalCount} critical event{criticalCount > 1 ? 's' : ''} recorded
             </Text>
             <Text style={styles.alertBody}>
               SpO2 dropped below threshold during this session. Review MQTT alert log for timestamps.
@@ -148,14 +161,22 @@ export default function PatientDetailScreen({ route }) {
       {/* MQTT topic row */}
       <View style={styles.mqttRow}>
         <Text style={styles.mqttLabel}>MQTT topic</Text>
-        <Text style={styles.mqttTopic}>sleep/patient/{patient.id}</Text>
+        <Text style={styles.mqttTopic}>{isLive && snapshot.topic ? snapshot.topic : 'no live session'}</Text>
       </View>
 
-      {/* Phase 2 notice */}
+      {/* Live / static notice */}
       <View style={styles.phaseNotice}>
-        <MaterialCommunityIcons name="information-outline" size={14} color="#444" />
-        <Text style={styles.phaseText}>
-          Live data integration coming in Phase 2
+        <MaterialCommunityIcons
+          name={isLive ? 'access-point' : 'information-outline'}
+          size={14}
+          color={isLive ? '#4ade80' : '#444'}
+        />
+        <Text style={[styles.phaseText, isLive && { color: '#4ade80' }]}>
+          {isLive
+            ? 'Streaming live from the MQTT broker'
+            : patient.patientId
+              ? 'No live session — showing the last recorded readings'
+              : 'Static demo record — no device assigned'}
         </Text>
       </View>
     </ScrollView>
