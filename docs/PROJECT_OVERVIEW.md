@@ -2,7 +2,7 @@
 
 A QoS-aware real-time sleep monitoring system built as a Final Year Project (FYP).
 
-**Last updated:** 2026-10-16
+**Last updated:** 2026-10-26
 
 ---
 
@@ -116,8 +116,12 @@ Makefile                    common dev tasks
 
 ml/                         dataset generation (+ upcoming risk model)
   generate_data.py          writes data/sleep_data_realistic.csv
-benchmark/                  evaluation harness
-  evaluation.py             A/B QoS experiment harness (to be rewritten, single-clock)
+benchmark/                  single-clock MQTT QoS benchmark v1
+  run_benchmark.py          real publisher/subscriber, netem, outage, resume, wire counters
+  analyze_benchmark.py      join/dedupe, gates, recovery metrics, summaries, plots
+  results/                  canonical 75-run main study (v1)
+  results_sensitivity/      canonical 12-run 1 msg/s study
+  evaluation.py             legacy simulation — kept, not evidence
 
 .env.example                environment template (no secrets)
 docs/                       ARCHITECTURE, DATA_MODEL, DATABASE, MQTT_SETUP, PROJECT_OVERVIEW
@@ -137,17 +141,18 @@ docs/                       ARCHITECTURE, DATA_MODEL, DATABASE, MQTT_SETUP, PROJ
 | Doctor dashboards | Partial | Seeded roster with a live overlay, plus an Alerts tab and session PDF export for the live patient; one patient streams at a time (true multi-patient needs per-patient topics) |
 | MQTT client | Working | Per-install persisted client ID, `cleanSession: false`, `sleep/#` + `qos/pong` at QoS 2, exponential-backoff reconnect |
 | Python publisher | Partial | Runs; owns session lifecycle + `seq`/`publishedAt`. HRV still always 35 (Issue 3) |
-| Classifier | Inconsistent | `python-publisher/classifier.py` uses SpO2 only; `benchmark/evaluation.py` uses SpO2 + HR + HRV |
+| Classifier | Working | The real pipeline uses `python-publisher/classifier.py` (SpO2-only thresholds); the legacy `evaluation.py` classifier is retired |
 | Mosquitto broker | Working | System install on `:1883` / `:9001` (anonymous, localhost) |
 | PostgreSQL schema | Working | Extended with `seq`, `published_at`, unique keys, delivery columns |
 | Ingest worker | Working | `ingest/worker.py` — MQTT → Postgres, verified end-to-end (see `docs/DATABASE.md`) |
-| `benchmark/evaluation.py` | Misleading | Produces output, but the numbers are simulated constants |
-| Repository hygiene | Clean | `.venv/` untracked, 1060 → ~40 tracked files, app moved to `app/`, datasets to `data/` |
+| Single-clock benchmark | Complete (v1), calibration pending | 75/75 main + 12/12 sensitivity runs; 0 hard-gate failures; 12 soft netem warnings; stock-paho wake-up offset documented |
+| `benchmark/evaluation.py` | Retired | Legacy simulation — historical only, never evidence |
+| Repository hygiene | Clean | `.venv/` untracked, 1060 → ~40 tracked files, app moved to `app/`, datasets to `data/`; benchmark v1 scripts/results added |
 | Docker / compose | Partial | `docker-compose.yml` on this branch runs Postgres only; the full stack is parked |
 | CI/CD pipeline | Parked | Not on this branch; on `feature/docker-cicd-infra`; commercial-AWS design, incompatible with AWS Academy Learner Lab |
-| Latency metrics | Measured (est.) | Live `RTT/2` estimate from ping/echo; authoritative figures still come from the single-clock benchmark |
+| Latency metrics | Measured (two levels) | App shows the live `RTT/2` estimate; authoritative one-way numbers come from the single-clock benchmark v1 |
 
-Status legend: **Working** · **Partial** · **Untested** · **Stub** · **Misleading** · **Fabricated** · **Not live** · **Parked**
+Status legend: **Working** · **Partial** · **Untested** · **Stub** · **Retired** · **Complete** · **Misleading** · **Fabricated** · **Not live** · **Parked**
 
 ---
 
@@ -170,6 +175,9 @@ master (557e0d7)                            tested prototype — tagged fyp1 —
   (`classifier.py`, `test.py`, `evaluation_results.json`) plus the stub
   `backend-api/` are deleted. The repo is reorganised: `app/`, `data/`,
   `ml/`, `benchmark/`.
+- Benchmark v1 scripts and canonical results (`benchmark/results/`,
+  `benchmark/results_sensitivity/`) are on this branch; see
+  `benchmark/README.md` for the methodology and the paho offset caveat.
 
 ---
 
@@ -189,13 +197,16 @@ clock skew cancels. Delivery is likewise measured from distinct `seq` vs the pub
 `stats` delta. The app labels these strictly as **estimates**; the thesis figures come
 from the single-clock benchmark.
 
-### 2. Evaluation measures a different classifier than the app runs
-`benchmark/evaluation.py:44-57` classifies using SpO2 **and** heart rate **and** HRV.
-`python-publisher/classifier.py:23-41` uses **SpO2 only** (the other parameters
-are accepted but never used).
+### 2. Evaluation measures a different classifier than the app runs — ✅ Resolved by replacement
+`benchmark/evaluation.py:44-57` classified using SpO2 **and** heart rate **and**
+HRV, while `python-publisher/classifier.py:23-41` uses **SpO2 only** (the other
+parameters are accepted but never used). The simulated evaluation is retired;
+the single-clock benchmark imports `python-publisher/classifier.py`, so its
+tiers describe the pipeline that actually runs.
 
-**Impact:** evaluation results do not describe the system that actually runs.
-**Fix:** extract one shared classifier and import it from both.
+**Impact:** none on v1 benchmark results; no shared-classifier extraction is
+needed for the thesis measurement. The stale classifier remains only in the
+historical simulation.
 
 ### 3. HRV is always 35
 `python-publisher/publisher.py:106`
@@ -225,12 +236,15 @@ offline and redelivered on reconnect. Delivery is measured per tier, so the end-
 guarantee is visible in the app and verifiable by disconnecting/reconnecting the app
 while the publisher runs.
 
-### 6. Evaluation runs against unused topics
-`benchmark/evaluation.py:81-85` publishes and subscribes on `eval/*`. The app subscribes
-only to `sleep/*`, so the experiment never exercises the app.
+### 6. Evaluation runs against unused topics — ✅ Resolved by replacement
+`benchmark/evaluation.py:81-85` published and subscribed on `eval/*`. The app
+subscribes only to `sleep/*`. The legacy simulation is retired; the benchmark
+uses `bench/*` topics and a dedicated measuring subscriber, so benchmark
+traffic never enters the app topics. End-to-end app delivery is checked
+separately on-device.
 
-**Impact:** the evaluation and the product are disconnected.
-**Fix:** run the experiment over the real `sleep/*` topics.
+**Impact:** none on v1 benchmark results. Benchmark and product traffic are
+deliberately isolated.
 
 ### 7. Payload timestamp cannot be used for timing — ✅ Resolved
 `python-publisher/publisher.py` now emits an epoch-millisecond `publishedAt` field
@@ -255,6 +269,16 @@ npm dependencies were removed. Tracked files: 1060 → ~40.
 ### 10. No automated tests
 No Jest unit tests, no end-to-end tests.
 
+### 11. Netem absolute latency includes a paho wake-up offset
+`paho-mqtt 2.1.0` uses an internal AF_INET socketpair on `127.0.0.1` for
+cross-thread wake-ups. With `tc netem` on `lo`, the one-byte wake-up is delayed
+too, so netem absolute latency includes roughly **23 ms** of client-side
+offset. Source inspection and a runtime check support the cause; a
+stock-versus-AF_UNIX netem calibration is still pending, so the exact
+contribution is not established. Clean latency is unaffected. Report clean
+values and relative QoS ratios as the defensible comparisons; see
+`benchmark/README.md` §16.
+
 ---
 
 ## Roadmap
@@ -262,7 +286,7 @@ No Jest unit tests, no end-to-end tests.
 | Priority | Work | Rationale |
 |---|---|---|
 | 1 | Data processing → Random-Forest risk model (`ml/`: probability → Healthy / Monitor / See Doctor → QoS 0/1/2) | Core deliverable — replaces fixed SpO2 thresholds with a calibrated risk score (`CalibratedClassifierCV`, SpO2 < 88 rule override, hybrid PhysioNet + scaled `generate_data.py` data) |
-| 2 | Single-clock latency benchmark (rewrite `benchmark/evaluation.py`; optional `tc netem` impairment) | The panel's explicit ask — the **authoritative** numbers for the write-up |
+| 2 | Single-clock latency benchmark — ✅ Complete (v1), calibration pending | The panel's explicit ask — authoritative numbers for the write-up. 75/75 main + 12/12 sensitivity runs, 0 hard gates, 12 soft netem warnings; paho wake-up offset documented, no rerun planned |
 | 3 | On-device end-to-end demo (app disconnect/reconnect delivery + latency) | Confirms the QoS claim under interruption |
 | 4 | AWS deployment via GitHub Container Registry + SSH | Learner Lab cannot use the current ECR pipeline |
 | 5 | Automated tests (Issue 10) | Regression safety net |
@@ -283,13 +307,20 @@ Three properties must hold for the result to be defensible:
    broker → phone. The app's `RTT/2` probe eliminates skew entirely; the
    single-clock benchmark (producer + consumer timestamps on one host clock) is the
    source of truth for the write-up.
-3. **Statistics must be reported, not a single number:** mean, median, p95, max,
-   jitter (standard deviation), and loss rate, per QoS level. (The app shows a
-   window median; the single-clock benchmark should report the full set.)
+3. **Statistics must be reported, not a single number:** per-run median and p95,
+   min–max across repetitions, and delivery/loss by tier. (The app shows a
+   window median; the benchmark reports the study-level distribution without
+   pooling messages into a false confidence interval.)
 
-The strongest experiment is to compare QoS 0 / 1 / 2 under controlled network
-impairment (`tc netem delay … loss …`): higher QoS should show higher delivery
-and slightly higher latency. This directly tests the thesis claim.
+The single-clock benchmark now implements the controlled comparison. V1 has
+75 complete main runs (3 experiments × 5 conditions × 5 repetitions) and 12
+sensitivity runs, with 0 hard-gate failures and 100 % delivery in clean/netem.
+The main 10 msg/s study is the stress case; the 1 msg/s sensitivity study is
+the production-like pacing check. Netem absolute latency is provisional because
+of the ~23 ms paho wake-up offset documented above; clean latency and relative
+QoS comparisons are the defensible numbers. The benchmark's `bench/*` traffic
+is isolated from the app's `sleep/*` topics, and the app's `RTT/2` readout
+remains an on-device estimate, not a thesis result.
 
 ---
 

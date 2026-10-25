@@ -1,0 +1,5 @@
+# Quick smoke-test output — never evidence, never committed.
+results_quick/
+
+# Atomic-write leftovers from an interrupted process.
+*.tmp
