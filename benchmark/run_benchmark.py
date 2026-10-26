@@ -90,6 +90,8 @@ NETEM_STRING = "tc qdisc add dev lo root netem delay 25ms 10ms loss 2%"
 NETEM_DELAY_ONLY_CMD = ["tc", "qdisc", "add", "dev", "lo", "root", "netem",
                         "delay", "25ms", "10ms"]
 NETEM_DELAY_ONLY_STRING = "tc qdisc add dev lo root netem delay 25ms 10ms"
+NETEM_SHOW_CMD = ["tc", "qdisc", "show", "dev", "lo"]
+NETEM_CLEAR_CMD = ["sudo", "-n", "tc", "qdisc", "del", "dev", "lo", "root"]
 
 MQTT_SETTINGS = {
     "protocol": 5,
@@ -120,6 +122,10 @@ _netem_applied = False
 
 
 class Aborted(Exception):
+    pass
+
+
+class NetemClearError(RuntimeError):
     pass
 
 
@@ -252,14 +258,56 @@ def netem_apply(command):
         _netem_applied = True
 
 
+def netem_present():
+    """Check lo for netem without sudo; fail closed if tc cannot be read."""
+    try:
+        out = subprocess.run(NETEM_SHOW_CMD, capture_output=True, text=True,
+                             check=True).stdout
+    except Exception as exc:
+        log(f"WARNING: cannot verify netem state: {exc!r}")
+        return True
+    return "netem" in out
+
+
+def _netem_clear_once():
+    try:
+        subprocess.run(NETEM_CLEAR_CMD, capture_output=True, text=True)
+    except Exception as exc:
+        log(f"WARNING: netem clear command failed: {exc!r}")
+
+
 def netem_clear():
+    """Clear netem, verify, and retry once.
+
+    Returns True when the first clear left no netem, False when netem was
+    still present after the first clear but the retry removed it, and raises
+    NetemClearError (after setting the abort flag) when it remains.
+    """
     global _netem_applied
     with _netem_lock:
         if not _netem_applied:
-            return
-        subprocess.run(["sudo", "-n", "tc", "qdisc", "del", "dev", "lo", "root"],
-                       capture_output=True, text=True)
-        _netem_applied = False
+            return True
+        _netem_clear_once()
+        if not netem_present():
+            _netem_applied = False
+            return True
+        log("ERROR: netem still present after clear; retrying once")
+        _netem_clear_once()
+        if not netem_present():
+            _netem_applied = False
+            return False
+        _abort.set()
+        raise NetemClearError("netem still present after retry")
+
+
+def check_no_netem_before_run(run_id, scenario):
+    """Abort the matrix rather than start a run over a leftover qdisc."""
+    if netem_present():
+        log(f"FATAL {run_id} ({scenario}): netem qdisc present before run; "
+            "aborting matrix")
+        _abort.set()
+        return False
+    return True
 
 
 def install_signal_handlers():
@@ -1055,9 +1103,21 @@ def run_single(spec, rows, args, cfg_hash, config, broker, sysw, out_dir, idle):
             pass
         if netem_on:
             try:
-                netem_clear()
-            except Exception:
-                pass
+                first_clear_clean = netem_clear()
+                if first_clear_clean is False:
+                    status = "failed"
+                    msg = ("netem present after first clear; retry succeeded "
+                           "— run discarded")
+                    error = f"{error}; {msg}" if error else msg
+            except NetemClearError as exc:
+                status = "failed"
+                msg = f"netem still present after retry: {exc}"
+                error = f"{error}; {msg}" if error else msg
+            except Exception as exc:
+                status = "failed"
+                msg = f"netem clear failed: {exc!r}"
+                error = f"{error}; {msg}" if error else msg
+                _abort.set()
         teardown_ns = time.monotonic_ns()
 
     if status == "complete" and sysw is not None:
@@ -1412,6 +1472,8 @@ def main(argv=None):
                 skipped += 1
                 log(f"[{index}/{len(plan)}] skip {spec.run_id} (complete, same config)")
                 continue
+            if not check_no_netem_before_run(spec.run_id, spec.scenario):
+                break
             for path in run_paths(out_dir, spec.run_id):
                 if path.exists():
                     path.unlink()
