@@ -319,9 +319,23 @@ RX, so counting both would double the value.
 - **Clean runs are the headline number.** They include MQTT control traffic
   (CONNECT/SUBSCRIBE/PINGREQ) and TCP/IP headers.
 - **Loopback counters are host-wide.** Every process using `lo` during the
-  measured window contributes, not just the benchmark. Stop unrelated local
-  traffic; compare A/B/C relatively rather than treating the values as absolute
-  energy or per-connection costs.
+  measured window contributes, not just the benchmark. Close the agent/IDE and
+  all other localhost services during runs; compare A/B/C relatively rather
+  than treating the values as absolute energy or per-connection costs.
+- **v1 wire counts are not clean background measurements.** The v1 study has no
+  idle-loopback sample, so its counts may include unquantified background
+  traffic from the agent/IDE session. **Do not quote sensitivity (1 msg/s) wire
+  counters at all** — the fixed background rate dominates that comparison.
+- **v2 records an idle sample.** A 10 s preflight and a 5 s per-run sample read
+  `/sys/class/net/lo/statistics`. Raw wire counters are primary; idle-corrected
+  counters are stored for diagnosis only. A run whose idle rate exceeds the
+  threshold (packets/s) is **flagged**: it must be deleted and rerun, not
+  corrected. Analysis hard-fails while any flagged run remains and reports the
+  flagged count. The threshold is supplied with `--idle-max-pps`, derived from
+  the user's measured idle baseline with the agent/IDE closed, and is recorded
+  in `matrix.json` and every run's metadata. The per-run sample is taken after
+  the previous run's teardown and `$SYS` watcher disconnect, and before the next
+  clients connect or netem is applied.
 - **netem/outage runs are reported separately.** Retransmissions and queued
   redelivery inflate their counters; they answer "what does this scenario cost
   on the wire", not "what does a message cost".
@@ -374,9 +388,10 @@ MQTT v5 is used throughout:
   `SessionExpiryInterval=0`, which deletes the session immediately. Nothing is
   left for Mosquitto's `persistent_client_expiration` to clean up later.
 - **`$SYS` backstop:** `$SYS/broker/clients/inactive` is sampled between runs.
-  It is compared with the **matrix baseline**, not zero, because the Expo app
-  and the ingest worker legitimately keep inactive persistent sessions. A value
-  above baseline is a warning in the run metadata and in `sanity.txt`.
+  It is compared with that run's **baseline**, not zero, because other clients
+  may legitimately keep inactive persistent sessions. A value above baseline is
+  a warning in the run metadata and in `sanity.txt`. The watcher is stopped
+  after each run, before the next run's idle sample.
 - **Crash safety:** SIGINT/SIGTERM/SIGHUP set an abort flag, remove netem and
   best-effort send expiry-0 DISCONNECTs. A hard kill can still leave a session
   for up to 300 s; preflight removes a leftover netem qdisc, and the next run
@@ -405,18 +420,21 @@ Run IDs are deterministic: `<experiment>-<condition>-r<rep>` (for example
   not silently deleted).
 
 **Hashed (methodology):** method version, runner script sha256, dataset sha256,
-classifier sha256, dataset row count, pacing interval, warm-up count, background
-cadence, netem command, outage duration and positions, tier→QoS map, MQTT
-version/session/keepalive/inflight settings, broker version and resolved
-queue/persistence settings.
+classifier sha256, dataset row count, pacing interval, socketpair mode
+(`stock`/`af_unix`), paho-mqtt version, TCP_NODELAY flag, idle threshold
+(`--idle-max-pps`), warm-up count, background cadence, netem command, outage
+duration and positions, tier→QoS map, MQTT version/session/keepalive/inflight
+settings, broker version and resolved queue/persistence settings.
 
 **Not hashed (informational only):** git commit/branch/dirty flag, analysis
-script hash, hostname, kernel, Python/paho/pandas versions. Editing the analysis
+script hash, hostname, kernel, Python/pandas versions. Editing the analysis
 or committing the runner does not invalidate already-collected runs; changing
-the runner, dataset, classifier or broker does.
+the runner, dataset, classifier, socketpair mode, paho version, TCP_NODELAY,
+idle threshold or broker does.
 
-`results_quick/` uses a different directory and sets `quick=true`; the analysis
-script refuses the whole directory. Quick runs are smoke tests, never evidence.
+`results_quick_v2/` uses a different directory and sets `quick=true`; the
+analysis script refuses any `results_quick*` directory. Quick runs are smoke
+tests, never evidence.
 
 ---
 
@@ -439,6 +457,8 @@ are findings, not automatically errors.
 | No received `seq` that is absent from the sent log | stale-session contamination |
 | Achieved mean interval within ±5 % of configured | pacing sanity |
 | No partial/quick/mixed directories | evidence integrity |
+| No flagged runs (idle above threshold) | flagged runs must be deleted and rerun, not corrected |
+| Each AF_UNIX A-netem run has `t0 -> on_publish` median < 2 ms | verifies the local wake-up path; pooled median is a note only |
 
 **Soft expectations**
 
@@ -451,7 +471,7 @@ are findings, not automatically errors.
 | outage, QoS 0 in window | delivery ≤ 5 % |
 | outage, QoS 1/2 in window | delivery ≥ 99 % |
 | outage, recovered messages | report recovery delay (`t1 - t_on`) and max in-window latency; no gate |
-| `$SYS/broker/clients/inactive` | not above the matrix baseline |
+| `$SYS/broker/clients/inactive` | not above that run's baseline |
 
 Bands are evaluated per **published QoS**: Experiment A is QoS 0 for every
 payload tier and Experiment C is QoS 2 for every payload tier. Only Experiment B
@@ -469,29 +489,83 @@ Prerequisites:
 
 - Mosquitto running natively on `127.0.0.1:1883`
 - `.venv-dev/` with paho-mqtt 2.x, pandas, numpy and matplotlib
-- the live publisher and the ingest worker **stopped** (they would add
-  traffic and sessions; the app may stay open, but its sessions are part of the
-  `$SYS` baseline)
+- the live publisher and the ingest worker **stopped**; **close the agent/IDE
+  and all other localhost services** during the B/C calibration and both v2
+  matrices. Their loopback traffic is host-wide and would contaminate the
+  idle check and wire counters
 - working sudo for netem; the driver asks once, then uses `sudo -n` and
   refreshes the sudo timestamp in the background every four minutes so a long
   matrix does not lose netem permission mid-run
+- an idle baseline measured from `/sys/class/net/lo/statistics` while those
+  services are closed. The full main and sensitivity matrices require it as
+  `--idle-max-pps` (packets/second); calibration may run record-only. The
+  threshold is not guessed in the repository
+- **flagged runs (idle above threshold) must be deleted and rerun, not
+  corrected.** The analysis reports the flagged count and refuses to write
+  summaries while any flagged run remains
 
 ```bash
 # offline check: prints the deterministic outage windows, touches no broker
 .venv-dev/bin/python benchmark/run_benchmark.py --audit-windows
 
-# smoke test: 3 short clean runs in results_quick/ (analysis refuses this dir)
+# smoke test: 3 short clean runs in results_quick_v2/ (analysis refuses this dir)
 .venv-dev/bin/python benchmark/run_benchmark.py --quick
+```
 
-# main study: 75 runs (~100-120 min), resumable
-.venv-dev/bin/python benchmark/run_benchmark.py
+B/C netem calibration (first v2 step; must pass before the matrices):
 
-# pacing study: 12 runs at 1 msg/s into results_sensitivity/
-.venv-dev/bin/python benchmark/run_benchmark.py --sensitivity
+```bash
+# 6 runs: A/B/C × stock/AF_UNIX, 1 msg/s, 150 rows, delay-only netem (~17 min)
+# record-only calibration (idle threshold optional):
+benchmark/calibration_v2/run_bc_netem.sh
+
+# or enforce a threshold after measuring the idle baseline:
+IDLE_MAX_PPS=<threshold pps> benchmark/calibration_v2/run_bc_netem.sh
+```
+
+The gate checks all six runs, A-patched `t0 -> on_publish` median `< 2 ms`, and
+patched `t1-t0` median `<= stock + 5 ms` for QoS 0, 1 and 2. Three
+vacuous-pass guards also apply: all six metas must show `netem.applied=true`
+with the delay-only command; stock A `t0 -> on_publish` median must be
+`>= 10 ms`; patched A `t1 - on_publish` median must be `35–70 ms`. If the
+stock A artifact is below 10 ms, the gate is **INCONCLUSIVE**, not PASS. QoS 0
+is sampled from A, QoS 1 from B/Important, QoS 2 from C; message counts are
+printed with the per-QoS offset. A failed or inconclusive gate stops the rerun.
+Full main and sensitivity matrices refuse to start without `--idle-max-pps`;
+calibration and quick smoke runs may omit it. In the full matrices, the A
+`t0 -> on_publish` `< 2 ms` check is applied **per A-netem run** (warm-up rows
+excluded); the pooled median is a note only. `gate/gate.md` prints each stock
+and patched median as `value (n=messages)` with the exact limit.
+
+```bash
+# v2 main study: 75 runs (~100-120 min), resumable, AF_UNIX by default
+.venv-dev/bin/python benchmark/run_benchmark.py \
+    --idle-max-pps <threshold pps>
+
+# v2 pacing study: 12 runs at 1 msg/s into results_v2_sensitivity/
+.venv-dev/bin/python benchmark/run_benchmark.py --sensitivity \
+    --idle-max-pps <threshold pps>
 
 # analysis (main + sensitivity, if present)
 .venv-dev/bin/python benchmark/analyze_benchmark.py
+
+# optional cross-session v1/v2 comparison
+.venv-dev/bin/python benchmark/compare_v1_v2.py
 ```
+
+Optional B-clean TCP_NODELAY test (no sudo, client-side only):
+
+```bash
+.venv-dev/bin/python benchmark/run_benchmark.py \
+    --experiments B --scenarios clean --reps 3 --tcp-nodelay \
+    --out-dir benchmark/results_v2_tcp_nodelay \
+    --idle-max-pps <threshold pps>
+```
+
+A negative TCP_NODELAY result does **not** rule out broker-side effects: the
+flag only removes Nagle on the two benchmark clients, not on Mosquitto or the
+TCP stack. Keep it as a diagnostic, not as evidence against a broker-side
+queueing explanation.
 
 If the process is interrupted, rerun the **same** command: completed runs with
 the same config hash are skipped, partial runs are redone. Use `--force` only
@@ -502,16 +576,25 @@ After an unclean exit, verify teardown before restarting:
 tc qdisc show dev lo        # must not contain "netem"
 ```
 
-Optional analysis flags: `--no-plots`, `--main-dir`, `--sensitivity-dir`
-(for archived or alternative result directories).
+The frozen v1 study is analysed with `--v1` (defaults are v2 directories):
+
+```bash
+.venv-dev/bin/python benchmark/analyze_benchmark.py --v1
+```
+
+Other analysis flags: `--no-sensitivity`, `--no-plots`, `--main-dir`,
+`--sensitivity-dir` (for archived or alternative result directories). Runner
+flags: `--socketpair stock` (v1 calibration mode), `--netem-delay-only`,
+`--out-dir`, `--idle-max-pps`, `--calibration`.
 
 ---
 
 ## 13. Outputs
 
 ```text
-benchmark/results/
-  matrix.json                 plan, config, broker, env, baseline, final status
+benchmark/results_v2/
+  matrix.json                 plan, config, idle threshold/preflight, broker,
+                              env, status
   window_audit.json           deterministic outage-window composition
   sent_*.csv  recv_*.csv  meta_*.json
   summary.csv                 per experiment × scenario × position × tier,
@@ -523,7 +606,7 @@ benchmark/results/
   wire_summary.csv            TX bytes/packets per message, by experiment/scenario
   sensitivity_comparison.csv  first-100-rows comparison, 0.1 s vs 1.0 s
   sanity.txt                  hard gates, soft warnings, notes
-  analysis_meta.json          inputs, hashes, environment, plot status
+  analysis_meta.json          inputs, hashes, environment, flagged-run count, plot status
   figures/
     fig_latency_ecdf_{clean,netem,outage}.png
     fig_latency_box_clean_netem.png
@@ -533,10 +616,28 @@ benchmark/results/
     fig_ack_times.png
     fig_wire_clean.png
     fig_sensitivity.png
+
+benchmark/results_v2_sensitivity/    same layout, 1 msg/s, not mixed with main
+benchmark/results_quick_v2/          smoke test only; analysis refuses it
+benchmark/results_v2_tcp_nodelay/    optional B/clean diagnostic
+benchmark/calibration_v2/bc_netem/
+  stock/  af_unix/                   six calibration runs and metas
+  gate/gate.md  gate.csv            B/C gate decision
+  gate/per_qos.csv  gate/per_tier.csv
+benchmark/comparison_v1_v2/
+  v1_vs_v2_netem.csv
+  v1_vs_v2_clean_wire.csv
+  v1_vs_v2.md                        cross-session, indicative only
 ```
 
-`results_sensitivity/` has the same log/meta layout; its `summary.csv` is not
-mixed with the main study.
+The frozen v1 outputs remain in `benchmark/results/`,
+`benchmark/results_sensitivity/` and
+`benchmark/calibration/paho_socketpair/`; do not regenerate them. The v2
+directories use a different config hash, and analysis refuses to mix hashes
+inside a study.
+
+`results_v2_sensitivity/` has the same log/meta layout; its `summary.csv` is
+not mixed with the main study.
 
 ---
 
@@ -565,6 +666,12 @@ mixed with the main study.
 ---
 
 ## 15. Observed results (v1)
+
+> **Frozen v1 baseline (stock paho).** These are the complete 75-run results
+> from `benchmark/results/`. The v2 AF_UNIX rerun has not been executed yet;
+> do not treat these rows as v2 numbers. v1 wire counts may include
+> unquantified background loopback traffic from the agent/IDE session, and
+> sensitivity (1 msg/s) wire counters must not be quoted.
 
 The canonical v1 study contains **75/75** complete main runs (one config hash,
 `bf3a74609898e4c1`) and **12/12** complete sensitivity runs (one config hash,
@@ -647,8 +754,10 @@ warnings disappeared; the **12 netem band warnings remain**.
 measured for A/QoS 0; B/C under netem were not tested, so their offset is not
 quantified.**
 
-**Status:** v1 = stock paho; a v2 rerun with the AF_UNIX socketpair is
-under consideration.
+**Status:** v1 = stock paho. The v2 harness patches paho's cross-thread
+socketpair to a non-blocking **AF_UNIX socketpair** by default; `--socketpair
+stock` is retained for calibration. The B/C netem calibration below is the
+first v2 step and gates the full rerun.
 
 The calibration inputs and raw outputs are preserved in
 [`calibration/paho_socketpair/`](calibration/paho_socketpair/); run
@@ -672,10 +781,23 @@ delivery path. This is 20 readings from one run; its p95 is coarse and the
 result applies to A/QoS 0 only. In clean runs, patched medians were only
 ~0.10–0.15 ms below stock, a small shift.
 
-**B/C under netem were NOT tested.** The calibration netem plan contains only
-A, and there are no B/C netem raw files. Do not apply the 23 ms figure to B/C.
-For QoS 1/2, `ack_ns` is a broker PUBACK/PUBCOMP time rather than a pure local
-wake-up, so their pre values cannot be corrected by subtracting the A offset.
+**B/C under netem were NOT tested in v1.** The v1 calibration netem plan
+contains only A, and there are no B/C netem raw files. Do not apply the 23 ms
+figure to B/C. For QoS 1/2, `ack_ns` is a broker PUBACK/PUBCOMP time rather
+than a pure local wake-up, so their pre values cannot be corrected by
+subtracting the A offset.
+
+**v2 B/C calibration (pending).** The v2 calibration runs A/B/C at 1 msg/s
+under delay-only netem, once with stock paho and once with AF_UNIX. The gate is
+all six runs complete, all six metas `netem.applied=true` with the delay-only
+command, stock A `t0 -> on_publish` median `>= 10 ms`, patched A
+`t1 - on_publish` median `35–70 ms`, A-patched `t0 -> on_publish` median
+`< 2 ms`, and patched `t1-t0` median `<= stock + 5 ms` for QoS 0, 1 and 2. If
+the stock A artifact does not reproduce, the gate is **INCONCLUSIVE**, not
+PASS. QoS 0 is sampled from A, QoS 1 from B/Important, QoS 2 from C. The
+stock-minus-patched offset is reported per QoS with message counts; it is a
+result, not a pass/fail criterion. The full v2 matrices must not start until
+the gate passes.
 
 (b) **QoS 0 `t1 - ack` ≈ 51 ms is network-only, from the 1 msg/s A-netem runs
 only.** It must not be generalised to 10 msg/s or to QoS 1/2. It is a
@@ -734,7 +856,12 @@ historical only; it is not evidence and is not imported by this harness.
 - **Ack is not delivery.** `on_publish` measures broker acknowledgement, not
   subscriber receipt; the subscriber join is the delivery measure.
 - **Wire counters are not energy.** They include MQTT/TCP control traffic and
-  are TX-only loopback counters.
+  are TX-only loopback counters. Host-wide loopback traffic from the agent/IDE
+  or other services is unquantified in v1; v2 records an idle sample but the
+  raw value stays primary unless the derived threshold is exceeded.
+- **TCP_NODELAY is a client-side diagnostic only.** A negative B-clean result
+  does not rule out broker-side queueing: the flag changes Nagle on the two
+  benchmark clients, not Mosquitto, its event loop, or the kernel's TCP stack.
 - **Five repetitions.** Ranges are descriptive, not inferential. No p-values.
 - **Background `seq` deviation** is the only payload-schema difference from
   production and is documented above.
@@ -747,7 +874,10 @@ historical only; it is not evidence and is not imported by this harness.
 
 | File | Role |
 |---|---|
-| `run_benchmark.py` | driver: publisher, measuring subscriber, `$SYS` watcher, netem, drain, resume, wire counters |
-| `analyze_benchmark.py` | join/dedupe, per-run statistics, gates, outage and sensitivity analysis, plots |
+| `run_benchmark.py` | driver: publisher, measuring subscriber, `$SYS` watcher, netem, drain, resume, wire counters, AF_UNIX socketpair, idle preflight |
+| `analyze_benchmark.py` | join/dedupe, per-run statistics, gates, outage and sensitivity analysis, plots; `--v1` for frozen data |
+| `compare_v1_v2.py` | cross-session v1/v2 netem and clean-wire tables; refuses missing `tier_qos` |
+| `calibration_v2/run_bc_netem.sh` | six-run B/C stock-vs-AF_UNIX delay-only calibration |
+| `calibration_v2/analyze_bc_netem.py` | B/C gate and per-QoS offset report |
 | `evaluation.py` | legacy simulation — kept, not used, not evidence |
 | `README.md` | this document |

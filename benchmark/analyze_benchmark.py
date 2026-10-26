@@ -2,9 +2,9 @@
 """
 Analysis for the single-clock MQTT QoS benchmark.
 
-Reads benchmark/results/ (main study) and, if present,
-benchmark/results_sensitivity/ (1 msg/s pacing study). It refuses
-benchmark/results_quick/ outright.
+Reads benchmark/results_v2/ (main study) and, if present,
+benchmark/results_v2_sensitivity/ (1 msg/s pacing study). Pass --v1 to
+read the frozen v1 directories instead. It refuses any quick-smoke directory.
 
 Per run: join sent (t0, ack) with received (t1) on (run_id, seq),
 deduplicate received rows by seq (QoS 1 retransmissions), compute
@@ -54,8 +54,8 @@ def die(msg, code=2):
 
 def load_study(directory, name):
     directory = Path(directory)
-    if directory.name == "results_quick":
-        die("refusing benchmark/results_quick — smoke-test data is not evidence")
+    if directory.name.startswith("results_quick"):
+        die(f"refusing {directory.name} — smoke-test data is not evidence")
     metas = []
     for path in sorted(directory.glob("meta_*.json")):
         try:
@@ -188,6 +188,9 @@ def analyse_run(meta, sent, recv):
         "sys_warned": bool((meta.get("sys") or {}).get("warned")),
         "wire_bytes_per_msg": wire.get("bytes_per_msg"),
         "wire_packets_per_msg": wire.get("packets_per_msg"),
+        "wire_primary": wire.get("primary"),
+        "idle_packets_per_s": (meta.get("idle") or {}).get("packets_per_s"),
+        "idle_flagged": bool((meta.get("idle") or {}).get("flagged")),
         "started_at_utc": meta.get("started_at_utc"),
         "drain_seconds": (meta.get("drain") or {}).get("seconds"),
     }
@@ -240,6 +243,42 @@ def aggregate(runs):
     return frame, agg
 
 
+def a_netem_on_publish_gate(frames, config, hard, notes):
+    if config.get("socketpair") != "af_unix":
+        notes.append("A-netem t0 -> on_publish gate skipped: "
+                     f"socketpair={config.get('socketpair')!r}")
+        return
+    if config.get("netem") is None:
+        notes.append("A-netem t0 -> on_publish gate skipped: netem not requested")
+        return
+    netem_frames = [f for f in frames if f["scenario"].iloc[0] == "netem"]
+    a_frames = [f for f in netem_frames if f["experiment"].iloc[0] == "A"]
+    if not a_frames:
+        hard.append("A-netem: no A netem runs in the study")
+        return
+
+    pooled = []
+    for frame in a_frames:
+        run_id = frame["run_id"].iloc[0]
+        if "warmup" in frame.columns:
+            frame = frame[frame["warmup"] == 0]
+        values = frame["ack_ms"].dropna()
+        if values.empty:
+            hard.append(f"{run_id}: no t0 -> on_publish samples")
+            continue
+        pooled.append(values)
+        median = float(values.median())
+        if median >= 2.0:
+            hard.append(f"{run_id}: A-netem t0 -> on_publish median "
+                        f"{median:.2f} ms (n={len(values)}) >= 2 ms")
+
+    if pooled:
+        all_values = pd.concat(pooled, ignore_index=True)
+        notes.append(f"A-netem pooled t0 -> on_publish median: "
+                     f"{all_values.median():.2f} ms (n={len(all_values)}, "
+                     f"{len(pooled)} run(s) with samples; note only)")
+
+
 def sanity_checks(run_df, agg, frames, config):
     hard, soft, notes = [], [], []
     interval_ms = config["pacing_interval_s"] * 1000.0
@@ -282,6 +321,15 @@ def sanity_checks(run_df, agg, frames, config):
             soft.append(f"{rid}: $SYS inactive={row.sys_inactive} above baseline "
                         f"{row.sys_baseline}")
 
+    flagged = run_df[run_df["idle_flagged"]]
+    notes.append(f"flagged runs (idle above threshold): {len(flagged)}")
+    if len(flagged):
+        flagged_ids = sorted(flagged["run_id"].tolist())
+        hard.append(
+            f"{len(flagged_ids)} flagged run(s) exceeded the idle threshold; "
+            f"delete and rerun them, do not use corrected counters: "
+            f"{', '.join(flagged_ids)}")
+
     clean = agg[agg["scenario"] == "clean"]
     for row in clean.itertuples():
         if row.lat_median_ms_median >= 8:
@@ -299,6 +347,8 @@ def sanity_checks(run_df, agg, frames, config):
             soft.append(f"netem {row.experiment}/{row.tier}: median "
                         f"{row.lat_median_ms_median:.1f} ms outside expected "
                         f"{low:.0f}-{high:.0f} ms for QoS {qos}")
+
+    a_netem_on_publish_gate(frames, config, hard, notes)
 
     with warnings.catch_warnings():
         warnings.simplefilter("ignore", FutureWarning)
@@ -719,14 +769,38 @@ def main(argv=None):
     parser = argparse.ArgumentParser(
         description="Analyse the single-clock MQTT benchmark.",
         formatter_class=argparse.ArgumentDefaultsHelpFormatter)
-    parser.add_argument("--main-dir", default=str(BENCH_DIR / "results"))
-    parser.add_argument("--sensitivity-dir",
-                        default=str(BENCH_DIR / "results_sensitivity"))
+    parser.add_argument("--main-dir", default=None)
+    parser.add_argument("--sensitivity-dir", default=None)
+    parser.add_argument("--v1", action="store_true",
+                        help="read the frozen v1 results/ and results_sensitivity/")
+    parser.add_argument("--no-sensitivity", action="store_true",
+                        help="analyse the main study only")
     parser.add_argument("--no-plots", action="store_true")
     args = parser.parse_args(argv)
 
+    if args.main_dir is None:
+        args.main_dir = str(BENCH_DIR / ("results" if args.v1 else "results_v2"))
+    if args.sensitivity_dir is None:
+        args.sensitivity_dir = str(
+            BENCH_DIR / ("results_sensitivity" if args.v1
+                         else "results_v2_sensitivity"))
+
     main_dir = Path(args.main_dir)
     metas, main_hash = load_study(main_dir, "main")
+    config = metas[0]["config"]
+
+    required = ["method_version", "tier_qos"]
+    if not args.v1:
+        required += ["socketpair", "paho_mqtt", "tcp_nodelay", "idle_max_pps"]
+    for key in required:
+        if key not in config:
+            die(f"{main_dir}: config is missing methodology key {key!r}; "
+                f"refusing to analyse it as {'v1' if args.v1 else 'v2'}")
+    if args.v1 and config.get("socketpair") is not None:
+        die(f"{main_dir}: --v1 requested but socketpair={config.get('socketpair')!r}")
+    if not args.v1 and config.get("idle_max_pps") is None:
+        die(f"{main_dir}: v2 main/sensitivity analysis requires a recorded "
+            f"--idle-max-pps threshold")
 
     tier_runs, run_summaries, frames = [], [], []
     for meta in metas:
@@ -739,7 +813,6 @@ def main(argv=None):
     tier_df = pd.DataFrame(tier_runs)
     run_df = pd.DataFrame(run_summaries)
     _, agg = aggregate(tier_runs)
-    config = metas[0]["config"]
 
     hard, soft, notes = sanity_checks(run_df, agg, frames, config)
 
@@ -772,9 +845,18 @@ def main(argv=None):
     sens_df = None
     sens_metas = []
     sens_dir = Path(args.sensitivity_dir)
-    if sens_dir.is_dir() and any(sens_dir.glob("meta_*.json")):
+    if args.no_sensitivity:
+        notes.append("sensitivity study skipped by --no-sensitivity")
+    elif sens_dir.is_dir() and any(sens_dir.glob("meta_*.json")):
         try:
             sens_metas, sens_hash = load_study(sens_dir, "sensitivity")
+            sens_config = sens_metas[0]["config"]
+            for key in required:
+                if key not in sens_config:
+                    die(f"{sens_dir}: config is missing methodology key {key!r}")
+                if sens_config.get(key) != config.get(key):
+                    die(f"sensitivity {key}={sens_config.get(key)!r} differs from "
+                        f"main {config.get(key)!r}; refusing to mix methodologies")
             sens_frames = []
             for meta in sens_metas:
                 sent, recv = read_run(meta, sens_dir)
@@ -823,9 +905,19 @@ def main(argv=None):
 
     analysis_meta = {
         "study": "main",
+        "analysis_mode": "v1" if args.v1 else "v2",
         "main_dir": str(main_dir),
         "config_hash": main_hash,
+        "method_version": config.get("method_version"),
+        "socketpair": config.get("socketpair"),
+        "paho_mqtt": config.get("paho_mqtt"),
+        "tcp_nodelay": config.get("tcp_nodelay"),
+        "idle_max_pps": config.get("idle_max_pps"),
+        "preflight": metas[0].get("preflight"),
         "runs": len(metas),
+        "flagged_runs": int(run_df["idle_flagged"].sum()),
+        "flagged_run_ids": sorted(
+            run_df.loc[run_df["idle_flagged"], "run_id"].tolist()),
         "experiments": sorted(run_df["experiment"].unique().tolist()),
         "scenarios": sorted(run_df["scenario"].unique().tolist()),
         "sensitivity_runs": len(sens_metas),

@@ -51,7 +51,11 @@ sys.path.insert(0, str(ROOT / "python-publisher"))
 
 from classifier import classify  # noqa: E402
 
-METHOD_VERSION = "1.0.0"
+METHOD_VERSION = "2.0.0"
+SOCKETPAIR_STOCK = "stock"
+SOCKETPAIR_AF_UNIX = "af_unix"
+PREFLIGHT_LO_SECONDS = 10.0
+RUN_IDLE_SECONDS = 5.0
 
 BROKER_HOST = "127.0.0.1"
 BROKER_PORT = 1883
@@ -83,6 +87,9 @@ SESSION_EXPIRY, KEEPALIVE, MAX_INFLIGHT = 300, 60, 100
 NETEM_CMD = ["tc", "qdisc", "add", "dev", "lo", "root", "netem",
              "delay", "25ms", "10ms", "loss", "2%"]
 NETEM_STRING = "tc qdisc add dev lo root netem delay 25ms 10ms loss 2%"
+NETEM_DELAY_ONLY_CMD = ["tc", "qdisc", "add", "dev", "lo", "root", "netem",
+                        "delay", "25ms", "10ms"]
+NETEM_DELAY_ONLY_STRING = "tc qdisc add dev lo root netem delay 25ms 10ms"
 
 MQTT_SETTINGS = {
     "protocol": 5,
@@ -136,6 +143,71 @@ def sha256_text(text):
     return hashlib.sha256(text.encode()).hexdigest()
 
 
+def paho_version():
+    try:
+        import paho.mqtt as paho_pkg
+        return getattr(paho_pkg, "__version__", "unknown")
+    except Exception:
+        return "unknown"
+
+
+def install_socketpair(mode):
+    """Install paho's cross-thread wake-up socketpair implementation."""
+    if mode == SOCKETPAIR_STOCK:
+        return
+    if mode != SOCKETPAIR_AF_UNIX:
+        raise SystemExit(f"unknown socketpair mode: {mode}")
+
+    import paho.mqtt.client as paho_client
+    if not hasattr(paho_client, "_socketpair_compat"):
+        raise SystemExit(
+            f"paho-mqtt {paho_version()} has no _socketpair_compat; "
+            "AF_UNIX patching is not supported")
+
+    def af_unix_pair():
+        reader, writer = socket.socketpair(socket.AF_UNIX, socket.SOCK_STREAM)
+        reader.setblocking(False)
+        writer.setblocking(False)
+        return reader, writer
+
+    paho_client._socketpair_compat = af_unix_pair
+
+
+def enable_tcp_nodelay(client):
+    sock = client.socket()
+    if sock is None:
+        raise RuntimeError("cannot set TCP_NODELAY: client socket is not open")
+    sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
+
+
+def sample_lo_idle(seconds, max_pps=None):
+    """Sample loopback TX traffic; record-only when max_pps is None."""
+    before = read_lo_tx()
+    if before is None:
+        return {"seconds": seconds, "error": "cannot read lo counters"}
+    started = time.monotonic()
+    time.sleep(seconds)
+    after = read_lo_tx()
+    if after is None:
+        return {"seconds": seconds, "error": "cannot re-read lo counters"}
+    elapsed = time.monotonic() - started
+    delta_bytes = after[0] - before[0]
+    delta_packets = after[1] - before[1]
+    pps = delta_packets / elapsed if elapsed else None
+    flagged = None
+    if max_pps is not None:
+        flagged = pps is not None and pps > max_pps
+    return {
+        "seconds": round(elapsed, 3),
+        "tx_bytes": delta_bytes,
+        "tx_packets": delta_packets,
+        "bytes_per_s": round(delta_bytes / elapsed, 2) if elapsed else None,
+        "packets_per_s": round(pps, 2) if pps is not None else None,
+        "max_pps": max_pps,
+        "flagged": flagged,
+    }
+
+
 def sleep_until(target_ns):
     while True:
         if _abort.is_set():
@@ -170,12 +242,12 @@ def read_lo_tx():
         return None
 
 
-def netem_apply():
+def netem_apply(command):
     global _netem_applied
     with _netem_lock:
         if _netem_applied:
             return
-        subprocess.run(["sudo", "-n", *NETEM_CMD], check=True,
+        subprocess.run(["sudo", "-n", *command], check=True,
                        capture_output=True, text=True)
         _netem_applied = True
 
@@ -248,10 +320,11 @@ class Recorder:
 
 
 class Publisher:
-    def __init__(self, client_id, session_id, recorder):
+    def __init__(self, client_id, session_id, recorder, tcp_nodelay=False):
         self.client_id = client_id
         self.session_id = session_id
         self.recorder = recorder
+        self.tcp_nodelay = tcp_nodelay
         self.client = None
         self.connected = threading.Event()
         self.disconnected = threading.Event()
@@ -281,6 +354,8 @@ class Publisher:
         props.SessionExpiryInterval = SESSION_EXPIRY
         c.connect(BROKER_HOST, BROKER_PORT, keepalive=KEEPALIVE,
                   clean_start=True, properties=props)
+        if self.tcp_nodelay:
+            enable_tcp_nodelay(c)
         c.loop_start()
         if not self.connected.wait(timeout=10):
             raise RuntimeError("publisher CONNACK timeout")
@@ -375,9 +450,10 @@ class Publisher:
 
 
 class Subscriber:
-    def __init__(self, client_id, recorder):
+    def __init__(self, client_id, recorder, tcp_nodelay=False):
         self.client_id = client_id
         self.recorder = recorder
+        self.tcp_nodelay = tcp_nodelay
         self.client = None
         self.connected = threading.Event()
         self.subscribed = threading.Event()
@@ -421,6 +497,8 @@ class Subscriber:
         props.SessionExpiryInterval = SESSION_EXPIRY
         c.connect(BROKER_HOST, BROKER_PORT, keepalive=KEEPALIVE,
                   clean_start=clean_start, properties=props)
+        if self.tcp_nodelay:
+            enable_tcp_nodelay(c)
         c.loop_start()
         self.client = c
         if not self.connected.wait(timeout=10):
@@ -654,17 +732,12 @@ def git_info():
 
 def env_info():
     import platform
-    try:
-        import paho.mqtt as paho_pkg
-        paho_version = getattr(paho_pkg, "__version__", "unknown")
-    except Exception:
-        paho_version = "unknown"
     return {
         "hostname": socket.gethostname(),
         "kernel": platform.release(),
         "platform": platform.platform(),
         "python": platform.python_version(),
-        "paho_mqtt": paho_version,
+        "paho_mqtt": paho_version(),
         "pandas": pd.__version__,
     }
 
@@ -677,10 +750,14 @@ def build_config(args, rows, broker):
         "classifier_sha256": sha256_file(CLASSIFIER_PATH),
         "dataset_rows": len(rows),
         "pacing_interval_s": args.interval,
+        "socketpair": args.socketpair,
+        "paho_mqtt": paho_version(),
+        "tcp_nodelay": bool(args.tcp_nodelay),
+        "idle_max_pps": args.idle_max_pps,
         "warmup_rows": WARMUP_ROWS,
         "background_every": BACKGROUND_EVERY,
         "tier_qos": TIER_QOS,
-        "netem": NETEM_STRING if "netem" in args.scenario_list else None,
+        "netem": args.netem_string if "netem" in args.scenario_list else None,
         "outage_seconds": args.outage_seconds,
         "outage_fractions": args.outage_fractions,
         "mqtt": MQTT_SETTINGS,
@@ -760,6 +837,7 @@ def print_audit(summary):
 
 def preflight(args):
     problems = []
+    idle = None
     try:
         socket.create_connection((BROKER_HOST, BROKER_PORT), timeout=3).close()
     except OSError as exc:
@@ -780,7 +858,7 @@ def preflight(args):
         qdisc = subprocess.run(["tc", "qdisc", "show", "dev", "lo"],
                                capture_output=True, text=True)
     except FileNotFoundError:
-        return problems + ["tc not found; cannot verify or apply netem"]
+        return problems + ["tc not found; cannot verify or apply netem"], idle
     if "netem" in qdisc.stdout:
         log("leftover netem on lo — attempting removal")
         subprocess.run(["sudo", "-n", "tc", "qdisc", "del", "dev", "lo", "root"],
@@ -795,7 +873,19 @@ def preflight(args):
             log("netem requested — requesting sudo (one prompt)")
             if subprocess.run(["sudo", "-v"]).returncode != 0:
                 problems.append("sudo unavailable; netem scenarios cannot run")
-    return problems
+
+    idle = sample_lo_idle(PREFLIGHT_LO_SECONDS, args.idle_max_pps)
+    if idle.get("error"):
+        problems.append(f"preflight idle check: {idle['error']}")
+    else:
+        log(f"preflight idle: {idle['tx_packets']} lo TX packets in "
+            f"{idle['seconds']:.1f}s = {idle['packets_per_s']:.2f} pkt/s "
+            f"(threshold {idle['max_pps']} pps)")
+        if idle.get("flagged"):
+            problems.append(
+                f"background loopback traffic: {idle['packets_per_s']:.2f} pkt/s "
+                f"exceeds {idle['max_pps']} pps")
+    return problems, idle
 
 
 def atomic_write_text(path, text):
@@ -825,13 +915,15 @@ def run_paths(out_dir, run_id):
 
 # ── One run ────────────────────────────────────────────────────
 
-def run_single(spec, rows, args, cfg_hash, config, broker, sysw, out_dir):
+def run_single(spec, rows, args, cfg_hash, config, broker, sysw, out_dir, idle):
     run_id = spec.run_id
     started = datetime.now(timezone.utc).isoformat()
     recorder = Recorder()
     session_id = f"bench-{run_id}"
-    subscriber = Subscriber(f"bench-sub-{run_id}", recorder)
-    publisher = Publisher(f"bench-pub-{run_id}", session_id, recorder)
+    subscriber = Subscriber(f"bench-sub-{run_id}", recorder,
+                            tcp_nodelay=args.tcp_nodelay)
+    publisher = Publisher(f"bench-pub-{run_id}", session_id, recorder,
+                          tcp_nodelay=args.tcp_nodelay)
     holder = {"sub": subscriber}
     counter = {"n": 0}
 
@@ -846,13 +938,15 @@ def run_single(spec, rows, args, cfg_hash, config, broker, sysw, out_dir):
               "t_on_ns": None, "session_present": None, "error": None}
     status, error = "complete", None
     wire_before = wire_after = None
+    wire_started = None
     drain = {}
     syscheck = {}
     teardown_ns = None
+    idle = idle if idle is not None else {}
 
     try:
         if netem_on:
-            netem_apply()
+            netem_apply(args.netem_cmd)
             time.sleep(0.3)
         holder["sub"].connect(clean_start=True)
         publisher.connect()
@@ -882,7 +976,8 @@ def run_single(spec, rows, args, cfg_hash, config, broker, sysw, out_dir):
                     finally:
                         disconnected.set()
                     time.sleep(args.outage_seconds)
-                    fresh = Subscriber(f"bench-sub-{run_id}", recorder)
+                    fresh = Subscriber(f"bench-sub-{run_id}", recorder,
+                                       tcp_nodelay=args.tcp_nodelay)
                     outage["session_present"] = fresh.connect(clean_start=False)
                     holder["sub"] = fresh
                 except Exception as exc:  # capture, do not kill the publisher
@@ -893,6 +988,7 @@ def run_single(spec, rows, args, cfg_hash, config, broker, sysw, out_dir):
 
             threading.Thread(target=outage_worker, daemon=True).start()
 
+        wire_started = time.monotonic()
         wire_before = read_lo_tx()
         t_measured = time.monotonic_ns()
         for i, row in enumerate(rows):
@@ -986,10 +1082,32 @@ def run_single(spec, rows, args, cfg_hash, config, broker, sysw, out_dir):
     if wire_before and wire_after and sent_measured:
         db = wire_after[0] - wire_before[0]
         dp = wire_after[1] - wire_before[1]
-        wire = {"tx_bytes": db, "tx_packets": dp,
-                "bytes_per_msg": round(db / sent_measured, 2),
-                "packets_per_msg": round(dp / sent_measured, 2),
-                "messages": sent_measured}
+        wire_seconds = (time.monotonic() - wire_started
+                        if wire_started is not None else None)
+        idle_pkt_s = idle.get("packets_per_s") or 0.0
+        idle_B_s = idle.get("bytes_per_s") or 0.0
+        corrected_bytes = max(0, round(db - idle_B_s * (wire_seconds or 0)))
+        corrected_packets = max(0, round(dp - idle_pkt_s * (wire_seconds or 0)))
+        wire = {
+            "tx_bytes": db, "tx_packets": dp,
+            "seconds": round(wire_seconds, 3) if wire_seconds is not None else None,
+            "bytes_per_msg": round(db / sent_measured, 2),
+            "packets_per_msg": round(dp / sent_measured, 2),
+            "raw_bytes_per_msg": round(db / sent_measured, 2),
+            "raw_packets_per_msg": round(dp / sent_measured, 2),
+            "corrected_tx_bytes": corrected_bytes,
+            "corrected_tx_packets": corrected_packets,
+            "corrected_bytes_per_msg": round(corrected_bytes / sent_measured, 2),
+            "corrected_packets_per_msg": round(corrected_packets / sent_measured, 2),
+            "idle_packets_per_s": idle_pkt_s,
+            "idle_bytes_per_s": idle_B_s,
+            "idle_max_pps": args.idle_max_pps,
+            "idle_flagged": idle.get("flagged"),
+            # Corrected counters are diagnostic only. A flagged run must be
+            # deleted and rerun; analysis hard-fails while it remains.
+            "primary": "raw",
+            "messages": sent_measured,
+        }
 
     sent_rows = [{
         "run_id": run_id, "experiment": spec.experiment,
@@ -1013,12 +1131,14 @@ def run_single(spec, rows, args, cfg_hash, config, broker, sysw, out_dir):
         "quick": bool(args.quick), "status": status, "error": error,
         "started_at_utc": started,
         "finished_at_utc": datetime.now(timezone.utc).isoformat(),
+        "idle_max_pps": args.idle_max_pps,
         "config_hash": cfg_hash, "config": config,
         "dataset": {"path": str(DATASET_PATH),
                     "sha256": config["dataset_sha256"],
                     "rows": len(rows)},
         "classifier_sha256": config["classifier_sha256"],
-        "netem": {"applied": netem_on, "command": NETEM_STRING if netem_on else None},
+        "netem": {"applied": netem_on, "command": args.netem_string if netem_on else None},
+        "idle": idle,
         "pacing": {
             "interval_s": args.interval,
             "mean_interval_ms": round(sum(intervals) / len(intervals), 3) if intervals else None,
@@ -1071,10 +1191,24 @@ def parse_args(argv=None):
                         help="number of dataset rows to publish")
     parser.add_argument("--outage-seconds", type=float, default=OUTAGE_SECONDS)
     parser.add_argument("--outage-fractions", default="0.25,0.5,0.75")
+    parser.add_argument("--socketpair", choices=[SOCKETPAIR_STOCK, SOCKETPAIR_AF_UNIX],
+                        default=SOCKETPAIR_AF_UNIX,
+                        help="paho cross-thread wake-up socketpair implementation")
+    parser.add_argument("--tcp-nodelay", action="store_true",
+                        help="set TCP_NODELAY on both benchmark clients (client-side only)")
+    parser.add_argument("--netem-delay-only", action="store_true",
+                        help="use delay/jitter only (no loss) for calibration")
+    parser.add_argument("--idle-max-pps", type=float, default=None,
+                        help="max idle lo TX packets/second; required for "
+                             "main and sensitivity matrices")
+    parser.add_argument("--out-dir", default=None,
+                        help="override the study output directory")
     parser.add_argument("--quick", action="store_true",
-                        help="smoke test into benchmark/results_quick (refused by analysis)")
+                        help="smoke test into benchmark/results_quick_v2 (refused by analysis)")
     parser.add_argument("--sensitivity", action="store_true",
-                        help="1 msg/s pacing study into benchmark/results_sensitivity")
+                        help="1 msg/s pacing study into benchmark/results_v2_sensitivity")
+    parser.add_argument("--calibration", action="store_true",
+                        help="calibration mode: idle threshold may be omitted")
     parser.add_argument("--force", action="store_true",
                         help="rerun every planned run, even complete ones")
     parser.add_argument("--audit-windows", action="store_true",
@@ -1082,25 +1216,34 @@ def parse_args(argv=None):
     parser.add_argument("--seed", type=int, default=42,
                         help="recorded for reproducibility; dataset order is fixed")
     args = parser.parse_args(argv)
+    args.netem_cmd = NETEM_DELAY_ONLY_CMD if args.netem_delay_only else NETEM_CMD
+    args.netem_string = (NETEM_DELAY_ONLY_STRING if args.netem_delay_only
+                         else NETEM_STRING)
 
-    if args.quick and args.sensitivity:
-        parser.error("--quick and --sensitivity are mutually exclusive")
+    if sum((args.quick, args.sensitivity, args.calibration)) > 1:
+        parser.error("--quick, --sensitivity and --calibration are mutually exclusive")
 
     if args.quick:
         args.study = "quick"
-        args.out_dir = BENCH_DIR / "results_quick"
+        default_out = BENCH_DIR / "results_quick_v2"
         defaults = {"rows": QUICK_ROWS, "reps": 1, "scenarios": "clean",
                     "interval": DEFAULT_INTERVAL}
     elif args.sensitivity:
         args.study = "sensitivity"
-        args.out_dir = BENCH_DIR / "results_sensitivity"
+        default_out = BENCH_DIR / "results_v2_sensitivity"
         defaults = {"rows": SENS_ROWS, "reps": 2, "scenarios": "clean,netem",
                     "interval": SENS_INTERVAL}
-    else:
-        args.study = "main"
-        args.out_dir = BENCH_DIR / "results"
+    elif args.calibration:
+        args.study = "calibration"
+        default_out = BENCH_DIR / "calibration_v2"
         defaults = {"rows": FULL_ROWS, "reps": 5, "scenarios": "clean,netem,outage",
                     "interval": DEFAULT_INTERVAL}
+    else:
+        args.study = "main"
+        default_out = BENCH_DIR / "results_v2"
+        defaults = {"rows": FULL_ROWS, "reps": 5, "scenarios": "clean,netem,outage",
+                    "interval": DEFAULT_INTERVAL}
+    args.out_dir = Path(args.out_dir) if args.out_dir else default_out
 
     args.rows = defaults["rows"] if args.rows is None else args.rows
     args.reps = defaults["reps"] if args.reps is None else args.reps
@@ -1120,6 +1263,11 @@ def parse_args(argv=None):
         parser.error(f"--rows must be between {WARMUP_ROWS + 1} and {FULL_ROWS}")
     if args.reps < 1:
         parser.error("--reps must be >= 1")
+    if args.idle_max_pps is not None and args.idle_max_pps < 0:
+        parser.error("--idle-max-pps must be >= 0")
+    if (args.idle_max_pps is None
+            and not (args.quick or args.calibration or args.audit_windows)):
+        parser.error("--idle-max-pps is required for main/sensitivity matrices")
     if any(not (0.05 <= f <= 0.95) for f in args.outage_fractions):
         parser.error("--outage-fractions entries must be in [0.05, 0.95]")
     return args
@@ -1171,6 +1319,10 @@ def scan_existing(out_dir, cfg_hash):
 
 def main(argv=None):
     args = parse_args(argv)
+    if paho_version() == "unknown":
+        log("FATAL: cannot determine paho-mqtt version; refusing v2 run")
+        return 2
+    install_socketpair(args.socketpair)
     install_signal_handlers()
     random.seed(args.seed)
     rows = load_rows(args.rows)
@@ -1182,7 +1334,7 @@ def main(argv=None):
     if "outage" in args.scenario_list:
         print_audit(audit)
 
-    problems = preflight(args)
+    problems, preflight_idle = preflight(args)
     if problems:
         for problem in problems:
             log(f"PREFLIGHT FAIL: {problem}")
@@ -1226,10 +1378,14 @@ def main(argv=None):
         "env": env_info(),
         "git": git_info(),
         "audit": audit,
+        "preflight": {"idle": preflight_idle},
+        "idle_max_pps": args.idle_max_pps,
         "plan": [{"run_id": s.run_id, "experiment": s.experiment,
                   "scenario": s.scenario, "position": s.position,
                   "rep": s.rep} for s in plan],
         "started_at_utc": datetime.now(timezone.utc).isoformat(),
+        "sys_baseline_inactive": None,
+        "broker_sys_version": None,
         "status": "running",
     }
 
@@ -1241,24 +1397,13 @@ def main(argv=None):
     sudo_keepalive = SudoKeepalive() if "netem" in args.scenario_list else None
     if sudo_keepalive:
         sudo_keepalive.start()
-
-    sysw = SysWatcher()
-    try:
-        sysw.start()
-        baseline = sysw.wait_baseline(timeout=12)
-        matrix["sys_baseline_inactive"] = baseline
-        matrix["broker_sys_version"] = sysw.version
-        log(f"$SYS baseline inactive sessions = {baseline}")
-    except Exception as exc:
-        log(f"WARNING: $SYS watcher disabled ({exc!r})")
-        sysw = None
-        baseline = None
-        matrix["sys_baseline_inactive"] = None
     write_json(out_dir / "matrix.json", matrix)
 
     counts = Counter()
     failures = []
     skipped = 0
+    sysw = None
+    sys_baseline_recorded = False
     try:
         for index, spec in enumerate(plan, 1):
             if _abort.is_set():
@@ -1273,9 +1418,39 @@ def main(argv=None):
             log(f"[{index}/{len(plan)}] {spec.run_id}  scenario={spec.scenario} "
                 f"rep={spec.rep} interval={args.interval}s")
             before = time.monotonic()
+
+            # The previous run has returned: clients are torn down, netem is
+            # cleared and the $SYS watcher is stopped. Sample before the next
+            # watcher and before any client connects or netem is applied.
+            idle = sample_lo_idle(RUN_IDLE_SECONDS, args.idle_max_pps)
+            if idle.get("error"):
+                log(f"WARNING {spec.run_id}: idle sample failed: {idle['error']}")
+            elif idle.get("flagged"):
+                log(f"WARNING {spec.run_id}: idle lo traffic "
+                    f"{idle['packets_per_s']:.2f} pkt/s exceeds "
+                    f"{idle['max_pps']} pps; run flagged, delete and rerun")
+
+            sysw = SysWatcher()
+            try:
+                sysw.start()
+                baseline = sysw.wait_baseline(timeout=12)
+                log(f"$SYS baseline inactive sessions = {baseline}")
+                if not sys_baseline_recorded:
+                    matrix["sys_baseline_inactive"] = baseline
+                    matrix["broker_sys_version"] = sysw.version
+                    sys_baseline_recorded = True
+                    write_json(out_dir / "matrix.json", matrix)
+            except Exception as exc:
+                log(f"WARNING: $SYS watcher disabled ({exc!r})")
+                try:
+                    sysw.stop()
+                except Exception:
+                    pass
+                sysw = None
+
             try:
                 meta = run_single(spec, rows, args, cfg_hash, config, broker,
-                                  sysw, out_dir)
+                                  sysw, out_dir, idle)
                 counts[meta["status"]] += 1
                 elapsed = time.monotonic() - before
                 if meta["status"] == "complete":
@@ -1289,6 +1464,10 @@ def main(argv=None):
             except Aborted:
                 log("aborted by signal")
                 break
+            finally:
+                if sysw:
+                    sysw.stop()
+                    sysw = None
     finally:
         if sudo_keepalive:
             sudo_keepalive.stop()
