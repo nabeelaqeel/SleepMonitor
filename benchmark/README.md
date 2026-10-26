@@ -544,8 +544,9 @@ mixed with the main study.
 
 - State the scenario first: clean, netem or outage. Never average across them.
 - Report **median [min–max] across the five runs**, not a pooled CI.
-- For netem, show QoS 0/1 and QoS 2 separately; the ratio is the cost of
-  exactly-once semantics.
+- For netem, show QoS 0/1 and QoS 2 separately; the ratio is the apparent
+  cost of exactly-once semantics, but it is provisional until the B/C offset
+  is measured.
 - For outage, report the **in-window** delivery per tier and position, the
   recovery delay after reconnect (`t1 - t_on`), and the maximum in-window
   latency. Do not use a `p95 ≥ 4 s` gate: a message published late in the
@@ -553,9 +554,10 @@ mixed with the main study.
   deterministic; the 25 % window contains no Critical reading. Frame Critical
   recovery as protocol validation on the 17 distinct clinical messages, not as
   a survival probability.
-- Netem absolute latencies include the paho wake-up offset described in
-  §16; report the clean values and relative QoS comparisons as the defensible
-  results.
+- Netem absolute latencies include a paho wake-up offset; the A/QoS 0
+  component is measured in §16, B/C are not. Clean values are the defensible
+  results. Netem relative QoS comparisons are provisional until the B/C
+  offset is measured.
 - Ack ≤ 50 ms belongs to clean runs; report netem ack numbers as a finding.
 - Wire overhead belongs to clean runs; label netem/outage counters as inflated.
 - The in-app RTT/2 badge is not a benchmark result.
@@ -580,16 +582,17 @@ cost.**
 | Condition | Exp | QoS policy | Median one-way latency by tier (ms) | p95 by tier (ms) | Delivery |
 |---|---|---|---|---|---|
 | Clean | A | QoS 0 everywhere | C 0.89 · I 0.90 · N 0.90 · Bg 1.05 | 1.13–1.17 | 100 % |
-| Netem (includes ~23 ms client-side offset) | A | QoS 0 everywhere | C 88.9 · I 94.9 · N 86.7 · Bg 148.0 | 381–446 | 100 % |
+| Netem (includes paho offset — §16) | A | QoS 0 everywhere | C 88.9 · I 94.9 · N 86.7 · Bg 148.0 | 381–446 | 100 % |
 | Clean | B | C 2 · I 1 · N 0 · Bg 0 | C 1.86 · I 0.90 · N 0.88 · Bg 1.07 | C 42.7 · I 1.20 · N 1.11 · Bg 41.6 | 100 % |
-| Netem (includes ~23 ms client-side offset) | B | C 2 · I 1 · N 0 · Bg 0 | C 366.2 · I 95.9 · N 100.4 · Bg 142.3 | C 735.8 · I 396.1 · N 472.5 · Bg 466.2 | 100 % |
+| Netem (includes paho offset — §16) | B | C 2 · I 1 · N 0 · Bg 0 | C 366.2 · I 95.9 · N 100.4 · Bg 142.3 | C 735.8 · I 396.1 · N 472.5 · Bg 466.2 | 100 % |
 | Clean | C | QoS 2 everywhere | C 1.90 · I 1.90 · N 1.89 · Bg 2.20 | 2.21–2.38 | 100 % |
-| Netem (includes ~23 ms client-side offset) | C | QoS 2 everywhere | C 457.3 · I 430.1 · N 462.0 · Bg 491.9 | 845.7–1009.1 | 100 % |
+| Netem (includes paho offset — §16) | C | QoS 2 everywhere | C 457.3 · I 430.1 · N 462.0 · Bg 491.9 | 845.7–1009.1 | 100 % |
 
-The netem **C/A median ratio is 4.91**, which passes the ≥ 1.5 smell test but
-is far above the "two to three times" rule of thumb. The 10 msg/s netem values
-are a stress case; the 1 msg/s sensitivity study is the production-like pacing
-check.
+The stock-paho netem **C/A median ratio is 4.91**. This comparison is
+provisional until the B/C paho offset is measured; it passes the ≥ 1.5 smell
+test but is far above the "two to three times" rule of thumb. The 10 msg/s
+netem values are a stress case; the 1 msg/s sensitivity study is the
+production-like pacing check.
 
 **Outage delivery and recovery.** Recovery is reported as `t1 - t_on` for
 messages delivered after the subscriber reconnects. The per-run maximum
@@ -618,12 +621,14 @@ medians are 0.34–0.43× the main values, i.e. the 10 msg/s netem numbers are
 substantially worse. This is a pacing effect, not evidence that slower
 publishing is always faster; the clean and outage results are unchanged.
 
-**Wire overhead (provisional).** Clean TX counters were **A 1108 B / 6.10
-packets per message**, **B 1274 B / 8.93**, **C 1842 B / 19.58**. These are
-host-wide loopback counters and are expected to include paho's socketpair
-traffic; the exact contribution has not been quantified. At 10 msg/s the wake
-bytes can coalesce or retransmit — this is a hypothesis — so the netem and
-wire ratios are provisional and should not be cited as pure payload overhead.
+**Wire overhead (stock-paho upper bounds).** Clean TX counters were **A 1108 B
+/ 6.10 packets per message**, **B 1274 B / 8.93**, **C 1842 B / 19.58**. These
+are host-wide loopback counters measured with stock paho. The stock-vs-AF_UNIX
+clean calibration reduced A/B/C by **120 / 196 / 419 B** and **2.07 / 3.49 /
+8.06 packets per message** (§16). The canonical counts therefore include the
+socketpair traffic and are **upper bounds**, not pure MQTT/payload overhead.
+At 10 msg/s the wake bytes can coalesce or retransmit — this is a hypothesis —
+so the netem and wire ratios remain provisional.
 
 ### Deviations from the plan
 
@@ -638,44 +643,76 @@ warnings disappeared; the **12 netem band warnings remain**.
 
 ## 16. Known limitation: paho wake-up offset
 
-**Cause supported by source inspection and a runtime check; a stock-versus-
-AF_UNIX netem calibration is pending. The exact contribution is not
-established.**
+**Cause supported by source inspection and a runtime check. The offset is
+measured for A/QoS 0; B/C under netem were not tested, so their offset is not
+quantified.**
+
+**Status:** v1 = stock paho; a v2 rerun with the AF_UNIX socketpair is
+under consideration.
+
+The calibration inputs and raw outputs are preserved in
+[`calibration/paho_socketpair/`](calibration/paho_socketpair/); run
+2026-10-25 UTC (26 Oct local).
 
 `paho-mqtt 2.1.0` uses an internal socketpair for cross-thread wake-ups.
 Source inspection shows `_socketpair_compat()` creating **AF_INET TCP**
 sockets and `_packet_queue()` sending a one-byte wake-up; a runtime check
 found the sockets bound on `127.0.0.1`. With `tc netem` on `lo`, that
 wake-up byte is delayed like the MQTT traffic, so each publish can carry an
-extra loopback delay before the next packet is queued. A stock-versus-AF_UNIX
-netem calibration has not been run, so the exact contribution is not isolated.
+extra loopback delay before the network loop thread wakes and writes the
+packet. The calibration below isolates this for A/QoS 0 only.
 
-(a) **~23 ms client-side offset.** The netem absolute latencies above include
-roughly 23 ms of this client-side wake-up delay. Clean latency is unaffected;
-the offset is part of the netem measurement, not of the app or broker. Report
-netem values as measured with this caveat, and treat the clean values and
-relative QoS ratios as the defensible comparisons.
+(a) **A/QoS 0 netem offset: ~23 ms median, measured.** In the 1 msg/s
+delay-only netem calibration, `t0 -> ack_ns` was **22.9 ms stock vs 0.3 ms
+AF_UNIX** (median; p95 **32.8 vs 0.4 ms**). Stock pre values ranged from
+15.9–33.3 ms and patched from 0.17–0.41 ms, so the distributions do not
+overlap. The `ack_ns -> t1_ns` post phase was ~50 ms in both modes (median
+50.5 vs 48.7 ms), so the offset is in the publisher-side wake-up, not the
+delivery path. This is 20 readings from one run; its p95 is coarse and the
+result applies to A/QoS 0 only. In clean runs, patched medians were only
+~0.10–0.15 ms below stock, a small shift.
+
+**B/C under netem were NOT tested.** The calibration netem plan contains only
+A, and there are no B/C netem raw files. Do not apply the 23 ms figure to B/C.
+For QoS 1/2, `ack_ns` is a broker PUBACK/PUBCOMP time rather than a pure local
+wake-up, so their pre values cannot be corrected by subtracting the A offset.
 
 (b) **QoS 0 `t1 - ack` ≈ 51 ms is network-only, from the 1 msg/s A-netem runs
 only.** It must not be generalised to 10 msg/s or to QoS 1/2. It is a
-consistency check on the loopback path after the publisher-side handshake, not
-a universal network latency.
+consistency check on the loopback path after paho reports the local send
+complete (`on_publish`), not a universal network latency.
 
-(c) **The 10 msg/s netem and wire ratios are provisional.** Wire counters are
-expected to include socketpair traffic, but that contribution is **not yet
-quantified**. At 10 msg/s, wake bytes can coalesce or retransmit — this is a
-**hypothesis**, not a measured finding. Do not present the netem wire ratios as
-pure payload overhead.
+(c) **Canonical clean wire counts are stock-paho upper bounds.** The clean
+stock-vs-AF_UNIX paired calibration reduced A/B/C by **120.1 / 196.1 / 418.8
+bytes per message** and **2.07 / 3.49 / 8.06 packets per message** (stock
+minus patched). Each difference comes from one stock run and one patched run
+per experiment; the counters are host-wide loopback counters, not MQTT-only.
+The stock calibration counts were **7–23 % above** the canonical clean runs,
+so these paired differences are indicative rather than precise. Relative to
+stock, patched is **9.6 / 13.9 / 21.2 % fewer bytes** and **27.6 / 33.5 /
+38.5 % fewer packets**. The A<B<C ordering survives. The canonical clean
+counts (A 1108 B / 6.10 packets, B 1274 / 8.93, C 1842 / 19.58) were measured
+with stock paho, so they include this socketpair traffic and are upper bounds,
+not pure MQTT/payload overhead. Absolute loopback counters vary between
+sessions; use the paired differences, not a cross-session subtraction. At
+10 msg/s, wake bytes can coalesce or retransmit — this is a **hypothesis**, not
+a measured finding.
 
-(d) **Retired simulated figures.** The old **+16.7 percentage-point**
+(d) **The B-clean ~42 ms tail is unexplained and is not the socketpair.** The
+B-clean Critical and Background p95 tails are ~42 ms—the median across runs of
+the per-run p95. Their median latencies are only ~1–2 ms; only ~10 specific
+messages account for the tail. In the full stock-vs-AF_UNIX clean calibration,
+Critical p95 was **42.8 ms stock vs 43.1 ms patched**, and Background **41.3
+vs 41.6 ms**. The same six Critical sequences (**151, 261, 272, 481, 492,
+503**) and four Background sequences (**119, 185, 438, 570**) account for the
+>10 ms points in both modes and in all five canonical stock runs. The effect
+is reproducible but its cause remains unexplained; do not attribute it to
+paho.
+
+(e) **Retired simulated figures.** The old **+16.7 percentage-point**
 Critical-delivery claim and the **33 ms** latency figure are retired, together
 with the 12 / 28 / 45 ms constants in `benchmark/evaluation.py`. That file is
 historical only; it is not evidence and is not imported by this harness.
-
-A clean stock-versus-AF_UNIX A/B/C calibration was also run. It reproduced the
-clean B Critical p95 tail (about **42.7 ms stock vs 42.2 ms AF_UNIX**), so that
-tail is not attributable to the socketpair. The netem calibration remains
-pending; the canonical study is still the stock-paho run above.
 
 ---
 

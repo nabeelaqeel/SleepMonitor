@@ -1,0 +1,10 @@
+[00:13:12] study=main  runs=3  rows/run=526  interval=0.1s  out=/tmp/opencode/sockpair-cal/calibration/patched-clean/results
+[00:13:12] config_hash=fb23a87506d5cd3f  broker=2.0.18-1build3  dataset_sha=10e9df7fc380
+[00:13:12] $SYS baseline inactive sessions = 2
+[00:13:12] [1/3] A-clean-r01  scenario=clean rep=1 interval=0.1s
+[00:14:10]     done in 57.7s  unique_recv=578 sent=578 wire=1129.75 B/msg
+[00:14:10] [2/3] B-clean-r01  scenario=clean rep=1 interval=0.1s
+[00:15:08]     done in 57.7s  unique_recv=578 sent=578 wire=1212.93 B/msg
+[00:15:08] [3/3] C-clean-r01  scenario=clean rep=1 interval=0.1s
+[00:16:05]     done in 57.7s  unique_recv=578 sent=578 wire=1552.42 B/msg
+[00:16:05] matrix finished: completed={'complete': 3} skipped=0 failed=none
