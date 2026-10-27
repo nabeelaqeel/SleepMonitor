@@ -1,0 +1,177 @@
+{
+  "analysis_sha256": "84dd15f8232edba3bb3aea482fed83d83b893c2705670bd82e98b82c1ab282be",
+  "broker": {
+    "active_lines": [
+      "/etc/mosquitto/mosquitto.conf: persistence true"
+    ],
+    "config_dir": "/etc/mosquitto",
+    "defaults_note": "Mosquitto 2.x defaults are used where no active directive overrides them.",
+    "raw_grep": "/etc/mosquitto/mosquitto.conf:8:persistence true\n/etc/mosquitto/mosquitto.conf:9:persistence_location /var/lib/mosquitto/",
+    "resolved": {
+      "max_inflight_messages": 20,
+      "max_queued_messages": 1000,
+      "per_listener_settings": false,
+      "persistence": true,
+      "queue_qos0_messages": false
+    },
+    "version": "2.0.18-1build3"
+  },
+  "classifier_sha256": "5a35b3924f6fe0ffd82830e69f4e8b1a8c77939ee33fcee6304fc39b40fc757a",
+  "config": {
+    "background_every": 10,
+    "broker": {
+      "resolved": {
+        "max_inflight_messages": 20,
+        "max_queued_messages": 1000,
+        "per_listener_settings": false,
+        "persistence": true,
+        "queue_qos0_messages": false
+      },
+      "version": "2.0.18-1build3"
+    },
+    "classifier_sha256": "5a35b3924f6fe0ffd82830e69f4e8b1a8c77939ee33fcee6304fc39b40fc757a",
+    "dataset_rows": 526,
+    "dataset_sha256": "10e9df7fc38087b8caad72aebdee3975f752da3dd4bd5d79f7aa7aa1b3de64de",
+    "idle_max_pps": 2.0,
+    "method_version": "2.0.0",
+    "mqtt": {
+      "initial_clean_start": true,
+      "keepalive_s": 60,
+      "max_inflight_messages": 100,
+      "protocol": 5,
+      "reconnect_clean_start": false,
+      "session_expiry_s": 300
+    },
+    "netem": "tc qdisc add dev lo root netem delay 25ms 10ms loss 2%",
+    "outage_fractions": [
+      0.25,
+      0.5,
+      0.75
+    ],
+    "outage_seconds": 5.0,
+    "pacing_interval_s": 0.1,
+    "paho_mqtt": "2.1.0",
+    "runner_sha256": "d3dda027a63eb2e5cfb4165a6bb21b5c1cb2699dc074b6cfe5fa52b9bcb88d8e",
+    "socketpair": "af_unix",
+    "tcp_nodelay": false,
+    "tier_qos": {
+      "Background": 0,
+      "Critical": 2,
+      "Important": 1,
+      "Normal": 0
+    },
+    "warmup_rows": 10
+  },
+  "config_hash": "92495c94ffd3db923975d135efc4fdaf06e2c63c1eb8e54311c3373abde88937",
+  "counts": {
+    "duplicates": 0,
+    "invalid_payloads": 0,
+    "recv_raw": 588,
+    "recv_unique": 588,
+    "recv_unique_measured": 578,
+    "sent_measured": 578,
+    "sent_total": 588
+  },
+  "dataset": {
+    "path": "/home/aqeel/MyStuff/fyp/SleepMonitor/data/sleep_data_realistic.csv",
+    "rows": 526,
+    "sha256": "10e9df7fc38087b8caad72aebdee3975f752da3dd4bd5d79f7aa7aa1b3de64de"
+  },
+  "drain": {
+    "expected_received": 578,
+    "expected_received_min": 576,
+    "measured_sent": 578,
+    "pending_acks_left": 0,
+    "qos0_lost_in_outage_window": 0,
+    "quiet_seconds": 5.0,
+    "seconds": 5.03
+  },
+  "env": {
+    "hostname": "aqeel-Inspiron-5415",
+    "kernel": "7.0.0-38-generic",
+    "paho_mqtt": "2.1.0",
+    "pandas": "2.2.2",
+    "platform": "Linux-7.0.0-38-generic-x86_64-with-glibc2.39",
+    "python": "3.12.3"
+  },
+  "error": null,
+  "experiment": "A",
+  "finished_at_utc": "2026-10-27T02:24:42.502992+00:00",
+  "git": {
+    "branch": "project/phase2",
+    "commit": "2e1bb150b99878d4f2857c9679f7cbad454b8ce2",
+    "dirty": true,
+    "note": "informational only \u2014 deliberately excluded from config_hash"
+  },
+  "idle": {
+    "bytes_per_s": 0.0,
+    "flagged": false,
+    "max_pps": 2.0,
+    "packets_per_s": 0.0,
+    "seconds": 5.004,
+    "tx_bytes": 0,
+    "tx_packets": 0
+  },
+  "idle_max_pps": 2.0,
+  "mqtt": {
+    "initial_clean_start": true,
+    "keepalive_s": 60,
+    "max_inflight_messages": 100,
+    "protocol": 5,
+    "reconnect_clean_start": false,
+    "session_expiry_s": 300
+  },
+  "netem": {
+    "applied": true,
+    "command": "tc qdisc add dev lo root netem delay 25ms 10ms loss 2%"
+  },
+  "outage": {
+    "error": null,
+    "fraction": null,
+    "session_present": null,
+    "t_off_ns": null,
+    "t_on_ns": null,
+    "trigger_row": null
+  },
+  "pacing": {
+    "background_messages": 52,
+    "interval_s": 0.1,
+    "mean_interval_ms": 100.001,
+    "measured_readings": 526,
+    "warmup_rows": 10
+  },
+  "position": null,
+  "quick": false,
+  "rep": 5,
+  "run_id": "A-netem-r05",
+  "scenario": "netem",
+  "seed": 42,
+  "started_at_utc": "2026-10-27T02:23:41.247402+00:00",
+  "status": "complete",
+  "study": "main",
+  "sys": {
+    "baseline": 2,
+    "fresh_sample": false,
+    "inactive": 2,
+    "warned": false
+  },
+  "wire": {
+    "bytes_per_msg": 973.49,
+    "corrected_bytes_per_msg": 973.49,
+    "corrected_packets_per_msg": 3.55,
+    "corrected_tx_bytes": 562679,
+    "corrected_tx_packets": 2054,
+    "idle_bytes_per_s": 0.0,
+    "idle_flagged": false,
+    "idle_max_pps": 2.0,
+    "idle_packets_per_s": 0.0,
+    "messages": 578,
+    "packets_per_msg": 3.55,
+    "primary": "raw",
+    "raw_bytes_per_msg": 973.49,
+    "raw_packets_per_msg": 3.55,
+    "seconds": 59.568,
+    "tx_bytes": 562679,
+    "tx_packets": 2054
+  }
+}

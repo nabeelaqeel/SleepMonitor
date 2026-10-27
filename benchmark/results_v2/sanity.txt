@@ -1,0 +1,77 @@
+========================================================================
+MQTT benchmark — sanity report
+========================================================================
+runs (complete): 75
+config_hash: 92495c94ffd3db923975d135efc4fdaf06e2c63c1eb8e54311c3373abde88937
+broker under test: 2.0.18-1build3
+dataset rows/run: 526
+pacing interval: 0.1 s
+experiments: ['A', 'B', 'C']
+scenarios: ['clean', 'netem', 'outage']
+
+HARD GATES: PASS (0 problem(s))
+
+SOFT EXPECTATIONS: 8 warning(s)
+  WARN  A-outage-p75-r01: $SYS inactive=2 above baseline 1
+  WARN  netem A/Background: median 115.9 ms outside expected 30-80 ms for QoS 0
+  WARN  netem B/Background: median 115.5 ms outside expected 30-80 ms for QoS 0
+  WARN  netem B/Critical: median 282.7 ms outside expected 70-160 ms for QoS 2
+  WARN  netem C/Background: median 478.2 ms outside expected 70-160 ms for QoS 2
+  WARN  netem C/Critical: median 423.9 ms outside expected 70-160 ms for QoS 2
+  WARN  netem C/Important: median 428.1 ms outside expected 70-160 ms for QoS 2
+  WARN  netem C/Normal: median 427.4 ms outside expected 70-160 ms for QoS 2
+
+NOTES
+  - flagged runs (idle above threshold): 0
+  - A-netem pooled t0 -> on_publish median: 0.43 ms (n=2890, 5 run(s) with samples; note only)
+  - netem QoS2/QoS0 median ratio (C/A): 7.34 (smell test expects >= 1.5)
+  - outage recovery is reported as max(t1 - t_on) and max in-window latency; there is no p95>=4s gate, because messages published late in the window wait less than 4s
+  - duplicate deliveries removed by (run_id, seq): 0 (expected for QoS 1; not counted as messages)
+  - latency is one-way (t1 - t0, same monotonic clock); never RTT/2
+  - aggregates are median [min-max] across runs, not pooled CIs
+  - sensitivity study: 12 runs, config_hash=ab682dc10c28688f, compared on first 100 rows
+
+Per-condition run/evaluation detail
+  exp scenario     reps   sent   recv  duplicates  mean_int_ms
+  A   clean           5   2890   2890           0        100.0
+  A   netem           5   2890   2890           0        100.0
+  A   outage         15   8670   7830           0        100.0
+  B   clean           5   2890   2890           0        100.0
+  B   netem           5   2890   2890           0        100.0
+  B   outage         15   8670   8140           0        100.0
+  C   clean           5   2890   2890           0        100.0
+  C   netem           5   2890   2890           0        100.0
+  C   outage         15   8670   8670           0        100.0
+
+Outage session recovery
+  A p25: session_present=['True'] window QoS0 losses=[55]
+  A p50: session_present=['True'] window QoS0 losses=[55]
+  A p75: session_present=['True'] window QoS0 losses=[55]
+  B p25: session_present=['True'] window QoS0 losses=[46]
+    recovery max (delivered tiers (no Critical in window), t1-t_on): 1.2 ms [0.9-1.4]; max in-window latency (all tiers): 4503.2 ms
+  B p50: session_present=['True'] window QoS0 losses=[39]
+    recovery max (Critical, t1-t_on): 42.0 ms [41.6-42.8]; max in-window latency (all tiers): 3803.3 ms
+  B p75: session_present=['True'] window QoS0 losses=[18]
+    recovery max (Critical, t1-t_on): 44.9 ms [44.3-45.2]; max in-window latency (all tiers): 4703.1 ms
+  C p25: session_present=['True'] window QoS0 losses=[0]
+    recovery max (delivered tiers (no Critical in window), t1-t_on): 5.1 ms [4.7-47.0]; max in-window latency (all tiers): 4905.0 ms
+  C p50: session_present=['True'] window QoS0 losses=[0]
+    recovery max (Critical, t1-t_on): 2.3 ms [2.2-3.1]; max in-window latency (all tiers): 4905.0 ms
+  C p75: session_present=['True'] window QoS0 losses=[0]
+    recovery max (Critical, t1-t_on): 4.8 ms [4.3-5.1]; max in-window latency (all tiers): 4904.7 ms
+
+Publisher-side ack gate (clean runs, <=50 ms)
+  A Critical: 100.0% [100.0-100.0]
+  A Important: 100.0% [100.0-100.0]
+  B Critical: 100.0% [100.0-100.0]
+  B Important: 100.0% [100.0-100.0]
+  C Critical: 100.0% [100.0-100.0]
+  C Important: 100.0% [100.0-100.0]
+
+Netem ack (informational, not a gate)
+  A Critical: 100.0% within 50 ms [100.0-100.0]
+  A Important: 100.0% within 50 ms [100.0-100.0]
+  B Critical: 0.0% within 50 ms [0.0-0.0]
+  B Important: 25.7% within 50 ms [19.4-34.0]
+  C Critical: 0.0% within 50 ms [0.0-0.0]
+  C Important: 0.0% within 50 ms [0.0-0.0]

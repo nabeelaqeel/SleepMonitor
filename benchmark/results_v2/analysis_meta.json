@@ -1,0 +1,73 @@
+{
+  "analysis_mode": "v2",
+  "broker": {
+    "active_lines": [
+      "/etc/mosquitto/mosquitto.conf: persistence true"
+    ],
+    "config_dir": "/etc/mosquitto",
+    "defaults_note": "Mosquitto 2.x defaults are used where no active directive overrides them.",
+    "raw_grep": "/etc/mosquitto/mosquitto.conf:8:persistence true\n/etc/mosquitto/mosquitto.conf:9:persistence_location /var/lib/mosquitto/",
+    "resolved": {
+      "max_inflight_messages": 20,
+      "max_queued_messages": 1000,
+      "per_listener_settings": false,
+      "persistence": true,
+      "queue_qos0_messages": false
+    },
+    "version": "2.0.18-1build3"
+  },
+  "config_hash": "92495c94ffd3db923975d135efc4fdaf06e2c63c1eb8e54311c3373abde88937",
+  "env": {
+    "hostname": "aqeel-Inspiron-5415",
+    "kernel": "7.0.0-38-generic",
+    "paho_mqtt": "2.1.0",
+    "pandas": "2.2.2",
+    "platform": "Linux-7.0.0-38-generic-x86_64-with-glibc2.39",
+    "python": "3.12.3"
+  },
+  "experiments": [
+    "A",
+    "B",
+    "C"
+  ],
+  "flagged_run_ids": [],
+  "flagged_runs": 0,
+  "generated_at_utc": "2026-10-27T03:12:33.264143+00:00",
+  "hard_failures": [],
+  "idle_max_pps": 2.0,
+  "main_dir": "/home/aqeel/MyStuff/fyp/SleepMonitor/benchmark/results_v2",
+  "method_version": "2.0.0",
+  "notes": [
+    "flagged runs (idle above threshold): 0",
+    "A-netem pooled t0 -> on_publish median: 0.43 ms (n=2890, 5 run(s) with samples; note only)",
+    "netem QoS2/QoS0 median ratio (C/A): 7.34 (smell test expects >= 1.5)",
+    "outage recovery is reported as max(t1 - t_on) and max in-window latency; there is no p95>=4s gate, because messages published late in the window wait less than 4s",
+    "duplicate deliveries removed by (run_id, seq): 0 (expected for QoS 1; not counted as messages)",
+    "latency is one-way (t1 - t0, same monotonic clock); never RTT/2",
+    "aggregates are median [min-max] across runs, not pooled CIs",
+    "sensitivity study: 12 runs, config_hash=ab682dc10c28688f, compared on first 100 rows"
+  ],
+  "paho_mqtt": "2.1.0",
+  "plot_error": null,
+  "preflight": null,
+  "runs": 75,
+  "scenarios": [
+    "clean",
+    "netem",
+    "outage"
+  ],
+  "sensitivity_runs": 12,
+  "socketpair": "af_unix",
+  "soft_warnings": [
+    "A-outage-p75-r01: $SYS inactive=2 above baseline 1",
+    "netem A/Background: median 115.9 ms outside expected 30-80 ms for QoS 0",
+    "netem B/Background: median 115.5 ms outside expected 30-80 ms for QoS 0",
+    "netem B/Critical: median 282.7 ms outside expected 70-160 ms for QoS 2",
+    "netem C/Background: median 478.2 ms outside expected 70-160 ms for QoS 2",
+    "netem C/Critical: median 423.9 ms outside expected 70-160 ms for QoS 2",
+    "netem C/Important: median 428.1 ms outside expected 70-160 ms for QoS 2",
+    "netem C/Normal: median 427.4 ms outside expected 70-160 ms for QoS 2"
+  ],
+  "study": "main",
+  "tcp_nodelay": false
+}
