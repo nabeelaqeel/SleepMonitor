@@ -1,0 +1,8 @@
+criterion,stock_label,patched_label,stock_median_ms,stock_messages,patched_median_ms,patched_messages,limit_ms,limit_label,result
+all 6 runs netem.applied == true and delay-only command,3/3 runs (n=3),3/3 runs (n=3),,,,,,6/6,PASS
+stock A t0 -> on_publish median >= 10 ms (artifact reproduced),24.12 ms (n=165),—,24.12015,165.0,,,10.0,>= 10.00 ms,PASS
+patched A (t1 - on_publish) median between 35 and 70 ms,—,52.06 ms (n=165),,,52.061393,165.0,,35.00-70.00 ms,PASS
+A patched t0 -> on_publish median < 2 ms,24.12 ms (n=165),0.43 ms (n=165),24.12015,165.0,0.425726,165.0,2.0,2.00 ms,PASS
+QoS 0: patched t1−t0 median <= stock + 5 ms,76.43 ms (n=165),52.49 ms (n=165),76.429338,165.0,52.48904,165.0,81.429338,stock + 5 = 81.43 ms,PASS
+QoS 1: patched t1−t0 median <= stock + 5 ms,74.73 ms (n=64),50.69 ms (n=64),74.7341725,64.0,50.694061000000005,64.0,79.7341725,stock + 5 = 79.73 ms,PASS
+QoS 2: patched t1−t0 median <= stock + 5 ms,182.64 ms (n=165),159.78 ms (n=165),182.644885,165.0,159.777116,165.0,187.644885,stock + 5 = 187.64 ms,PASS
