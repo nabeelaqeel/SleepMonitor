@@ -1,0 +1,46 @@
+# =============================================================
+# Sleep Monitor — local development database
+#
+# PostgreSQL only. Mosquitto runs natively on this host
+# (already bound to :1883 / :9001), so it is intentionally
+# NOT containerized here to avoid a port clash.
+#
+# Usage:
+#   cp .env.example .env.development   # first time only
+#   docker compose --env-file .env.development up -d
+# =============================================================
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: sleep-postgres
+    restart: unless-stopped
+    ports:
+      # Exposed on the host so the ingest worker (running in a
+      # host venv) and GUI clients can connect.
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      # SQL files here run alphabetically on first container start only.
+      - ./postgres/init:/docker-entrypoint-initdb.d:ro
+    environment:
+      POSTGRES_DB:       ${POSTGRES_DB:-sleep_monitor}
+      POSTGRES_USER:     ${POSTGRES_USER:-sleep_user}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env.development}
+    healthcheck:
+      test:
+        - "CMD-SHELL"
+        - "pg_isready -U ${POSTGRES_USER:-sleep_user} -d ${POSTGRES_DB:-sleep_monitor}"
+      interval: 10s
+      timeout: 5s
+      start_period: 20s
+      retries: 5
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+volumes:
+  postgres_data:
+    driver: local

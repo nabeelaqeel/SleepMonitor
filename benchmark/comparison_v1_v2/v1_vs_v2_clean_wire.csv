@@ -1,0 +1,4 @@
+experiment,v1_n_runs,v1_bytes_per_msg_median,v1_bytes_per_msg_min,v1_bytes_per_msg_max,v1_packets_per_msg_median,v1_packets_per_msg_min,v1_packets_per_msg_max,v1_primary,v2_n_runs,v2_bytes_per_msg_median,v2_bytes_per_msg_min,v2_bytes_per_msg_max,v2_packets_per_msg_median,v2_packets_per_msg_min,v2_packets_per_msg_max,v2_primary,delta_bytes_per_msg
+A,5,1108.35,1106.0,1111.82,6.1,6.07,6.12,raw,5,995.77,995.53,997.34,4.0,4.0,4.02,raw,-112.57999999999993
+B,5,1273.81,1261.7,1281.7,8.93,8.88,8.98,raw,5,1084.67,1084.43,1084.67,5.54,5.54,5.54,raw,-189.13999999999987
+C,5,1841.79,1837.17,1844.66,19.58,19.55,19.6,raw,5,1411.91,1411.91,1412.15,11.47,11.47,11.47,raw,-429.8799999999999

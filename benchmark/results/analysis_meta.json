@@ -1,0 +1,66 @@
+{
+  "broker": {
+    "active_lines": [
+      "/etc/mosquitto/mosquitto.conf: persistence true"
+    ],
+    "config_dir": "/etc/mosquitto",
+    "defaults_note": "Mosquitto 2.x defaults are used where no active directive overrides them.",
+    "raw_grep": "/etc/mosquitto/mosquitto.conf:8:persistence true\n/etc/mosquitto/mosquitto.conf:9:persistence_location /var/lib/mosquitto/",
+    "resolved": {
+      "max_inflight_messages": 20,
+      "max_queued_messages": 1000,
+      "per_listener_settings": false,
+      "persistence": true,
+      "queue_qos0_messages": false
+    },
+    "version": "2.0.18-1build3"
+  },
+  "config_hash": "bf3a74609898e4c1cf97427f6fdeac67b03700584c597936edba9f8a161caa75",
+  "env": {
+    "hostname": "aqeel-Inspiron-5415",
+    "kernel": "7.0.0-38-generic",
+    "paho_mqtt": "2.1.0",
+    "pandas": "2.2.2",
+    "platform": "Linux-7.0.0-38-generic-x86_64-with-glibc2.39",
+    "python": "3.12.3"
+  },
+  "experiments": [
+    "A",
+    "B",
+    "C"
+  ],
+  "generated_at_utc": "2026-10-25T16:01:53.812313+00:00",
+  "hard_failures": [],
+  "main_dir": "/home/aqeel/MyStuff/fyp/SleepMonitor/benchmark/results",
+  "notes": [
+    "netem QoS2/QoS0 median ratio (C/A): 4.91 (smell test expects >= 1.5)",
+    "outage recovery is reported as max(t1 - t_on) and max in-window latency; there is no p95>=4s gate, because messages published late in the window wait less than 4s",
+    "duplicate deliveries removed by (run_id, seq): 0 (expected for QoS 1; not counted as messages)",
+    "latency is one-way (t1 - t0, same monotonic clock); never RTT/2",
+    "aggregates are median [min-max] across runs, not pooled CIs",
+    "sensitivity study: 12 runs, config_hash=22ec36f2a9eb25db, compared on first 100 rows"
+  ],
+  "plot_error": null,
+  "runs": 75,
+  "scenarios": [
+    "clean",
+    "netem",
+    "outage"
+  ],
+  "sensitivity_runs": 12,
+  "soft_warnings": [
+    "netem A/Background: median 148.0 ms outside expected 30-80 ms for QoS 0",
+    "netem A/Critical: median 88.9 ms outside expected 30-80 ms for QoS 0",
+    "netem A/Important: median 94.9 ms outside expected 30-80 ms for QoS 0",
+    "netem A/Normal: median 86.7 ms outside expected 30-80 ms for QoS 0",
+    "netem B/Background: median 142.3 ms outside expected 30-80 ms for QoS 0",
+    "netem B/Critical: median 366.2 ms outside expected 70-160 ms for QoS 2",
+    "netem B/Important: median 95.9 ms outside expected 30-80 ms for QoS 1",
+    "netem B/Normal: median 100.4 ms outside expected 30-80 ms for QoS 0",
+    "netem C/Background: median 491.9 ms outside expected 70-160 ms for QoS 2",
+    "netem C/Critical: median 457.3 ms outside expected 70-160 ms for QoS 2",
+    "netem C/Important: median 430.0 ms outside expected 70-160 ms for QoS 2",
+    "netem C/Normal: median 462.0 ms outside expected 70-160 ms for QoS 2"
+  ],
+  "study": "main"
+}
