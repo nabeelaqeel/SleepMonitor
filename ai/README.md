@@ -70,11 +70,10 @@ The message is delivered on `sleep/recommendation` with:
 
 | Path | Purpose |
 |---|---|
-| `ai/config.py` | Phase-2 config loader (`config/phase2.yaml`) |
+| `ai/config.py` | Phase-2 config loader (`ai/config/phase2.yaml`) |
 | `ai/features.py` | Nightly feature computation from session readings |
-| `ai/classifier.py` | Trained model wrapper |
+| `ai/classifier.py` | Trained model wrapper (`ai/models/rf_phase2.joblib`) |
 | `ai/nightly_adapter.py` | Session-to-nightly-feature bridge |
 | `ai/nightly.py` | Optional post-night CLI |
 | `ai/mqtt.py` | Broker publisher used by the AI module only |
-| `models/rf_phase2.joblib` | Trained model artifact (kept local, gitignored) |
-| `config/phase2.yaml` | Band boundaries and feature thresholds |
+| `ai/config/phase2.yaml` | Band boundaries and feature thresholds |

@@ -58,9 +58,9 @@ app/ios
 app/android
 
 # AI module artifacts (kept local, never committed)
-models/rf_phase2.joblib
-models/*.pkl
-models/*.joblib
+ai/models/rf_phase2.joblib
+ai/models/*.pkl
+ai/models/*.joblib
 
 # Claude Code agent config — local only
 .claude/

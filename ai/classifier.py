@@ -17,7 +17,7 @@ import pandas as pd
 
 from .config import AI_RECOMMENDATION_DISCLAIMER, DISCLAIMER
 
-MODEL_PATH = Path(__file__).resolve().parents[1] / "models" / "rf_phase2.joblib"
+MODEL_PATH = Path(__file__).resolve().parent / "models" / "rf_phase2.joblib"
 
 
 @dataclass

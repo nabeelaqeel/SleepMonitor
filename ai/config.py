@@ -12,7 +12,7 @@ from pathlib import Path
 import yaml
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
-CONFIG_PATH = PROJECT_ROOT / "config" / "phase2.yaml"
+CONFIG_PATH = Path(__file__).resolve().parent / "config" / "phase2.yaml"
 
 DISCLAIMER = (
     "Research guidance band only. Not a diagnosis, not clinically validated, "
