@@ -80,13 +80,16 @@ export default function App() {
       const stored = await getStoredUser();
       setUser(stored);
       setLoading(false);
-      if (stored) {
-        // The JWT's exp is re-checked every minute while authenticated, so an
-        // expired session drops the app back to the login screen on its own.
-        startSessionWatch(() => setUser(null));
-      }
     })();
   }, []);
+
+  // Re-validate the exp every minute for EVERY authenticated session —
+  // including one created after this screen mounted — and stop the watcher
+  // on logout/unmount (the effect's cleanup) so no stale callback can fire.
+  useEffect(() => {
+    if (!user) return undefined; // splash / logged-out — nothing to watch
+    return startSessionWatch(() => setUser(null));
+  }, [user && user.id]);
 
   function handleLoginSuccess(loggedInUser) {
     setUser(loggedInUser);

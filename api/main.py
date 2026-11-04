@@ -67,11 +67,13 @@ def health():
 @app.post("/auth/login")
 def login(req: LoginRequest):
     user = get_user_by_email(req.email)
-    # bcrypt here is a timing-equaliser: unknown emails verify against a
-    # dummy hash of an in-memory random value (same cost as real accounts),
-    # so the plain-401 path no longer leaks which addresses exist.
+    # Timing-equaliser: unknown emails verify against a dummy hash of an
+    # in-memory random value. verify_password runs for BOTH cases (no
+    # short-circuit!) so an unknown email burns the same bcrypt cost as a
+    # real account — the 401 path no longer leaks which addresses exist.
     stored_hash = user["password_hash"] if user is not None else get_dummy_hash()
-    if user is None or not verify_password(req.password, stored_hash):
+    password_ok = verify_password(req.password, stored_hash)
+    if user is None or not password_ok:
         # Same message for unknown email and wrong password — no user enumeration
         raise HTTPException(status_code=401, detail="Invalid email or password")
 

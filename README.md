@@ -288,7 +288,10 @@ if [ -z "$JWT_CURRENT" ] || \
    [ "$JWT_CURRENT" = "change_me_random_hex" ]; then
   V=$(python3 -c 'import secrets; print(secrets.token_hex(32))')
   if grep -q '^JWT_SECRET=' .env.development; then
-    sed -i "s|^JWT_SECRET=.*|JWT_SECRET=${V}|" .env.development
+    # awk, not sed -i — GNU sed and BSD/macOS sed disagree on `-i` syntax
+    awk -v v="$V" '/^JWT_SECRET=/ { if (!done) { print "JWT_SECRET=" v; done = 1 }; next } { print }' \
+      .env.development > .env.development.tmp
+    mv .env.development.tmp .env.development
   else
     echo "JWT_SECRET=${V}" >> .env.development
   fi

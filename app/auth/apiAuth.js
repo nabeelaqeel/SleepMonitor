@@ -161,6 +161,10 @@ async function serverVerify(user, token) {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), VERIFY_TIMEOUT_MS);
   try {
+    // Same transport guard as login() — a plain-HTTP public host must not
+    // receive the bearer token during restore either. A guard throw lands
+    // in the catch and counts as 'unreachable' (session kept locally).
+    assertSecureEndpoint();
     const res = await fetch(`${API_URL}/auth/verify`, {
       headers: { Authorization: `Bearer ${token}` },
       signal: controller.signal,
