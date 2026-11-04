@@ -21,13 +21,19 @@ DATABASE_URL = os.getenv(
 )
 
 # Tokens are signed with this secret — a committed fallback would let anyone
-# forge valid JWTs, so startup refuses missing or weak values instead, plus
-# obvious placeholders (a copied .env.example must never boot as a signing key).
+# forge valid JWTs, so startup refuses missing or weak values, plus the exact
+# committed placeholders (a copied .env.example must never boot as a signing
+# key). Strong operator secrets are always accepted, even ones that merely
+# contain the word "change_me".
+_JWT_SECRET_PLACEHOLDERS = {
+    "change_me_random_hex_at_least_32_characters_long",  # current .env.example
+    "change_me_random_hex",                              # pre-hardening template
+}
 JWT_SECRET = os.getenv("JWT_SECRET", "").strip()
-if len(JWT_SECRET) < 32 or "change_me" in JWT_SECRET.lower():
+if len(JWT_SECRET) < 32 or JWT_SECRET.lower() in _JWT_SECRET_PLACEHOLDERS:
     raise RuntimeError(
-        "JWT_SECRET is missing, too weak (needs >= 32 characters), or is still a "
-        "placeholder — values containing 'change_me' are rejected. "
+        "JWT_SECRET is missing, too weak (needs >= 32 characters), or is still "
+        "a placeholder from .env.example. "
         'Generate one with: python3 -c "import secrets; print(secrets.token_hex(32));" '
         "and write the value to .env.development"
     )

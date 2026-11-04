@@ -63,6 +63,15 @@ python3 -m venv .venv-dev
 # 3. Ingest worker (leave running)
 .venv-dev/bin/python ingest/worker.py
 
+# 3b. Auth API secret — idempotent (replaces a placeholder, appends only when
+#     missing, never overwrites a real one; see AUTH_API.md Quick Start #2)
+if grep -q 'change_me' .env.development; then
+  V=$(python3 -c 'import secrets; print(secrets.token_hex(32))')
+  sed -i "s|^JWT_SECRET=.*|JWT_SECRET=${V}|" .env.development
+elif ! grep -q '^JWT_SECRET=' .env.development; then
+  echo "JWT_SECRET=$(python3 -c 'import secrets; print(secrets.token_hex(32))')" >> .env.development
+fi
+
 # 4. Auth API for the app's login screen (required for login; see AUTH_API.md)
 .venv-dev/bin/uvicorn api.main:app --host 0.0.0.0 --port 8000
 

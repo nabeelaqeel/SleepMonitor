@@ -80,37 +80,41 @@ function assertSecureEndpoint() {
 export async function login(email, password) {
   assertSecureEndpoint();
 
-  // Bound the attempt: AbortController + timeout so a hung server surfaces
-  // as a catchable error (LoginScreen re-enables the button) instead of a
-  // forever-spinning fetch.
+  // Bound the whole exchange — headers AND body — to LOGIN_TIMEOUT_MS: the
+  // timer stays armed until parsing completes (or fails), so a stalled
+  // response can never hang the flow past the timeout.
   const controller = new AbortController();
   const abortTimer = setTimeout(() => controller.abort(), LOGIN_TIMEOUT_MS);
 
-  let res;
   try {
-    res = await fetch(`${API_URL}/auth/login`, {
+    const res = await fetch(`${API_URL}/auth/login`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ email: email.trim().toLowerCase(), password }),
       signal: controller.signal,
     });
+
+    if (res.status === 401) return null;
+    if (!res.ok) throw new Error(`Login server error (HTTP ${res.status})`);
+
+    const { user, token } = await res.json();
+    await secureStoreToken(token);
+    return user; // {id, email, name, role} — never contains a password
   } catch (err) {
     if (err && err.name === 'AbortError') {
       throw new Error(
         `Login server did not respond within ${LOGIN_TIMEOUT_MS / 1000}s (${API_URL}).`
       );
     }
-    throw new Error(`Cannot reach the login server (${API_URL}). Is the API running?`);
+    if (err instanceof TypeError) {
+      // fetch's own network failure (DNS / refused / transport)
+      throw new Error(`Cannot reach the login server (${API_URL}). Is the API running?`);
+    }
+    throw err; // our own status/parse errors — LoginScreen shows their message
   } finally {
+    // Settles on EVERY path: success, 401, HTTP error, timeout, parse failure.
     clearTimeout(abortTimer);
   }
-
-  if (res.status === 401) return null;
-  if (!res.ok) throw new Error(`Login server error (HTTP ${res.status})`);
-
-  const { user, token } = await res.json();
-  await secureStoreToken(token);
-  return user; // {id, email, name, role} — never contains a password
 }
 
 export async function logout() {

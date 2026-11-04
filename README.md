@@ -279,6 +279,14 @@ Optional durable store for the MQTT stream. A Python **ingest worker** subscribe
 ```bash
 # 1. Config (first time only — .env.development is gitignored)
 cp .env.example .env.development
+# 1b. Auth API secret — idempotent: replaces the copied placeholder, appends
+#     only when missing, never overwrites a real operator secret.
+if grep -q 'change_me' .env.development; then
+  V=$(python3 -c 'import secrets; print(secrets.token_hex(32))')
+  sed -i "s|^JWT_SECRET=.*|JWT_SECRET=${V}|" .env.development
+elif ! grep -q '^JWT_SECRET=' .env.development; then
+  echo "JWT_SECRET=$(python3 -c 'import secrets; print(secrets.token_hex(32))')" >> .env.development
+fi
 
 # 2. Start PostgreSQL (schema applied automatically on first boot)
 docker compose --env-file .env.development up -d

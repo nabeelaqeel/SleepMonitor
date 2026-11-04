@@ -103,18 +103,24 @@ def ensure_setup(hash_password) -> None:
 
 
 def get_user_by_email(email: str) -> dict | None:
-    """Return the user row (incl. password_hash) or None."""
+    """Case-insensitive lookup; None when absent or ambiguous.
+
+    `users.email` constraints are case-sensitive, so identities differing
+    only by case can coexist in principle. Logging into an ambiguous match
+    would pick an arbitrary account, so more than one hit also returns None
+    — the login endpoint keeps its single generic 401 either way.
+    """
     email = email.strip().lower()
     with connection() as conn, conn.cursor() as cur:
         cur.execute(
             f"""
             SELECT {', '.join(_USER_COLS)}
             FROM users
-            WHERE email = %s
+            WHERE lower(email) = lower(%s)
             """,
             (email,),
         )
-        row = cur.fetchone()
-    if row is None:
-        return None
-    return dict(zip(_USER_COLS, row))
+        rows = cur.fetchall()
+    if len(rows) != 1:
+        return None  # 0 hits = unknown email; >1 hits = ambiguous identity
+    return dict(zip(_USER_COLS, rows[0]))

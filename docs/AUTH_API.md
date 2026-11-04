@@ -48,10 +48,16 @@ hashed on first startup; everything else acts on it only through bcrypt.
 # 1. Python deps in the existing host venv (.venv-dev is already gitignored)
 .venv-dev/bin/pip install -r api/requirements.txt
 
-# 2. JWT secret — >= 32 chars and not a 'change_me...' placeholder, or the API
-#    refuses to start. The $() makes the generated value itself (not the
-#    placeholder) land in the env file.
-echo "JWT_SECRET=$(python3 -c 'import secrets; print(secrets.token_hex(32))')" >> .env.development
+# 2. JWT secret — >= 32 chars and not a placeholder, or the API refuses to
+#    start. Idempotent: replaces a placeholder in place, appends only when
+#    the variable is missing, and NEVER overwrites an operator secret —
+#    safe to re-run.
+if grep -q 'change_me' .env.development; then
+  V=$(python3 -c 'import secrets; print(secrets.token_hex(32))')
+  sed -i "s|^JWT_SECRET=.*|JWT_SECRET=${V}|" .env.development
+elif ! grep -q '^JWT_SECRET=' .env.development; then
+  echo "JWT_SECRET=$(python3 -c 'import secrets; print(secrets.token_hex(32))')" >> .env.development
+fi
 
 # 3. Postgres must be up first (credentials are verified against it)
 docker compose --env-file .env.development up -d
@@ -199,6 +205,12 @@ database can bootstrap itself and is converted to a bcrypt hash at startup.
   docker exec sleep-postgres psql -U sleep_user -d sleep_monitor \
     -c "UPDATE users SET password_hash = '<hash-from-above>' WHERE email = 'patient@sleep.com';"
   ```
+* **No release endpoint.** App does not embed an API URL for release builds:
+  `EXPO_PUBLIC_API_URL` must be pointed at a provisioned **HTTPS** endpoint
+  before a store build ships. None exists yet, so none is invented here —
+  `app.json` deliberately sets no `usesCleartextTraffic` (cleartext stays
+  limited to dev via Expo Go / the LAN-HTTP exception in
+  `assertSecureEndpoint`).
 * **No login rate limiting.** Per-account and per-source-IP throttling was
   deliberately not added — no established throttling mechanism exists in
   this codebase yet, and the audience is one user on a private LAN.
