@@ -17,8 +17,24 @@ const TIER_CONFIG = {
                 label: 'BACKGROUND — statistics',   dot: '#6b7280' },
 };
 
+// Maps the trained model's band labels to readable UI text.
+const AI_BAND_LABELS = {
+  healthy:    'Healthy',
+  monitor:    'Monitor',
+  see_doctor: 'See Doctor',
+};
+
+function readableAiBand(band) {
+  if (typeof band !== 'string' || band.length === 0) {
+    return '—';
+  }
+  return Object.hasOwn(AI_BAND_LABELS, band)
+    ? AI_BAND_LABELS[band]
+    : band;
+}
+
 export default function HomeScreen() {
-  const { currentData, spo2History } = useSleep();
+  const { currentData, spo2History, aiRecommendation } = useSleep();
 
   const tier      = TIER_CONFIG[currentData.tier] || TIER_CONFIG.Normal;
   const spo2Color = currentData.spo2 < 90 ? '#f87171'
@@ -110,6 +126,20 @@ export default function HomeScreen() {
           </View>
         )}
 
+        {/* Sleep assessment (AI module, post-night, separate from QoS) */}
+        <View style={styles.mqttRow}>
+          <Text style={styles.mqttLabel}>Sleep assessment</Text>
+          <Text style={styles.mqttTopic}>
+            {readableAiBand(aiRecommendation?.band)}
+          </Text>
+        </View>
+
+        {/* Disclaimer */}
+        <Text style={styles.aiResultText}>
+          {aiRecommendation?.disclaimer ||
+            'Awaiting nightly analysis.'}
+        </Text>
+
         {/* MQTT topic footer */}
         <View style={styles.mqttRow}>
           <Text style={styles.mqttLabel}>MQTT topic</Text>
@@ -163,6 +193,7 @@ const styles = StyleSheet.create({
   tierLabel:   { fontSize: 13, fontWeight: '700', flex: 1 },
   tierTime:    { fontSize: 12, opacity: 0.7 },
   reasonText:  { fontSize: 11, color: '#555', marginBottom: 16, fontStyle: 'italic' },
+  aiResultText:{ fontSize: 10, color: '#4b5563', marginTop: 6, fontStyle: 'italic' },
   sectionLabel:{ fontSize: 11, color: '#555', marginBottom: 10,
                  letterSpacing: 0.5, textTransform: 'uppercase' },
   grid:        { flexDirection: 'row', flexWrap: 'wrap', gap: 10, marginBottom: 22 },

@@ -35,7 +35,12 @@ function median(sorted) {
   return Math.round(m * 100) / 100;
 }
 
-export function SleepProvider({ children }) {
+const AWAITING_AI_RECOMMENDATION = {
+  band: null,
+  disclaimer: 'Awaiting nightly analysis.',
+};
+
+export function SleepProvider({ children, patientId = null }) {
 
   const [currentData, setCurrentData] = useState({
     tier:        'Normal',
@@ -83,6 +88,9 @@ export function SleepProvider({ children }) {
   // badge. Only the patient that is actually streaming updates here.
   const [patientSnapshots, setPatientSnapshots] = useState({});
 
+  // Optional AI recommendation (post-night guidance band, non QoS tier)
+  const [aiRecommendations, setAiRecommendations] = useState({});
+
   // ── Mutable measurement state (no re-render churn) ───────────
   const pendingRef  = useRef({});                       // pingId → { t0, qos, at }
   const samplesRef  = useRef({ 0: [], 1: [], 2: [] });  // qos → [{ t, value }]
@@ -116,6 +124,12 @@ export function SleepProvider({ children }) {
       acc.base  = {};
       acc.seqs  = {};
       acc.count = {};
+      if (patientId) {
+        setAiRecommendations(prev => ({
+          ...prev,
+          [patientId]: AWAITING_AI_RECOMMENDATION,
+        }));
+      }
     }
     if (acc.base[key] === undefined) {
       const published = data.stats && data.stats[key];
@@ -163,7 +177,17 @@ export function SleepProvider({ children }) {
       return;
     }
 
-    // Session lifecycle events are not shown in the app.
+    // Optional AI recommendation (post-night guidance band, non QoS tier)
+    if (topic === 'sleep/recommendation') {
+      if (data.patientId) {
+        setAiRecommendations(prev => ({
+          ...prev,
+          [data.patientId]: data,
+        }));
+      }
+      return;
+    }
+
     if (!topic.startsWith('sleep/')) return;
 
     const now = Date.now();
@@ -315,6 +339,9 @@ export function SleepProvider({ children }) {
       latencyStats,
       sleepTimeline,
       patientSnapshots,
+      aiRecommendation: patientId
+        ? aiRecommendations[patientId] || AWAITING_AI_RECOMMENDATION
+        : AWAITING_AI_RECOMMENDATION,
     }}>
       {children}
     </SleepContext.Provider>

@@ -1,0 +1,9 @@
+# Minimal dependencies for the AI recommendation module
+joblib>=1.3,<2
+scikit-learn>=1.4,<2
+numpy>=1.24,<3
+pandas>=2.0,<4
+PyYAML>=6,<7
+paho-mqtt>=2.0,<3
+python-dotenv>=1.0,<2
+psycopg2-binary>=2.9,<3

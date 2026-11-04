@@ -57,6 +57,11 @@ mosquitto/passwd
 app/ios
 app/android
 
+# AI module artifacts (kept local, never committed)
+ai/models/rf_phase2.joblib
+ai/models/*.pkl
+ai/models/*.joblib
+
 # Claude Code agent config — local only
 .claude/
 CLAUDE.md
