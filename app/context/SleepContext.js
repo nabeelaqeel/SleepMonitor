@@ -84,7 +84,10 @@ export function SleepProvider({ children }) {
   const [patientSnapshots, setPatientSnapshots] = useState({});
 
   // Optional AI recommendation (post-night guidance band, non QoS tier)
-  const [aiRecommendation, setAiRecommendation] = useState(null);
+  const [aiRecommendation, setAiRecommendation] = useState({
+    band: null,
+    disclaimer: 'Awaiting nightly analysis.',
+  });
 
   // ── Mutable measurement state (no re-render churn) ───────────
   const pendingRef  = useRef({});                       // pingId → { t0, qos, at }

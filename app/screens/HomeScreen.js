@@ -110,15 +110,19 @@ export default function HomeScreen() {
           </View>
         )}
 
-        {/* Sleep assessment (AI module, optional) */}
-        {aiRecommendation && (
-          <View style={styles.mqttRow}>
-            <Text style={styles.mqttLabel}>Sleep assessment</Text>
-            <Text style={styles.mqttTopic}>
-              {aiRecommendation.band || '—'}
-            </Text>
-          </View>
-        )}
+        {/* Sleep assessment (AI module, post-night, separate from QoS) */}
+        <View style={styles.mqttRow}>
+          <Text style={styles.mqttLabel}>Sleep assessment</Text>
+          <Text style={styles.mqttTopic}>
+            {aiRecommendation?.band || '—'}
+          </Text>
+        </View>
+
+        {/* Disclaimer */}
+        <Text style={styles.aiResultText}>
+          {aiRecommendation?.disclaimer ||
+            'Awaiting nightly analysis.'}
+        </Text>
 
         {/* MQTT topic footer */}
         <View style={styles.mqttRow}>
@@ -173,6 +177,7 @@ const styles = StyleSheet.create({
   tierLabel:   { fontSize: 13, fontWeight: '700', flex: 1 },
   tierTime:    { fontSize: 12, opacity: 0.7 },
   reasonText:  { fontSize: 11, color: '#555', marginBottom: 16, fontStyle: 'italic' },
+  aiResultText:{ fontSize: 10, color: '#4b5563', marginTop: 6, fontStyle: 'italic' },
   sectionLabel:{ fontSize: 11, color: '#555', marginBottom: 10,
                  letterSpacing: 0.5, textTransform: 'uppercase' },
   grid:        { flexDirection: 'row', flexWrap: 'wrap', gap: 10, marginBottom: 22 },
