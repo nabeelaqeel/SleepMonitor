@@ -36,6 +36,36 @@ The model artifacts and clinical config stay local. The model is trained from
 PAAWS, not SleepMonitor data, so the app treats the output as a research
 prototype and never as a clinical finding.
 
+## Command used after nightly analysis
+
+```bash
+.venv-dev/bin/python -m ai.recommend --session-id <session-id>
+```
+
+Optionally publish the result to the broker:
+
+```bash
+.venv-dev/bin/python -m ai.recommend --session-id <session-id> --publish
+```
+
+The message is delivered on `sleep/recommendation` with:
+
+- QoS 1
+- retain false by default
+- non-diagnostic disclaimer
+
+```json
+{
+  "sessionId": "...",
+  "patientId": "...",
+  "band": "Monitor",
+  "p_positive": 0.31,
+  "thresholdFlagged": false,
+  "disclaimer": "Research guidance band only. Not a diagnosis, not clinically validated.",
+  "computedAt": "..."
+}
+```
+
 ## Related modules
 
 | Path | Purpose |
@@ -45,5 +75,6 @@ prototype and never as a clinical finding.
 | `ai/classifier.py` | Trained model wrapper |
 | `ai/nightly_adapter.py` | Session-to-nightly-feature bridge |
 | `ai/nightly.py` | Optional post-night CLI |
+| `ai/mqtt.py` | Broker publisher used by the AI module only |
 | `models/rf_phase2.joblib` | Trained model artifact (kept local, gitignored) |
 | `config/phase2.yaml` | Band boundaries and feature thresholds |
