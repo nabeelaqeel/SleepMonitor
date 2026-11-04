@@ -132,13 +132,17 @@ Real HTTP login backed by the database (replaced the former client-side `mockAut
 1. `LoginScreen` awaits `login(email, password)` from `apiAuth.js`.
 2. That POSTs `{email, password}` to `${EXPO_PUBLIC_API_URL}/auth/login` — set in `app/.env.development` with the same Metro inlining rules as `EXPO_PUBLIC_BROKER_IP` (restart Metro after changing it). The API binds `0.0.0.0:8000`, so devices reach it over the LAN: `.venv-dev/bin/uvicorn api.main:app --host 0.0.0.0 --port 8000`.
 3. The FastAPI service (`api/main.py`) bcrypt-verifies against `users.password_hash` and issues a 12-hour HS256 JWT. The hash never leaves the server; unknown email and wrong password return the same 401 message (no user enumeration).
-4. The app stores the user in AsyncStorage (`current_user`) and the JWT separately (`auth_token`); `logout()` clears both.
+4. The app stores the user in AsyncStorage (`current_user`) and the JWT in
+   `expo-secure-store` (iOS Keychain / Android Keystore; AsyncStorage
+   fallback on web, where SecureStore has no build) under `auth_token`;
+   `logout()` clears both. Restoring a session also requires the stored
+   JWT to be present and unexpired — stale pairs are wiped.
 
 | Function | Behaviour |
 |---|---|
 | `login(email, password)` | `POST /auth/login`. Resolves with the DB user `{id, email, name, role}`, `null` on 401, throws on network/server errors so the screen can show a distinct message. |
 | `storeUser(user)` | `AsyncStorage.setItem('current_user', JSON.stringify(user))` |
-| `getStoredUser()` | `AsyncStorage.getItem` → `JSON.parse`. Returns `null` on missing or corrupted data. |
+| `getStoredUser()` | Checks AsyncStorage + the stored JWT's `exp` — the session is restored only when the token exists and is unexpired; anything stale clears both (Force re-login) |
 | `logout()` | `AsyncStorage.multiRemove(['current_user', 'auth_token'])` |
 
 ### Seeded credentials (bcrypt hashes stored in the database)

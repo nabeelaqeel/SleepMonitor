@@ -17,9 +17,10 @@ from contextlib import contextmanager
 
 import psycopg2
 
-from api.config import DATABASE_URL
+from api.config import DATABASE_URL, DEMO_SEEDING_ENABLED
 
-# demo credentials are hashed at API startup, never stored in plaintext SQL
+# demo credentials are hashed at API startup; SEED_DEMO_USERS=false disables
+# this entirely so deployments can provision their own accounts instead.
 SEED_USERS = [
     {
         "user_id": "00000000-0000-0000-0000-000000000001",
@@ -58,7 +59,8 @@ def ensure_setup(hash_password) -> None:
     """Add password_hash when missing and seed demo users (hash only when empty).
 
     `hash_password` is injected (security.hash_password) so db.py has no
-    dependency on the hashing layer.
+    dependency on the hashing layer. Demo seeding respects SEED_DEMO_USERS
+    (api.config) — schema migration runs regardless.
     """
     with connection() as conn, conn.cursor() as cur:
         cur.execute(
@@ -67,7 +69,7 @@ def ensure_setup(hash_password) -> None:
             ADD COLUMN IF NOT EXISTS password_hash VARCHAR(255) DEFAULT ''
             """
         )
-        for user in SEED_USERS:
+        for user in SEED_USERS if DEMO_SEEDING_ENABLED else []:
             cur.execute(
                 "SELECT password_hash FROM users WHERE email = %s",
                 (user["email"],),

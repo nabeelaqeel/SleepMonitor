@@ -89,14 +89,17 @@ not depend on it.
 
 ## Configuration
 
-`docker-compose.yml` reads the `POSTGRES_*` variables. The worker reads the rest.
+`docker-compose.yml` reads the `POSTGRES_*` variables; the host services read
+the rest as attributed in the table below (ingest worker, publisher, and —
+since the DB-backed login work — the auth API in `api/`).
 `.env.example` is committed; `.env.development` is gitignored (`.gitignore:35`).
 
 | Variable | Used by | Purpose |
 |---|---|---|
 | `POSTGRES_DB` / `POSTGRES_USER` / `POSTGRES_PASSWORD` | compose | Container bootstrap |
 | `DATABASE_URL` | worker, api | Host-side DSN (`postgresql://user:pw@localhost:5432/db`) |
-| `JWT_SECRET` | api | HS256 secret that signs login JWTs (`api/config.py`); set in `.env.development` |
+| `JWT_SECRET` | api | HS256 secret that signs login JWTs (`api/config.py`); set in `.env.development`. Must be ≥ 32 chars — the API refuses to start otherwise |
+| `SEED_DEMO_USERS` | api | Default `true`: seeds the two demo accounts. Set `false` beyond the demo deployment to provision users separately |
 | `MQTT_HOST` / `MQTT_PORT` | worker, publisher | Broker address |
 | `MQTT_USER` / `MQTT_PASSWORD` | worker, publisher | Empty for the anonymous local broker |
 | `INGEST_CLIENT_ID` | worker | Fixed client ID required to resume the persistent session |
@@ -148,11 +151,13 @@ with `ON DELETE CASCADE`, and `doctor_patients` links the two seeded users.
 Hashes are seeded **by the API at startup**, never in SQL:
 
 * `postgres/init/01_schema.sql` seeds only the identity rows (`user_id`,
-  `email`, `name`, `role`) — deliberately no plaintext password is committed.
+  `email`, `name`, `role`) — SQL never contains a password. The demo
+  password exists once as a plaintext literal in the server-side seed module
+  (`api/db.py`, `SEED_USERS`) and is converted to a bcrypt hash at startup.
 * `api/db.ensure_setup()` fills `password_hash` with `bcrypt.hashpw("1234")`
   when the column value is still empty (`ADD COLUMN IF NOT EXISTS` in the
   same idempotent pass, so databases created before the column also migrate
-  on first API start).
+  on first API start). Demo seeding is opt-out via `SEED_DEMO_USERS=false`.
 * Because seeding only fires on an empty hash, an API restart never resets a
   password changed later — and until the API runs once, a fresh database
   cannot log anyone in.

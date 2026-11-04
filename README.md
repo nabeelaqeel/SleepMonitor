@@ -113,12 +113,13 @@ Python commands are all run **from the repository root** — the scripts resolve
 
 ## Run the Full Stack
 
-Six processes make up a complete demo. Three are required — live data, login
-and the app — the others add latency measurement and database persistence.
+Six processes make up a complete demo. Each login needs **PostgreSQL + the
+Auth API**, live data needs the **Publisher + Expo app**; the others add
+latency measurement and database persistence.
 
 | # | Process | Optional? | Run from |
 |---|---|---|---|
-| 1 | PostgreSQL (Docker) | Optional — DB demo / login | repo root |
+| 1 | PostgreSQL (Docker) | Optional for the DB demo — **required for login** (credentials are bcrypt-verified against it) | repo root |
 | 2 | Ingest worker | Optional — DB demo only | repo root |
 | 3 | Auth API | **Required** — login only | repo root |
 | 4 | Echo responder | Optional — latency readout only | repo root |
@@ -311,8 +312,9 @@ See [`docs/DATABASE.md`](docs/DATABASE.md) for the schema, payload fields, and d
 Login is no longer hardcoded in the app. `app/auth/apiAuth.js` POSTs
 `{email, password}` to the FastAPI service in `api/` (host venv, port 8000),
 which bcrypt-verifies against `users.password_hash` and issues a 12-hour
-HS256 JWT. The database stores hashes only (`$2b$12$…`, cost factor 12,
-per-user salts) — no plaintext password exists in SQL or client code, and
+HS256 JWT. The database stores hashes only (`$2b$12$…`, cost factor 12, per-user
+salts) — no plaintext password is persisted there or shipped in the app
+(the demo seed password exists once, server-side, in `api/db.py`), and
 the same 401 message covers unknown emails and wrong passwords.
 
 ```bash
@@ -363,8 +365,9 @@ Password `1234` is stored as a **bcrypt hash (cost 12)** in
 [Authentication (HTTP Login)](#authentication-http-login). Both accounts are
 fixed on purpose: the project monitors a single patient with a single watch.
 
-Sessions persist across app restarts via `AsyncStorage`; the 12-hour JWT in
-`auth_token` is cleared together with the user on logout.
+Sessions persist across app restarts: the user object via `AsyncStorage`
+and the 12-hour JWT via `expo-secure-store` (device Keychain/Keystore,
+with an AsyncStorage fallback on web). Logout clears both.
 
 ---
 

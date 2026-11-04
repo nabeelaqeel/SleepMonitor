@@ -20,5 +20,19 @@ DATABASE_URL = os.getenv(
     "postgresql://sleep_user:changeme@localhost:5432/sleep_monitor",
 )
 
-# Default is for local development only — set JWT_SECRET in .env.development.
-JWT_SECRET = os.getenv("JWT_SECRET", "dev-only-secret-change-me")
+# Tokens are signed with this secret — a committed fallback would let anyone
+# forge valid JWTs, so startup refuses missing or weak values instead.
+JWT_SECRET = os.getenv("JWT_SECRET", "").strip()
+if len(JWT_SECRET) < 32:
+    raise RuntimeError(
+        "JWT_SECRET is missing or too weak (needs >= 32 characters). "
+        'Generate one with: python3 -c "import secrets; print(secrets.token_hex(32));" '
+        "and write the value to .env.development"
+    )
+
+# Demo account seeding can be turned off for anything beyond the demo
+# deployment (set SEED_DEMO_USERS=false); production users should be
+# provisioned separately with a hash from api.security.hash_password.
+DEMO_SEEDING_ENABLED = os.getenv("SEED_DEMO_USERS", "true").strip().lower() in (
+    "1", "true", "yes",
+)

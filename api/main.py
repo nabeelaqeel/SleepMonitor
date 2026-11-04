@@ -6,8 +6,9 @@ only containerised services), so physical devices reach it over the LAN:
     .venv-dev/bin/uvicorn api.main:app --host 0.0.0.0 --port 8000
 
 Endpoints:
-    GET  /auth/health   → liveness probe
-    POST /auth/login    → {user, token}  |  401 Invalid email or password
+    GET  /auth/health         → liveness probe
+    POST /auth/login          → {user, token}  |  401 Invalid email or password
+    GET  /auth/verify         → Bearer-token claims echo  |  401
 
 Login flow: bcrypt-verify against users.password_hash, then issue a HS256
 JWT (12h). The password hash never leaves the server.
@@ -18,11 +19,11 @@ from __future__ import annotations
 import logging
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, Header, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
-from api.db import ensure_setup, get_user_by_email
+from api.db import DEMO_SEEDING_ENABLED, ensure_setup, get_user_by_email
 from api.security import create_token, decode_token, hash_password, verify_password
 
 logging.basicConfig(
@@ -36,7 +37,10 @@ log = logging.getLogger("api.main")
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
     ensure_setup(hash_password)
-    log.info("Database ready: password_hash ensured, demo users seeded")
+    log.info(
+        "Database ready (demo seeding %s)",
+        "on" if DEMO_SEEDING_ENABLED else "OFF — SEED_DEMO_USERS=false",
+    )
     yield
 
 
@@ -80,8 +84,18 @@ def login(req: LoginRequest):
 
 
 @app.get("/auth/verify")
-def verify(token: str):
-    claims = decode_token(token)
+def verify(authorization: str = Header(default="")):
+    """Validate a token sent as `Authorization: Bearer <token>`.
+
+    Bearer-token in a header, never a query parameter — URLs are logged by
+    proxies and access logs, so credentials must never appear in them.
+    """
+    if not authorization.lower().startswith("bearer "):
+        raise HTTPException(
+            status_code=401,
+            detail="Authorization: Bearer <token> header required",
+        )
+    claims = decode_token(authorization[7:].strip())
     if claims is None:
         raise HTTPException(status_code=401, detail="Invalid or expired token")
     return {"sub": claims.get("sub"), "role": claims.get("role")}
