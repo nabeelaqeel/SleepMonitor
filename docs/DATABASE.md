@@ -3,8 +3,8 @@
 How MQTT readings are persisted to PostgreSQL, and how end-to-end QoS
 delivery is measured.
 
-**Last updated:** 2026-10-13
-**Branch:** `project/phase2`
+**Last updated:** 2026-11-04
+**Branch:** `feature/db-backed-login`
 
 ---
 
@@ -22,6 +22,11 @@ beneath the existing MQTT pipeline. It is deliberately split into three parts:
 Mosquitto is **not** containerised here — it already runs natively on the host
 bound to `:1883` (TCP) and `:9001` (WebSocket), so exposing it again via Docker
 would clash.
+
+A fourth host process consumes the database but not the MQTT stream: the
+**auth API** (`api/`, FastAPI) that verifies the app's login against the
+`users` table. Its full guide is [`AUTH_API.md`](AUTH_API.md); the relevant
+schema is covered in [Users & Login](#users--login) below.
 
 ### Data flow
 
@@ -53,19 +58,40 @@ docker compose --env-file .env.development up -d
 
 # 2. Python deps (host venv — gitignored)
 python3 -m venv .venv-dev
-.venv-dev/bin/pip install -r ingest/requirements.txt -r python-publisher/requirements.txt
+.venv-dev/bin/pip install -r ingest/requirements.txt -r python-publisher/requirements.txt -r api/requirements.txt
 
 # 3. Ingest worker (leave running)
 .venv-dev/bin/python ingest/worker.py
 
-# 4. Latency echo responder (leave running; beside the broker)
+# 3b. Auth API secret — inspects ONLY the JWT_SECRET assignment value:
+#     replaces it in place when empty or a known placeholder, appends when
+#     missing; never touches other values or lines (see AUTH_API.md #2).
+JWT_CURRENT=$(grep '^JWT_SECRET=' .env.development | cut -d= -f2- | head -n1)
+if [ -z "$JWT_CURRENT" ] || \
+   [ "$JWT_CURRENT" = "change_me_random_hex_at_least_32_characters_long" ] || \
+   [ "$JWT_CURRENT" = "change_me_random_hex" ]; then
+  V=$(python3 -c 'import secrets; print(secrets.token_hex(32))')
+  if grep -q '^JWT_SECRET=' .env.development; then
+    # awk, not sed -i — GNU sed and BSD/macOS sed disagree on `-i` syntax
+    awk -v v="$V" '/^JWT_SECRET=/ { if (!done) { print "JWT_SECRET=" v; done = 1 }; next } { print }' \
+      .env.development > .env.development.tmp
+    mv .env.development.tmp .env.development
+  else
+    echo "JWT_SECRET=${V}" >> .env.development
+  fi
+fi
+
+# 4. Auth API for the app's login screen (required for login; see AUTH_API.md)
+.venv-dev/bin/uvicorn api.main:app --host 0.0.0.0 --port 8000
+
+# 5. Latency echo responder (leave running; beside the broker)
 .venv-dev/bin/python python-publisher/echo.py
 
-# 5. Publisher — in another shell (it reads .env.development itself)
+# 6. Publisher — in another shell (it reads .env.development itself)
 LOOP_CSV=false PUBLISH_INTERVAL=0.05 \
   .venv-dev/bin/python python-publisher/publisher.py
 
-# 6. Inspect
+# 7. Inspect
 docker exec sleep-postgres psql -U sleep_user -d sleep_monitor \
   -c "SELECT * FROM session_stats;"
 ```
@@ -81,13 +107,17 @@ not depend on it.
 
 ## Configuration
 
-`docker-compose.yml` reads the `POSTGRES_*` variables. The worker reads the rest.
+`docker-compose.yml` reads the `POSTGRES_*` variables; the host services read
+the rest as attributed in the table below (ingest worker, publisher, and —
+since the DB-backed login work — the auth API in `api/`).
 `.env.example` is committed; `.env.development` is gitignored (`.gitignore:35`).
 
 | Variable | Used by | Purpose |
 |---|---|---|
 | `POSTGRES_DB` / `POSTGRES_USER` / `POSTGRES_PASSWORD` | compose | Container bootstrap |
-| `DATABASE_URL` | worker | Host-side DSN (`postgresql://user:pw@localhost:5432/db`) |
+| `DATABASE_URL` | worker, api | Host-side DSN (`postgresql://user:pw@localhost:5432/db`) |
+| `JWT_SECRET` | api | HS256 secret that signs login JWTs (`api/config.py`); set in `.env.development`. Must be ≥ 32 chars and not a placeholder — the API refuses to start otherwise |
+| `SEED_DEMO_USERS` | api | Default `true`: seeds the two demo accounts. Set `false` beyond the demo deployment to provision users separately |
 | `MQTT_HOST` / `MQTT_PORT` | worker, publisher | Broker address |
 | `MQTT_USER` / `MQTT_PASSWORD` | worker, publisher | Empty for the anonymous local broker |
 | `INGEST_CLIENT_ID` | worker | Fixed client ID required to resume the persistent session |
@@ -118,6 +148,40 @@ volume is empty). To re-apply after editing, destroy the volume:
 `readings.session_id` and `alerts.session_id` reference `sessions(session_id)`,
 so the session row must exist before any reading is inserted — the worker
 guarantees this (see below).
+
+### Users & Login
+
+The `users` table backs the app's login screen (full service guide:
+[`AUTH_API.md`](AUTH_API.md)):
+
+| Column | Type | Notes |
+|---|---|---|
+| `user_id` | UUID (PK) | Fixed for the seeded users — `…0001` doctor, `…0002` patient |
+| `email` | VARCHAR(255), UNIQUE | Lookup key for login |
+| `name`, `role` | VARCHAR | `role` drives which navigator the app renders |
+| `password_hash` | VARCHAR(255), default `''` | **bcrypt** hash in the `$2b$12$` format — cost factor 12, per-user 16-byte salt embedded in the hash; never a plaintext password |
+| `created_at` | TIMESTAMPTZ | |
+
+The `users` table is also the FK parent of everything the ingest pipeline
+writes: `sessions`, `readings`, and `alerts` all reference `users(user_id)`
+with `ON DELETE CASCADE`, and `doctor_patients` links the two seeded users.
+
+Hashes are seeded **by the API at startup**, never in SQL:
+
+* `postgres/init/01_schema.sql` seeds only the identity rows (`user_id`,
+  `email`, `name`, `role`) — SQL never contains a password. The demo
+  password exists once as a plaintext literal in the server-side seed module
+  (`api/db.py`, `SEED_USERS`) and is converted to a bcrypt hash at startup.
+* `api/db.ensure_setup()` fills `password_hash` with `bcrypt.hashpw("1234")`
+  when the column value is still empty (`ADD COLUMN IF NOT EXISTS` in the
+  same idempotent pass, so databases created before the column also migrate
+  on first API start). Demo seeding is opt-out via `SEED_DEMO_USERS=false`.
+* Because seeding only fires on an empty hash, an API restart never resets a
+  password changed later — and until the API runs once, a fresh database
+  cannot log anyone in.
+
+Demo credentials: `doctor@sleep.com` / `patient@sleep.com`, password `1234`
+(bcrypt of it, plus JWT issuance, in [`AUTH_API.md`](AUTH_API.md)).
 
 ---
 
@@ -299,6 +363,7 @@ of urgent data under an unreliable consumer.
 | `ingest/requirements.txt` | new | `paho-mqtt`, `psycopg2-binary`, `python-dotenv` |
 | `postgres/init/01_schema.sql` | modified | `seq`, `published_at`, unique keys, delivery columns |
 | `python-publisher/publisher.py` | modified | Session lifecycle, `seq`/`publishedAt`, VERSION2, LWT |
+| `api/` | new | Auth backend: `main.py` (FastAPI), `db.py` (users access + seeding), `security.py` (bcrypt + JWT), `config.py` (env) |
 | `.gitignore` | modified | `.venv-dev/`, `__pycache__/`, `*.py[cod]` |
 
 ---

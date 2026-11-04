@@ -12,7 +12,7 @@ import { SafeAreaProvider } from 'react-native-safe-area-context';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
 
 import { SleepProvider } from './context/SleepContext';
-import { getStoredUser, logout } from './auth/mockAuth';
+import { getStoredUser, logout, startSessionWatch } from './auth/apiAuth';
 import LoginScreen     from './screens/LoginScreen';
 import DoctorNavigator from './navigation/DoctorNavigator';
 
@@ -78,10 +78,18 @@ export default function App() {
   useEffect(() => {
     (async () => {
       const stored = await getStoredUser();
-      if (stored) setUser(stored);
+      setUser(stored);
       setLoading(false);
     })();
   }, []);
+
+  // Re-validate the exp every minute for EVERY authenticated session —
+  // including one created after this screen mounted — and stop the watcher
+  // on logout/unmount (the effect's cleanup) so no stale callback can fire.
+  useEffect(() => {
+    if (!user) return undefined; // splash / logged-out — nothing to watch
+    return startSessionWatch(() => setUser(null));
+  }, [user && user.id]);
 
   function handleLoginSuccess(loggedInUser) {
     setUser(loggedInUser);

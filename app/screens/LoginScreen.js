@@ -10,7 +10,7 @@ import {
   Platform,
 } from 'react-native';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
-import { login, storeUser } from '../auth/mockAuth';
+import { login, storeUser } from '../auth/apiAuth';
 
 export default function LoginScreen({ onLoginSuccess }) {
   const [email, setEmail]       = useState('');
@@ -23,20 +23,24 @@ export default function LoginScreen({ onLoginSuccess }) {
     setError('');
     setLoading(true);
 
-    // Tiny artificial delay so the loading state is visible
-    await new Promise(r => setTimeout(r, 500));
+    try {
+      // Real login: POST /auth/login against the FastAPI service (api/).
+      // Resolves with the DB user, null for bad credentials, throws on
+      // network/server errors.
+      const user = await login(email, password);
 
-    const user = login(email.trim().toLowerCase(), password);
+      if (!user) {
+        setError('Invalid email or password');
+        return;
+      }
 
-    if (!user) {
-      setError('Invalid email or password');
+      await storeUser(user);
+      onLoginSuccess(user);
+    } catch (err) {
+      setError(err.message || 'Login failed');
+    } finally {
       setLoading(false);
-      return;
     }
-
-    await storeUser(user);
-    setLoading(false);
-    onLoginSuccess(user);
   }
 
   return (

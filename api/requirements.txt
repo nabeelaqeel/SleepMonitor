@@ -1,0 +1,8 @@
+# Auth API — install into .venv-dev (host venv, same as the ingest worker)
+#   .venv-dev/bin/pip install -r api/requirements.txt
+#   .venv-dev/bin/uvicorn api.main:app --host 0.0.0.0 --port 8000
+fastapi
+uvicorn[standard]
+psycopg2-binary
+bcrypt
+python-jose[cryptography]
