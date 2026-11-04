@@ -34,6 +34,11 @@ def session_to_nightly_features(
         df["rmssd_ms"] = df["hrv"]
     if "activity" not in df and "motion" in df:
         df["activity"] = df["motion"]
+    if "hr" not in df:
+        for key in ("heartRate", "heart_rate"):
+            if key in df:
+                df["hr"] = df[key]
+                break
     nightly = aggregate_nightly(df, cfg.features)
     if session_id:
         nightly["session_id"] = session_id

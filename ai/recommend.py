@@ -57,7 +57,11 @@ def main() -> int:
         print("No readings found for session %s" % session_id, file=__import__("sys").stderr)
         return 1
 
-    result = get_recommendation(readings, session_id=session_id)
+    result = get_recommendation(
+        readings,
+        session_id=session_id,
+        patient_id=readings[0].get("patient_id"),
+    )
     payload = recommendation_payload(result)
     if args.publish:
         publish(args.topic, payload, qos=args.qos, retain=args.retain)
