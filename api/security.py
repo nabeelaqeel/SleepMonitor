@@ -8,6 +8,7 @@ default is for local development only.
 
 from __future__ import annotations
 
+import os
 from datetime import datetime, timedelta, timezone
 
 import bcrypt
@@ -17,6 +18,22 @@ from api.config import JWT_SECRET
 
 JWT_ALGORITHM = "HS256"
 JWT_TTL_HOURS = 12
+
+_dummy_hash_cache: str | None = None
+
+
+def get_dummy_hash() -> str:
+    """bcrypt hash of an in-memory random string — never a real password.
+
+    Used by /auth/login so unknown emails pay the same bcrypt cost as real
+    accounts; the 401 timing then no longer reveals which addresses exist.
+    Regenerated per process start, never committed or client-known.
+    """
+    global _dummy_hash_cache
+    if _dummy_hash_cache is None:
+        secret = os.urandom(24).hex()
+        _dummy_hash_cache = hash_password(secret)
+    return _dummy_hash_cache
 
 
 def hash_password(plain: str) -> str:

@@ -63,13 +63,19 @@ python3 -m venv .venv-dev
 # 3. Ingest worker (leave running)
 .venv-dev/bin/python ingest/worker.py
 
-# 3b. Auth API secret — idempotent (replaces a placeholder, appends only when
-#     missing, never overwrites a real one; see AUTH_API.md Quick Start #2)
-if grep -q 'change_me' .env.development; then
+# 3b. Auth API secret — inspects ONLY the JWT_SECRET assignment value:
+#     replaces it in place when empty or a known placeholder, appends when
+#     missing; never touches other values or lines (see AUTH_API.md #2).
+JWT_CURRENT=$(grep '^JWT_SECRET=' .env.development | cut -d= -f2- | head -n1)
+if [ -z "$JWT_CURRENT" ] || \
+   [ "$JWT_CURRENT" = "change_me_random_hex_at_least_32_characters_long" ] || \
+   [ "$JWT_CURRENT" = "change_me_random_hex" ]; then
   V=$(python3 -c 'import secrets; print(secrets.token_hex(32))')
-  sed -i "s|^JWT_SECRET=.*|JWT_SECRET=${V}|" .env.development
-elif ! grep -q '^JWT_SECRET=' .env.development; then
-  echo "JWT_SECRET=$(python3 -c 'import secrets; print(secrets.token_hex(32))')" >> .env.development
+  if grep -q '^JWT_SECRET=' .env.development; then
+    sed -i "s|^JWT_SECRET=.*|JWT_SECRET=${V}|" .env.development
+  else
+    echo "JWT_SECRET=${V}" >> .env.development
+  fi
 fi
 
 # 4. Auth API for the app's login screen (required for login; see AUTH_API.md)

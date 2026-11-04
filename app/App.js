@@ -12,7 +12,7 @@ import { SafeAreaProvider } from 'react-native-safe-area-context';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
 
 import { SleepProvider } from './context/SleepContext';
-import { getStoredUser, logout } from './auth/apiAuth';
+import { getStoredUser, logout, startSessionWatch } from './auth/apiAuth';
 import LoginScreen     from './screens/LoginScreen';
 import DoctorNavigator from './navigation/DoctorNavigator';
 
@@ -78,8 +78,13 @@ export default function App() {
   useEffect(() => {
     (async () => {
       const stored = await getStoredUser();
-      if (stored) setUser(stored);
+      setUser(stored);
       setLoading(false);
+      if (stored) {
+        // The JWT's exp is re-checked every minute while authenticated, so an
+        // expired session drops the app back to the login screen on its own.
+        startSessionWatch(() => setUser(null));
+      }
     })();
   }, []);
 

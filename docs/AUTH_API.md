@@ -48,15 +48,19 @@ hashed on first startup; everything else acts on it only through bcrypt.
 # 1. Python deps in the existing host venv (.venv-dev is already gitignored)
 .venv-dev/bin/pip install -r api/requirements.txt
 
-# 2. JWT secret — >= 32 chars and not a placeholder, or the API refuses to
-#    start. Idempotent: replaces a placeholder in place, appends only when
-#    the variable is missing, and NEVER overwrites an operator secret —
-#    safe to re-run.
-if grep -q 'change_me' .env.development; then
+# 2. JWT secret — inspects ONLY the JWT_SECRET assignment value: replaces it
+#    in place when empty or a known placeholder, appends when missing, and
+#    leaves every other value (and line) untouched. Safe to re-run.
+JWT_CURRENT=$(grep '^JWT_SECRET=' .env.development | cut -d= -f2- | head -n1)
+if [ -z "$JWT_CURRENT" ] || \
+   [ "$JWT_CURRENT" = "change_me_random_hex_at_least_32_characters_long" ] || \
+   [ "$JWT_CURRENT" = "change_me_random_hex" ]; then
   V=$(python3 -c 'import secrets; print(secrets.token_hex(32))')
-  sed -i "s|^JWT_SECRET=.*|JWT_SECRET=${V}|" .env.development
-elif ! grep -q '^JWT_SECRET=' .env.development; then
-  echo "JWT_SECRET=$(python3 -c 'import secrets; print(secrets.token_hex(32))')" >> .env.development
+  if grep -q '^JWT_SECRET=' .env.development; then
+    sed -i "s|^JWT_SECRET=.*|JWT_SECRET=${V}|" .env.development
+  else
+    echo "JWT_SECRET=${V}" >> .env.development
+  fi
 fi
 
 # 3. Postgres must be up first (credentials are verified against it)

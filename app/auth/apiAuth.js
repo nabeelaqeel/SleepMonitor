@@ -26,6 +26,7 @@ const TOKEN_KEY   = 'auth_token';
 
 const API_URL = process.env.EXPO_PUBLIC_API_URL || 'http://192.168.0.29:8000';
 const LOGIN_TIMEOUT_MS = 15000; // a hung server must not freeze the login button
+const VERIFY_TIMEOUT_MS = 5000; // session cross-check at restore; best-effort
 
 // ── Token storage: secure native store, AsyncStorage on web ────────────────
 const secureGetToken = () =>
@@ -52,6 +53,17 @@ function decodeTokenPayload(token) {
 }
 
 // ── Endpoint transport guard ────────────────────────────────────────────────
+/** True only for complete dotted-quad IPv4 addresses inside the dev LAN
+ *  blocklist (10/8, 192.168/16, 172.16/12). Prefix regexes on a hostname
+ *  would let strings like "10.evil.com" masquerade as a LAN address. */
+function isPrivateIpv4(host) {
+  if (!/^\d{1,3}(\.\d{1,3}){3}$/.test(host)) return false; // whole address only
+  const octets = host.split('.').map(Number);
+  if (octets.some(o => o > 255)) return false;
+  const [a, b] = octets;
+  return a === 10 || (a === 192 && b === 168) || (a === 172 && b >= 16 && b <= 31);
+}
+
 function assertSecureEndpoint() {
   let url;
   try {
@@ -62,7 +74,7 @@ function assertSecureEndpoint() {
   const host = url.hostname;
   const loopbackOrLan =
     host === 'localhost' || host === '127.0.0.1' || host.endsWith('.local') ||
-    /^10\./.test(host) || /^192\.168\./.test(host) || /^172\.(1[6-9]|2\d|3[01])\./.test(host);
+    isPrivateIpv4(host);
   if (url.protocol === 'http:' && !loopbackOrLan) {
     throw new Error(
       `Refusing to send credentials over plain HTTP to '${host}'. ` +
@@ -122,24 +134,77 @@ export async function logout() {
   await secureDeleteToken();
 }
 
-export async function getStoredUser() {
+/** Local-only session validation: user present AND token unexpired.
+ *  Clears the stored pair on anything stale and returns null. */
+export async function checkSession() {
   try {
     const raw = await AsyncStorage.getItem(STORAGE_KEY);
     const user = raw ? JSON.parse(raw) : null;
-    const token = await secureGetToken();
+    const token = await getStoredToken();
     const payload = decodeTokenPayload(token);
     const tokenUsable = Boolean(payload) && payload.exp * 1000 > Date.now();
 
     if (user && tokenUsable) return user;
+  } catch {
+    // fall through — anything corrupt counts as stale
+  }
+  await AsyncStorage.removeItem(STORAGE_KEY);
+  await secureDeleteToken();
+  return null;
+}
 
-    // Anything stale (no token, expired token, corrupt user) forces a clean
-    // re-login instead of restoring a half-session.
+/** Cross-check the restored session against the API's /auth/verify when the
+ *  API is reachable: 'valid' (sub+role match the stored user), 'invalid'
+ *  (401 or identity mismatch — caller clears), or 'unreachable' (kept, so
+ *  offline restore still works — the API is only sometimes up on the LAN). */
+async function serverVerify(user, token) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), VERIFY_TIMEOUT_MS);
+  try {
+    const res = await fetch(`${API_URL}/auth/verify`, {
+      headers: { Authorization: `Bearer ${token}` },
+      signal: controller.signal,
+    });
+    if (res.status === 401) return 'invalid';
+    if (!res.ok) return 'unreachable'; // 5xx is not a credential verdict
+    const claims = await res.json();
+    if (claims && claims.sub === user.id && claims.role === user.role) return 'valid';
+    return 'invalid';
+  } catch {
+    return 'unreachable'; // network error or verify timeout — not a rejection
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+export async function getStoredUser() {
+  const user = await checkSession();
+  if (!user) return null;
+
+  const token = await getStoredToken();
+  const verdict = await serverVerify(user, token);
+  if (verdict === 'valid') return user;
+  if (verdict === 'invalid') {
     await AsyncStorage.removeItem(STORAGE_KEY);
     await secureDeleteToken();
     return null;
-  } catch {
-    return null;
   }
+  // 'unreachable': the locally-validated session stands until the next login
+  return user;
+}
+
+/** Re-validates the session every `intervalMs` while authenticated: when the
+ *  JWT's `exp` passes, the stored pair is cleared and `onSessionEnd` fires so
+ *  the UI can drop to the login screen. Returns a stop() handle. */
+export function startSessionWatch(onSessionEnd, intervalMs = 60000) {
+  const handle = setInterval(async () => {
+    const user = await checkSession();
+    if (!user) {
+      clearInterval(handle);
+      onSessionEnd && onSessionEnd();
+    }
+  }, intervalMs);
+  return () => clearInterval(handle);
 }
 
 export async function storeUser(user) {
