@@ -161,7 +161,7 @@ minute per row) and is simpler and self-consistent (no duplicate headers).
 
 > **Generator drift (reconcile during the ML phase):** the committed file's
 > column 4 is `rr` (respiratory rate, 12–22), but the current
-> `ml/generate_data.py` emits `minute,spo2,hr,hrv,motion,event` — i.e. `spo2`
+> `data/generate_data.py` emits `minute,spo2,hr,hrv,motion,event` — i.e. `spo2`
 > instead of `bo` and `hrv` (10–55 ms) instead of `rr`. The publisher handles
 > both spellings (`bo`→`spo2` fallback), so both files replay correctly, but a
 > regenerated CSV is **not** byte-identical to the committed one. Pick one
