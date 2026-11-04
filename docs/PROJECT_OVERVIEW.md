@@ -95,9 +95,10 @@ app/                        Expo React Native app (own project root)
   data/patients.js          seeded doctor roster
   navigation/DoctorNavigator.js   doctor tabs (Patients stack + Alerts)
 
-data/                       datasets
+data/                       datasets + generator
   sleep_data.csv            primary ML/training dataset (sleep-stage labels)
   sleep_data_realistic.csv  demo + DB-ingestion dataset (no stage labels)
+  generate_data.py          writes sleep_data_realistic.csv
 
 python-publisher/           THE REAL PIPELINE
   publisher.py              reads CSV, owns session lifecycle, publishes MQTT
@@ -121,14 +122,12 @@ postgres/init/01_schema.sql database schema (seq, published_at, password_hash, d
 docker-compose.yml          postgres only
 Makefile                    common dev tasks
 
-ml/                         dataset generation (+ upcoming risk model)
-  generate_data.py          writes data/sleep_data_realistic.csv
-benchmark/                  single-clock MQTT QoS benchmark v1
+benchmark/                  single-clock MQTT QoS benchmark (v2, measured)
   run_benchmark.py          real publisher/subscriber, netem, outage, resume, wire counters
   analyze_benchmark.py      join/dedupe, gates, recovery metrics, summaries, plots
-  results/                  canonical 75-run main study (v1)
-  results_sensitivity/      canonical 12-run 1 msg/s study
-  evaluation.py             legacy simulation — kept, not evidence
+  results_v2/               canonical 75-run main study (v2)
+  results_v2_sensitivity/   canonical 12-run 1 msg/s study
+  calibration_v2/           B/C stock-vs-AF_UNIX calibration (gate PASS)
 
 .env.example                environment template (no secrets)
 docs/                       ARCHITECTURE, DATA_MODEL, DATABASE, AUTH_API, MQTT_SETUP, PROJECT_OVERVIEW
@@ -148,16 +147,16 @@ docs/                       ARCHITECTURE, DATA_MODEL, DATABASE, AUTH_API, MQTT_S
 | Doctor dashboards | Partial | Seeded roster with a live overlay, plus an Alerts tab and session PDF export for the live patient; one patient streams at a time (true multi-patient needs per-patient topics) |
 | MQTT client | Working | Per-install persisted client ID, `cleanSession: false`, `sleep/#` + `qos/pong` at QoS 2, exponential-backoff reconnect |
 | Python publisher | Partial | Runs; owns session lifecycle + `seq`/`publishedAt`. HRV still always 35 (Issue 3) |
-| Classifier | Working | The real pipeline uses `python-publisher/classifier.py` (SpO2-only thresholds); the legacy `evaluation.py` classifier is retired |
+| Classifier | Working | The real pipeline uses `python-publisher/classifier.py` (SpO2-only thresholds); the legacy simulation classifier is retired (removed) |
 | Mosquitto broker | Working | System install on `:1883` / `:9001` (anonymous, localhost) |
 | PostgreSQL schema | Working | Extended with `seq`, `published_at`, unique keys, delivery columns |
 | Ingest worker | Working | `ingest/worker.py` — MQTT → Postgres, verified end-to-end (see `docs/DATABASE.md`) |
-| Single-clock benchmark | Complete (v1), calibration pending | 75/75 main + 12/12 sensitivity runs; 0 hard-gate failures; 12 soft netem warnings; stock-paho wake-up offset documented |
-| `benchmark/evaluation.py` | Retired | Legacy simulation — historical only, never evidence |
-| Repository hygiene | Clean | `.venv/` untracked, 1060 → ~40 tracked files, app moved to `app/`, datasets to `data/`; benchmark v1 scripts/results added |
+| Single-clock benchmark | Complete (v2) | 75/75 main + 12/12 sensitivity runs; 0 hard-gate failures; 7 netem band warnings + 1 `$SYS` note; paho wake-up offset calibrated (AF_UNIX, gate PASS) |
+| Benchmark v1 (simulation + frozen stock-paho runs) | Removed | Code and results deleted from `main`; frozen at the `benchmark-v1-frozen` tag, history in `docs/BENCHMARK_V1_HISTORY.md` |
+| Repository hygiene | Clean | `.venv/` untracked, 1060 → ~40 tracked files, app moved to `app/`, datasets to `data/` (with the generator); benchmark reduced to the canonical v2 study |
 | Docker / compose | Partial | `docker-compose.yml` on this branch runs Postgres only; the full stack is parked |
 | CI/CD pipeline | Parked | Not on this branch; on `feature/docker-cicd-infra`; commercial-AWS design, incompatible with AWS Academy Learner Lab |
-| Latency metrics | Measured (two levels) | App shows the live `RTT/2` estimate; authoritative one-way numbers come from the single-clock benchmark v1 |
+| Latency metrics | Measured (two levels) | App shows the live `RTT/2` estimate; authoritative one-way numbers come from the single-clock benchmark v2 |
 
 Status legend: **Working** · **Partial** · **Untested** · **Stub** · **Retired** · **Complete** · **Misleading** · **Fabricated** · **Not live** · **Parked**
 
@@ -180,11 +179,12 @@ master (557e0d7)                            tested prototype — tagged fyp1 —
 - Cleanup done: `.venv/` is untracked and gitignored (files kept locally),
   `CLAUDE.md` is untracked (like `.claude/`), and the legacy root files
   (`classifier.py`, `test.py`, `evaluation_results.json`) plus the stub
-  `backend-api/` are deleted. The repo is reorganised: `app/`, `data/`,
-  `ml/`, `benchmark/`.
-- Benchmark v1 scripts and canonical results (`benchmark/results/`,
-  `benchmark/results_sensitivity/`) are on this branch; see
-  `benchmark/README.md` for the methodology and the paho offset caveat.
+  `backend-api/` are deleted. The repo is reorganised: `app/`, `data/`
+  (datasets + generator), `benchmark/`.
+- Benchmark v2 is the canonical study (`results_v2/`,
+  `results_v2_sensitivity/`); the v1 code and frozen outputs were removed
+  from `main` and preserved at the `benchmark-v1-frozen` tag — see
+  `docs/BENCHMARK_V1_HISTORY.md`.
 
 ---
 
@@ -205,7 +205,9 @@ clock skew cancels. Delivery is likewise measured from distinct `seq` vs the pub
 from the single-clock benchmark.
 
 ### 2. Evaluation measures a different classifier than the app runs — ✅ Resolved by replacement
-`benchmark/evaluation.py:44-57` classified using SpO2 **and** heart rate **and**
+The retired simulation (`evaluation.py` — line refs preserved at the
+`benchmark-v1-frozen` tag; history in `docs/BENCHMARK_V1_HISTORY.md`)
+classified using SpO2 **and** heart rate **and**
 HRV, while `python-publisher/classifier.py:23-41` uses **SpO2 only** (the other
 parameters are accepted but never used). The simulated evaluation is retired;
 the single-clock benchmark imports `python-publisher/classifier.py`, so its
@@ -244,7 +246,8 @@ guarantee is visible in the app and verifiable by disconnecting/reconnecting the
 while the publisher runs.
 
 ### 6. Evaluation runs against unused topics — ✅ Resolved by replacement
-`benchmark/evaluation.py:81-85` published and subscribed on `eval/*`. The app
+The retired simulation published and subscribed on `eval/*`
+(`evaluation.py:81-85` at the `benchmark-v1-frozen` tag). The app
 subscribes only to `sleep/*`. The legacy simulation is retired; the benchmark
 uses `bench/*` topics and a dedicated measuring subscriber, so benchmark
 traffic never enters the app topics. End-to-end app delivery is checked
@@ -269,22 +272,25 @@ Root `classifier.py` (a misnamed MQTT experiment script, not a classifier),
 `test.py` (a 5-line scratch file), `evaluation_results.json` (simulated
 constants), the stub `backend-api/`, and the Docker leftovers were deleted.
 `.venv/` (1013 files, committed by accident) is untracked and gitignored, the
-Expo app moved to `app/`, datasets to `data/`, `generate_data.py` to `ml/`, and
-`evaluation.py` to `benchmark/`. The unused `mqtt` and `react-native-vector-icons`
+Expo app moved to `app/`, datasets to `data/` (with `generate_data.py`), and
+`evaluation.py` to `benchmark/` (later removed entirely with v1 — see
+`docs/BENCHMARK_V1_HISTORY.md`). The unused `mqtt` and
+`react-native-vector-icons`
 npm dependencies were removed. Tracked files: 1060 → ~40.
 
 ### 10. No automated tests
 No Jest unit tests, no end-to-end tests.
 
-### 11. Netem absolute latency includes a paho wake-up offset
+### 11. Netem absolute latency includes a paho wake-up offset — ✅ Measured, bypassed in v2
 `paho-mqtt 2.1.0` uses an internal AF_INET socketpair on `127.0.0.1` for
 cross-thread wake-ups. With `tc netem` on `lo`, the one-byte wake-up is delayed
-too, so netem absolute latency includes roughly **23 ms** of client-side
-offset. Source inspection and a runtime check support the cause; a
-stock-versus-AF_UNIX netem calibration is still pending, so the exact
-contribution is not established. Clean latency is unaffected. Report clean
-values and relative QoS ratios as the defensible comparisons; see
-`benchmark/README.md` §16.
+too, so v1 (stock paho) netem absolute latency included roughly **23 ms** of
+client-side offset. The cause is supported by source inspection, a runtime
+check and a calibration: the v2 stock-vs-AF_UNIX B/C calibration measured the
+offset at **22.9–24.0 ms** for every QoS level and switched the harness to a
+non-loopback **AF_UNIX** socketpair by default, so v2 netem values carry no
+client-side offset. Clean latency was never affected. See
+`benchmark/README.md` §16 and `docs/BENCHMARK_V1_HISTORY.md`.
 
 ---
 
@@ -292,8 +298,8 @@ values and relative QoS ratios as the defensible comparisons; see
 
 | Priority | Work | Rationale |
 |---|---|---|
-| 1 | Data processing → Random-Forest risk model (`ml/`: probability → Healthy / Monitor / See Doctor → QoS 0/1/2) | Core deliverable — replaces fixed SpO2 thresholds with a calibrated risk score (`CalibratedClassifierCV`, SpO2 < 88 rule override, hybrid PhysioNet + scaled `generate_data.py` data) |
-| 2 | Single-clock latency benchmark — ✅ Complete (v1), calibration pending | The panel's explicit ask — authoritative numbers for the write-up. 75/75 main + 12/12 sensitivity runs, 0 hard gates, 12 soft netem warnings; paho wake-up offset documented, no rerun planned |
+| 1 | AI recommendation module (`ai/`: Random-Forest risk model — probability → Healthy / Monitor / See Doctor → QoS 0/1/2) | Core deliverable — replaces fixed SpO2 thresholds with a calibrated risk score (`CalibratedClassifierCV`, SpO2 < 88 rule override, hybrid PhysioNet + scaled `data/generate_data.py` data) |
+| 2 | Single-clock latency benchmark — ✅ Complete (v2) | The panel's explicit ask — authoritative numbers for the write-up. 75/75 main + 12/12 sensitivity runs, AF_UNIX offset calibrated (gate PASS), 0 hard gates; v1 withdrawn to `benchmark-v1-frozen` |
 | 3 | On-device end-to-end demo (app disconnect/reconnect delivery + latency) | Confirms the QoS claim under interruption |
 | 4 | AWS deployment via GitHub Container Registry + SSH | Learner Lab cannot use the current ECR pipeline |
 | 5 | Automated tests (Issue 10) | Regression safety net |
@@ -319,13 +325,14 @@ Three properties must hold for the result to be defensible:
    window median; the benchmark reports the study-level distribution without
    pooling messages into a false confidence interval.)
 
-The single-clock benchmark now implements the controlled comparison. V1 has
-75 complete main runs (3 experiments × 5 conditions × 5 repetitions) and 12
-sensitivity runs, with 0 hard-gate failures and 100 % delivery in clean/netem.
+The single-clock benchmark now implements the controlled comparison. **v2**
+has 75 complete main runs (3 experiments × 5 conditions × 5 repetitions) and
+12 sensitivity runs (clean and netem only), with 0 hard-gate failures and
+100 % delivery in clean/netem.
 The main 10 msg/s study is the stress case; the 1 msg/s sensitivity study is
-the production-like pacing check. Netem absolute latency is provisional because
-of the ~23 ms paho wake-up offset documented above; clean latency and relative
-QoS comparisons are the defensible numbers. The benchmark's `bench/*` traffic
+the production-like pacing check. Netem latencies carry no client-side
+wake-up offset in v2 (Issue 11 above); clean values and relative QoS
+comparisons are the defensible numbers. The benchmark's `bench/*` traffic
 is isolated from the app's `sleep/*` topics, and the app's `RTT/2` readout
 remains an on-device estimate, not a thesis result.
 

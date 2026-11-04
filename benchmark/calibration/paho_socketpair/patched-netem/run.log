@@ -1,6 +1,0 @@
-[00:18:21] study=main  runs=1  rows/run=20  interval=1.0s  out=/tmp/opencode/sockpair-cal/calibration/patched-netem/results
-[00:18:21] config_hash=030a16e36a2ec75a  broker=2.0.18-1build3  dataset_sha=10e9df7fc380
-[00:18:21] $SYS baseline inactive sessions = 2
-[00:18:21] [1/1] A-netem-r01  scenario=netem rep=1 interval=1.0s
-[00:18:57]     done in 35.8s  unique_recv=22 sent=22 wire=2637.91 B/msg
-[00:18:57] matrix finished: completed={'complete': 1} skipped=0 failed=none

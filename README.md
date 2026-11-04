@@ -426,7 +426,8 @@ SleepMonitor/
 │
 ├── data/                             # Datasets
 │   ├── sleep_data.csv                # ML/training set (has sleep-stage labels)
-│   └── sleep_data_realistic.csv      # Demo + DB ingestion set
+│   ├── sleep_data_realistic.csv      # Demo + DB ingestion set
+│   └── generate_data.py              # Writes sleep_data_realistic.csv
 │
 ├── python-publisher/                 # MQTT publisher
 │   ├── publisher.py                  # Session lifecycle, seq/publishedAt, stats
@@ -436,7 +437,6 @@ SleepMonitor/
 ├── ingest/                           # MQTT → PostgreSQL ingest worker
 ├── api/                              # Auth backend — FastAPI, bcrypt + JWT (docs/AUTH_API.md)
 ├── postgres/init/01_schema.sql       # Database schema (applied on first boot)
-├── ml/                               # Dataset generation (training work lands here)
 ├── benchmark/                        # Latency benchmark harness (single-clock)
 ├── docker-compose.yml                # PostgreSQL service (Docker)
 ├── .env.example                      # Python env template (copy to .env.development)

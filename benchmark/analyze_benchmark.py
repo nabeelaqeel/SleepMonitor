@@ -3,8 +3,8 @@
 Analysis for the single-clock MQTT QoS benchmark.
 
 Reads benchmark/results_v2/ (main study) and, if present,
-benchmark/results_v2_sensitivity/ (1 msg/s pacing study). Pass --v1 to
-read the frozen v1 directories instead. It refuses any quick-smoke directory.
+benchmark/results_v2_sensitivity/ (1 msg/s pacing study). It refuses any
+quick-smoke directory.
 
 Per run: join sent (t0, ack) with received (t1) on (run_id, seq),
 deduplicate received rows by seq (QoS 1 retransmissions), compute
@@ -771,34 +771,27 @@ def main(argv=None):
         formatter_class=argparse.ArgumentDefaultsHelpFormatter)
     parser.add_argument("--main-dir", default=None)
     parser.add_argument("--sensitivity-dir", default=None)
-    parser.add_argument("--v1", action="store_true",
-                        help="read the frozen v1 results/ and results_sensitivity/")
     parser.add_argument("--no-sensitivity", action="store_true",
                         help="analyse the main study only")
     parser.add_argument("--no-plots", action="store_true")
     args = parser.parse_args(argv)
 
     if args.main_dir is None:
-        args.main_dir = str(BENCH_DIR / ("results" if args.v1 else "results_v2"))
+        args.main_dir = str(BENCH_DIR / "results_v2")
     if args.sensitivity_dir is None:
-        args.sensitivity_dir = str(
-            BENCH_DIR / ("results_sensitivity" if args.v1
-                         else "results_v2_sensitivity"))
+        args.sensitivity_dir = str(BENCH_DIR / "results_v2_sensitivity")
 
     main_dir = Path(args.main_dir)
     metas, main_hash = load_study(main_dir, "main")
     config = metas[0]["config"]
 
-    required = ["method_version", "tier_qos"]
-    if not args.v1:
-        required += ["socketpair", "paho_mqtt", "tcp_nodelay", "idle_max_pps"]
+    required = ["method_version", "tier_qos", "socketpair", "paho_mqtt",
+                "tcp_nodelay", "idle_max_pps"]
     for key in required:
         if key not in config:
             die(f"{main_dir}: config is missing methodology key {key!r}; "
-                f"refusing to analyse it as {'v1' if args.v1 else 'v2'}")
-    if args.v1 and config.get("socketpair") is not None:
-        die(f"{main_dir}: --v1 requested but socketpair={config.get('socketpair')!r}")
-    if not args.v1 and config.get("idle_max_pps") is None:
+                f"refusing to analyse it as v2")
+    if config.get("idle_max_pps") is None:
         die(f"{main_dir}: v2 main/sensitivity analysis requires a recorded "
             f"--idle-max-pps threshold")
 
@@ -905,7 +898,7 @@ def main(argv=None):
 
     analysis_meta = {
         "study": "main",
-        "analysis_mode": "v1" if args.v1 else "v2",
+        "analysis_mode": "v2",
         "main_dir": str(main_dir),
         "config_hash": main_hash,
         "method_version": config.get("method_version"),
