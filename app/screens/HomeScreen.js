@@ -18,7 +18,7 @@ const TIER_CONFIG = {
 };
 
 export default function HomeScreen() {
-  const { currentData, spo2History } = useSleep();
+  const { currentData, spo2History, aiRecommendation } = useSleep();
 
   const tier      = TIER_CONFIG[currentData.tier] || TIER_CONFIG.Normal;
   const spo2Color = currentData.spo2 < 90 ? '#f87171'
@@ -106,6 +106,16 @@ export default function HomeScreen() {
             <Text style={styles.alertBody}>
               SpO2 dropped to {currentData.spo2}% at {currentData.timestamp}.
               Transmitted via MQTT QoS 2 — guaranteed delivery.
+            </Text>
+          </View>
+        )}
+
+        {/* Sleep assessment (AI module, optional) */}
+        {aiRecommendation && (
+          <View style={styles.mqttRow}>
+            <Text style={styles.mqttLabel}>Sleep assessment</Text>
+            <Text style={styles.mqttTopic}>
+              {aiRecommendation.band || '—'}
             </Text>
           </View>
         )}

@@ -83,6 +83,9 @@ export function SleepProvider({ children }) {
   // badge. Only the patient that is actually streaming updates here.
   const [patientSnapshots, setPatientSnapshots] = useState({});
 
+  // Optional AI recommendation (post-night guidance band, non QoS tier)
+  const [aiRecommendation, setAiRecommendation] = useState(null);
+
   // ── Mutable measurement state (no re-render churn) ───────────
   const pendingRef  = useRef({});                       // pingId → { t0, qos, at }
   const samplesRef  = useRef({ 0: [], 1: [], 2: [] });  // qos → [{ t, value }]
@@ -163,7 +166,12 @@ export function SleepProvider({ children }) {
       return;
     }
 
-    // Session lifecycle events are not shown in the app.
+    // Optional AI recommendation (post-night guidance band, non QoS tier)
+    if (topic === 'sleep/recommendation') {
+      setAiRecommendation(data);
+      return;
+    }
+
     if (!topic.startsWith('sleep/')) return;
 
     const now = Date.now();
@@ -315,6 +323,7 @@ export function SleepProvider({ children }) {
       latencyStats,
       sleepTimeline,
       patientSnapshots,
+      aiRecommendation,
     }}>
       {children}
     </SleepContext.Provider>
