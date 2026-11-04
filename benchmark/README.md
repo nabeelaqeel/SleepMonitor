@@ -310,7 +310,8 @@ RX, so counting both would double the value.
   [`docs/BENCHMARK_V1_HISTORY.md`](../docs/BENCHMARK_V1_HISTORY.md) with this
   caveat attached.
 - **The v2 session records an idle sample.** A 10 s preflight and a 5 s per-run
-  sample read `/sys/class/net/lo/statistics`. Raw wire counters are primary;
+  sample use the same `ip -j -s link show lo` counters as the wire buckets
+  above. Raw wire counters are primary;
   idle-corrected counters are stored for diagnosis only. A run whose idle rate
   exceeds the threshold (packets/s) is **flagged**: it must be deleted and
   rerun, not
@@ -480,7 +481,7 @@ Prerequisites:
 - working sudo for netem; the driver asks once, then uses `sudo -n` and
   refreshes the sudo timestamp in the background every four minutes so a long
   matrix does not lose netem permission mid-run
-- an idle baseline measured from `/sys/class/net/lo/statistics` while those
+- an idle baseline measured from `ip -j -s link show lo` while those
   services are closed. The full main and sensitivity matrices require it as
   `--idle-max-pps` (packets/second); calibration may run record-only. The
   threshold is not guessed in the repository
@@ -619,8 +620,9 @@ not mixed with the main study.
 - State the scenario first: clean, netem or outage. Never average across them.
 - Report **median [min–max] across the five runs**, not a pooled CI.
 - For netem, show QoS 0/1 and QoS 2 separately; the ratio is the apparent
-  cost of exactly-once semantics, but it is provisional until the B/C offset
-  is measured.
+  cost of exactly-once semantics. The old "provisional until the B/C offset
+  is measured" caveat applies to the withdrawn v1 stock-paho numbers only —
+  the v2 offsets are measured (§16).
 - For outage, report the **in-window** delivery per tier and position, the
   recovery delay after reconnect (`t1 - t_on`), and the maximum in-window
   latency. Do not use a `p95 ≥ 4 s` gate: a message published late in the
@@ -628,10 +630,12 @@ not mixed with the main study.
   deterministic; the 25 % window contains no Critical reading. Frame Critical
   recovery as protocol validation on the 17 distinct clinical messages, not as
   a survival probability.
-- Netem absolute latencies include a paho wake-up offset; the A/QoS 0
-  component is measured in §16, B/C are not. Clean values are the defensible
-  results. Netem relative QoS comparisons are provisional until the B/C
-  offset is measured.
+- For v2, netem latencies carry no client-side wake-up offset (the AF_UNIX
+  socketpair does not traverse `lo`) and the stock-vs-AF_UNIX wake-up cost was
+  measured for every QoS level (22.9–24.0 ms — §16); the ~23 ms offset figures
+  apply only to the withdrawn v1 stock-paho numbers
+  (`docs/BENCHMARK_V1_HISTORY.md`). Clean values remain the most defensible
+  absolutes; treat netem numbers as a relative comparison on an impaired link.
 - Ack ≤ 50 ms belongs to clean runs; report netem ack numbers as a finding.
 - Wire overhead belongs to clean runs; label netem/outage counters as inflated.
 - The in-app RTT/2 badge is not a benchmark result.
@@ -696,8 +700,11 @@ rate was 100 % for both B and C.
 Netem A medians were 52.2–55.2 ms; B/C QoS 2 medians were 154.2–230.2 ms.
 Against the same rows of the 10 msg/s main study, the 1 msg/s netem B/C QoS 2
 medians are 0.33–0.60× the main values, i.e. the 10 msg/s netem numbers are
-substantially worse. This is a pacing effect, not evidence that slower
-publishing is always faster; the clean and outage results are unchanged.
+substantially worse. The sensitivity plan covers only the clean and netem
+scenarios (§5) — no outage runs at 1 msg/s, so no outage claim is made at
+this pacing. The netem gap is a pacing/queueing effect, not evidence that
+slower publishing is always faster; clean medians match the main study
+(≈ 0.93–1.01×).
 
 **Wire overhead (AF_UNIX canonical, no socketpair overhead).** Clean TX
 counters were **A 995.8 B / 4.00 packets per message**, **B 1084.7 / 5.54**,
@@ -725,9 +732,9 @@ list above).
 
 ## 16. Known limitation: paho wake-up offset
 
-**Cause supported by source inspection and a runtime check. The offset is
-measured for A/QoS 0; B/C under netem were not tested, so their offset is not
-quantified.**
+**Cause supported by source inspection and a runtime check.** The offset is
+measured for A/QoS 0 in the v1 calibration (that plan covered A only) and — in
+the v2 B/C calibration — directly for QoS 0, 1 and 2 (gate PASS, table below).
 
 **Status:** v1 = stock paho (frozen at the `benchmark-v1-frozen` tag). The v2
 harness patches paho's cross-thread socketpair to a non-blocking **AF_UNIX
@@ -742,10 +749,12 @@ sockets and `_packet_queue()` sending a one-byte wake-up; a runtime check
 found the sockets bound on `127.0.0.1`. With `tc netem` on `lo`, that
 wake-up byte is delayed like the MQTT traffic, so each publish can carry an
 extra loopback delay before the network loop thread wakes and writes the
-packet. The calibration below isolates this for A/QoS 0 only.
+packet. The v1 calibration isolated this for A/QoS 0 only; the v2 B/C
+calibration (below) extends the measurement to QoS 1 and 2 as well.
 
-(a) **A/QoS 0 netem offset: ~23 ms median, measured.** In the 1 msg/s
-delay-only netem calibration, `t0 -> ack_ns` was **22.9 ms stock vs 0.3 ms
+(a) **A/QoS 0 netem offset: ~23 ms median, measured** (v1 socketpair
+calibration, 2026-10-25; raw outputs are preserved at the
+`benchmark-v1-frozen` tag). `t0 -> ack_ns` was **22.9 ms stock vs 0.3 ms
 AF_UNIX** (median; p95 **32.8 vs 0.4 ms**). Stock pre values ranged from
 15.9–33.3 ms and patched from 0.17–0.41 ms, so the distributions do not
 overlap. The `ack_ns -> t1_ns` post phase was ~50 ms in both modes (median
@@ -781,9 +790,11 @@ complete (`on_publish`), not a universal network latency.
 
 (c) **Clean wire counters.** The v2 canonical clean counts (A 995.8 B /
 4.00 packets, B 1084.7 / 5.54, C 1411.9 / 11.47 per message) come from the
-AF_UNIX session with the idle check enforced, so no socketpair wake traffic in
-enabled by default and no background contamination above the threshold was
-detected. They are still **host-wide loopback counters, not MQTT-only**, and
+AF_UNIX session with the idle check enforced, so the wake-up socketpair does
+**not** contribute to the counters by default: the AF_UNIX pair writes stay
+off the loopback interface, unlike paho's stock AF_INET wake socket. No
+background contamination above the threshold was detected. They are still
+**host-wide loopback counters, not MQTT-only**, and
 absolute counters vary between sessions. For the historical contrast: the
 stock-paho counts (A 1108 · B 1274 · C 1842 B/msg) were **upper bounds** — the
 paired stock-vs-AF_UNIX calibration attributed **120.1 / 196.1 / 418.8 bytes**

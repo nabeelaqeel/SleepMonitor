@@ -10,12 +10,17 @@ the thesis narrative does not lose the evolution story.
 Everything deleted on that date is frozen in the git tag
 **`benchmark-v1-frozen`** (commit `ae10e015cf1ce74fd6440320c9d087975390205b`).
 
-Ways to look at the old files without restoring them into the working tree:
+Inspection commands (nothing is restored into the working tree):
 
 ```bash
 git show benchmark-v1-frozen:benchmark/evaluation.py   # any single file
 git show benchmark-v1-frozen:benchmark/results/		   # directory listing
-git checkout benchmark-v1-frozen -- benchmark/          # full restore (stages)
+```
+
+Restoring the v1 state into the working tree (stages the old files):
+
+```bash
+git checkout benchmark-v1-frozen -- benchmark/
 ```
 
 Relevant identifiers, for citation:

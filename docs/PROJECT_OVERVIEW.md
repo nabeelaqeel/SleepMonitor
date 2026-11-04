@@ -281,15 +281,16 @@ npm dependencies were removed. Tracked files: 1060 → ~40.
 ### 10. No automated tests
 No Jest unit tests, no end-to-end tests.
 
-### 11. Netem absolute latency includes a paho wake-up offset
+### 11. Netem absolute latency includes a paho wake-up offset — ✅ Measured, bypassed in v2
 `paho-mqtt 2.1.0` uses an internal AF_INET socketpair on `127.0.0.1` for
 cross-thread wake-ups. With `tc netem` on `lo`, the one-byte wake-up is delayed
-too, so netem absolute latency includes roughly **23 ms** of client-side
-offset. Source inspection and a runtime check support the cause; a
-stock-versus-AF_UNIX netem calibration is still pending, so the exact
-contribution is not established. Clean latency is unaffected. Report clean
-values and relative QoS ratios as the defensible comparisons; see
-`benchmark/README.md` §16.
+too, so v1 (stock paho) netem absolute latency included roughly **23 ms** of
+client-side offset. The cause is supported by source inspection, a runtime
+check and a calibration: the v2 stock-vs-AF_UNIX B/C calibration measured the
+offset at **22.9–24.0 ms** for every QoS level and switched the harness to a
+non-loopback **AF_UNIX** socketpair by default, so v2 netem values carry no
+client-side offset. Clean latency was never affected. See
+`benchmark/README.md` §16 and `docs/BENCHMARK_V1_HISTORY.md`.
 
 ---
 
@@ -324,13 +325,14 @@ Three properties must hold for the result to be defensible:
    window median; the benchmark reports the study-level distribution without
    pooling messages into a false confidence interval.)
 
-The single-clock benchmark now implements the controlled comparison. V1 has
-75 complete main runs (3 experiments × 5 conditions × 5 repetitions) and 12
-sensitivity runs, with 0 hard-gate failures and 100 % delivery in clean/netem.
+The single-clock benchmark now implements the controlled comparison. **v2**
+has 75 complete main runs (3 experiments × 5 conditions × 5 repetitions) and
+12 sensitivity runs (clean and netem only), with 0 hard-gate failures and
+100 % delivery in clean/netem.
 The main 10 msg/s study is the stress case; the 1 msg/s sensitivity study is
-the production-like pacing check. Netem absolute latency is provisional because
-of the ~23 ms paho wake-up offset documented above; clean latency and relative
-QoS comparisons are the defensible numbers. The benchmark's `bench/*` traffic
+the production-like pacing check. Netem latencies carry no client-side
+wake-up offset in v2 (Issue 11 above); clean values and relative QoS
+comparisons are the defensible numbers. The benchmark's `bench/*` traffic
 is isolated from the app's `sleep/*` topics, and the app's `RTT/2` readout
 remains an on-device estimate, not a thesis result.
 
