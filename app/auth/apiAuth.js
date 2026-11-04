@@ -25,6 +25,7 @@ const STORAGE_KEY = 'current_user';
 const TOKEN_KEY   = 'auth_token';
 
 const API_URL = process.env.EXPO_PUBLIC_API_URL || 'http://192.168.0.29:8000';
+const LOGIN_TIMEOUT_MS = 15000; // a hung server must not freeze the login button
 
 // ── Token storage: secure native store, AsyncStorage on web ────────────────
 const secureGetToken = () =>
@@ -79,15 +80,29 @@ function assertSecureEndpoint() {
 export async function login(email, password) {
   assertSecureEndpoint();
 
+  // Bound the attempt: AbortController + timeout so a hung server surfaces
+  // as a catchable error (LoginScreen re-enables the button) instead of a
+  // forever-spinning fetch.
+  const controller = new AbortController();
+  const abortTimer = setTimeout(() => controller.abort(), LOGIN_TIMEOUT_MS);
+
   let res;
   try {
     res = await fetch(`${API_URL}/auth/login`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ email: email.trim().toLowerCase(), password }),
+      signal: controller.signal,
     });
-  } catch {
+  } catch (err) {
+    if (err && err.name === 'AbortError') {
+      throw new Error(
+        `Login server did not respond within ${LOGIN_TIMEOUT_MS / 1000}s (${API_URL}).`
+      );
+    }
     throw new Error(`Cannot reach the login server (${API_URL}). Is the API running?`);
+  } finally {
+    clearTimeout(abortTimer);
   }
 
   if (res.status === 401) return null;

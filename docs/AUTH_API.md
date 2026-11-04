@@ -38,7 +38,7 @@ hashed on first startup; everything else acts on it only through bcrypt.
 | `api/main.py` | FastAPI app — endpoints, CORS, lifespan setup |
 | `api/db.py` | `users` access layer, idempotent column-add + demo-user seeding |
 | `api/security.py` | bcrypt hash/verify, JWT create/decode |
-| `api/config.py` | Loads `.env.development` first; exposes `DATABASE_URL`, `JWT_SECRET` (enforced ≥ 32 chars), `SEED_DEMO_USERS` |
+| `api/config.py` | Loads `.env.development` first; exposes `DATABASE_URL`, `JWT_SECRET` (enforced: ≥ 32 chars, no 'change_me' placeholders), `SEED_DEMO_USERS` |
 
 ---
 
@@ -48,8 +48,9 @@ hashed on first startup; everything else acts on it only through bcrypt.
 # 1. Python deps in the existing host venv (.venv-dev is already gitignored)
 .venv-dev/bin/pip install -r api/requirements.txt
 
-# 2. JWT secret — >= 32 chars or the API refuses to start. The $() makes the
-#    generated value itself (not the placeholder) land in the env file.
+# 2. JWT secret — >= 32 chars and not a 'change_me...' placeholder, or the API
+#    refuses to start. The $() makes the generated value itself (not the
+#    placeholder) land in the env file.
 echo "JWT_SECRET=$(python3 -c 'import secrets; print(secrets.token_hex(32))')" >> .env.development
 
 # 3. Postgres must be up first (credentials are verified against it)

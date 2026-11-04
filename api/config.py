@@ -21,11 +21,13 @@ DATABASE_URL = os.getenv(
 )
 
 # Tokens are signed with this secret — a committed fallback would let anyone
-# forge valid JWTs, so startup refuses missing or weak values instead.
+# forge valid JWTs, so startup refuses missing or weak values instead, plus
+# obvious placeholders (a copied .env.example must never boot as a signing key).
 JWT_SECRET = os.getenv("JWT_SECRET", "").strip()
-if len(JWT_SECRET) < 32:
+if len(JWT_SECRET) < 32 or "change_me" in JWT_SECRET.lower():
     raise RuntimeError(
-        "JWT_SECRET is missing or too weak (needs >= 32 characters). "
+        "JWT_SECRET is missing, too weak (needs >= 32 characters), or is still a "
+        "placeholder — values containing 'change_me' are rejected. "
         'Generate one with: python3 -c "import secrets; print(secrets.token_hex(32));" '
         "and write the value to .env.development"
     )

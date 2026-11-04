@@ -98,7 +98,7 @@ since the DB-backed login work — the auth API in `api/`).
 |---|---|---|
 | `POSTGRES_DB` / `POSTGRES_USER` / `POSTGRES_PASSWORD` | compose | Container bootstrap |
 | `DATABASE_URL` | worker, api | Host-side DSN (`postgresql://user:pw@localhost:5432/db`) |
-| `JWT_SECRET` | api | HS256 secret that signs login JWTs (`api/config.py`); set in `.env.development`. Must be ≥ 32 chars — the API refuses to start otherwise |
+| `JWT_SECRET` | api | HS256 secret that signs login JWTs (`api/config.py`); set in `.env.development`. Must be ≥ 32 chars and not a placeholder — the API refuses to start otherwise |
 | `SEED_DEMO_USERS` | api | Default `true`: seeds the two demo accounts. Set `false` beyond the demo deployment to provision users separately |
 | `MQTT_HOST` / `MQTT_PORT` | worker, publisher | Broker address |
 | `MQTT_USER` / `MQTT_PASSWORD` | worker, publisher | Empty for the anonymous local broker |
