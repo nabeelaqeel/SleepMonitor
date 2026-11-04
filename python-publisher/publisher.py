@@ -22,7 +22,7 @@ import pandas as pd
 import paho.mqtt.client as mqtt
 from dotenv import load_dotenv
 
-from classifier import classify
+from tier_rules import classify
 
 load_dotenv(".env.development")
 

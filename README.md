@@ -431,7 +431,7 @@ SleepMonitor/
 │
 ├── python-publisher/                 # MQTT publisher
 │   ├── publisher.py                  # Session lifecycle, seq/publishedAt, stats
-│   ├── classifier.py                 # Tier rules (SpO2 thresholds)
+│   ├── tier_rules.py                 # Single source of truth: tier thresholds + QoS
 │   └── echo.py                       # qos/ping → qos/pong latency relay
 │
 ├── ingest/                           # MQTT → PostgreSQL ingest worker

@@ -84,16 +84,27 @@ The publisher is the authoritative counter. It embeds cumulative totals in every
 
 ## Tier Classification
 
-The Python publisher applies the following threshold logic to each sensor reading:
+The shared rules live in **`python-publisher/tier_rules.py`** — the single source
+of truth imported by the publisher, the benchmark runner and the benchmark
+analysis. Edit the thresholds there and every consumer picks the change up.
 
-| Condition | Tier | Topic | QoS |
-|---|---|---|---|
-| SpO2 < 90% | Critical | `sleep/critical` | 2 |
-| SpO2 90–94% | Important | `sleep/important` | 1 |
-| SpO2 ≥ 95% (active reading) | Normal | `sleep/normal` | 0 |
-| Periodic stats flush | Background | `sleep/background` | 0 |
+Rules are evaluated strictly in this order, so overlapping ranges always
+resolve the same way (HR 45 → Important, never Normal; HR 105 → Critical,
+not Important):
 
-Additional signals (heart rate outside 40–100 BPM, HRV < 20 ms) may supplement SpO2 for tier escalation, but SpO2 is the primary discriminator.
+| # | Condition | Tier | Topic | QoS |
+|---|---|---|---|---|
+| 1 | SpO2 < 90% OR HR < 40 bpm OR HR > 100 bpm | Critical | `sleep/critical` | 2 |
+| 2 | SpO2 90–94% OR HR 40–50/90–100 bpm OR HRV < 20 ms | Important | `sleep/important` | 1 |
+| 3 | SpO2 95–100% AND HR 50–90 bpm | Normal | `sleep/normal` | 0 |
+| 4 | All other readings (out-of-band values) | Background | `sleep/background` | 0 |
+
+Boundary convention: the checks are exclusive on the Critical side
+(SpO2 = 90%, HR = 40/100 bpm land in **Important**) and inclusive on the
+Normal side (SpO2 = 95%, HR = 50/90 bpm land in **Normal**). SpO2 = 100 is
+Normal because many sensors clamp exactly at 100%. HRV < 20 ms escalates to
+Important even when SpO2 and HR look fine. Motion is accepted for the ML
+upgrade path but not used by the rule-based tiers.
 
 ---
 

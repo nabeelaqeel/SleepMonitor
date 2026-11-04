@@ -28,7 +28,10 @@ import pandas as pd
 
 BENCH_DIR = Path(__file__).resolve().parent
 TIERS = ["Critical", "Important", "Normal", "Background"]
-TIER_QOS = {"Critical": 2, "Important": 1, "Normal": 0, "Background": 0}
+
+sys.path.insert(0, str(BENCH_DIR.parent / "python-publisher"))
+
+from tier_rules import TIER_QOS  # noqa: E402
 
 
 def safe_median(series):
