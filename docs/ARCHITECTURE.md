@@ -125,23 +125,30 @@ Every context consumer re-renders on every MQTT message. At the current scale (o
 
 ## Authentication
 
-**File:** `app/auth/mockAuth.js`
+**Files:** `app/auth/apiAuth.js` (app side) · `api/` (FastAPI service, runs on the host venv) · Postgres `users` table
 
-Entirely client-side — no backend.
+Real HTTP login backed by the database (replaced the former client-side `mockAuth.js`):
+
+1. `LoginScreen` awaits `login(email, password)` from `apiAuth.js`.
+2. That POSTs `{email, password}` to `${EXPO_PUBLIC_API_URL}/auth/login` — set in `app/.env.development` with the same Metro inlining rules as `EXPO_PUBLIC_BROKER_IP` (restart Metro after changing it). The API binds `0.0.0.0:8000`, so devices reach it over the LAN: `.venv-dev/bin/uvicorn api.main:app --host 0.0.0.0 --port 8000`.
+3. The FastAPI service (`api/main.py`) bcrypt-verifies against `users.password_hash` and issues a 12-hour HS256 JWT. The hash never leaves the server; unknown email and wrong password return the same 401 message (no user enumeration).
+4. The app stores the user in AsyncStorage (`current_user`) and the JWT separately (`auth_token`); `logout()` clears both.
 
 | Function | Behaviour |
 |---|---|
-| `login(email, password)` | Synchronous `Array.find` against `MOCK_USERS`. Returns sanitised user (no password field) or `null`. |
+| `login(email, password)` | `POST /auth/login`. Resolves with the DB user `{id, email, name, role}`, `null` on 401, throws on network/server errors so the screen can show a distinct message. |
 | `storeUser(user)` | `AsyncStorage.setItem('current_user', JSON.stringify(user))` |
 | `getStoredUser()` | `AsyncStorage.getItem` → `JSON.parse`. Returns `null` on missing or corrupted data. |
-| `logout()` | `AsyncStorage.removeItem('current_user')` |
+| `logout()` | `AsyncStorage.multiRemove(['current_user', 'auth_token'])` |
 
-### Mock credentials
+### Seeded credentials (bcrypt hashes stored in the database)
 
-| Email | Password | Role |
-|---|---|---|
-| `doctor@sleep.com` | `1234` | doctor |
-| `patient@sleep.com` | `1234` | patient |
+| Email | Password | Role | user_id |
+|---|---|---|---|
+| `doctor@sleep.com` | `1234` | doctor | `00000000-0000-0000-0000-000000000001` |
+| `patient@sleep.com` | `1234` | patient | `00000000-0000-0000-0000-000000000002` |
+
+Hashes are seeded idempotently at API startup (`api/db.ensure_setup`) — only when a row's `password_hash` is still empty — so the API must start at least once before anyone can log in, and a passwords changed later are never overwritten by a restart.
 
 ---
 
@@ -201,7 +208,7 @@ Both navigators have their own `NavigationContainer` and mount exclusively (neve
 ### LoginScreen
 - **Reads:** nothing from context
 - **Local state:** `email`, `password`, `error`, `loading`, `showPass`
-- **Flow:** 500 ms artificial delay → synchronous `login()` → `storeUser()` → `onLoginSuccess(user)` callback to App.
+- **Flow:** awaits `login()` → `POST /auth/login` on the FastAPI service → `storeUser()` → `onLoginSuccess(user)` callback to App. Network failures surface their own message (e.g. API not running); wrong credentials keep the generic "Invalid email or password" error.
 
 ### PatientListScreen (doctor)
 - **Reads:** `patientSnapshots` + `sessionStats` (live overlay); the roster itself is the seeded `MOCK_PATIENTS` array from `app/data/patients.js`

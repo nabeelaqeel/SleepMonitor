@@ -101,9 +101,10 @@ npm install
 The repository has **two runtimes**:
 
 | Runtime | Where | How to run |
-|---|---|---|
+ |---|---|---|
 | Expo app | `app/` | `cd app && npx expo start` |
 | Python (publisher, echo, ingest) | repo root | `.venv-dev/bin/python <script>` |
+| Auth API (`api/`) | repo root | `.venv-dev/bin/uvicorn api.main:app --host 0.0.0.0 --port 8000` |
 
 Python commands are all run **from the repository root** — the scripts resolve `.env.development` and dataset paths relative to it.
 
@@ -111,20 +112,25 @@ Python commands are all run **from the repository root** — the scripts resolve
 
 ## Run the Full Stack
 
-Five processes make up a complete demo. Only two are required for live data in
-the app — the others add latency measurement and database persistence.
+Six processes make up a complete demo. Three are required — live data, login
+and the app — the others add latency measurement and database persistence.
 
 | # | Process | Optional? | Run from |
 |---|---|---|---|
-| 1 | PostgreSQL (Docker) | Optional — DB demo only | repo root |
+| 1 | PostgreSQL (Docker) | Optional — DB demo / login | repo root |
 | 2 | Ingest worker | Optional — DB demo only | repo root |
-| 3 | Echo responder | Optional — latency readout only | repo root |
-| 4 | Publisher | **Required** | repo root |
-| 5 | Expo app | **Required** | `app/` |
+| 3 | Auth API | **Required** — login only | repo root |
+| 4 | Echo responder | Optional — latency readout only | repo root |
+| 5 | Publisher | **Required** | repo root |
+| 6 | Expo app | **Required** | `app/` |
 
 Prerequisites: Mosquitto is running (a system service — no terminal needed), and
 the one-time setup is done (`.env.development`, `.venv-dev/`, `app/.env.development`;
 see [Installation](#installation) and [Broker Setup](#broker-setup-mosquitto)).
+
+> The app **cannot log in unless both PostgreSQL and the Auth API are running** —
+> credentials are bcrypt-verified against the database. Everything past the
+> login screen (MQTT streaming) is unaffected.
 
 ### Terminal 1 — PostgreSQL (optional)
 
@@ -139,7 +145,17 @@ docker ps --filter name=sleep-postgres   # wait until STATUS shows "healthy"
 .venv-dev/bin/python ingest/worker.py
 ```
 
-### Terminal 3 — Echo responder (optional, leave running)
+### Terminal 3 — Auth API (required for login, leave running)
+
+```bash
+.venv-dev/bin/uvicorn api.main:app --host 0.0.0.0 --port 8000
+```
+
+Startup seeds bcrypt hashes for the two demo users (only when empty) and then
+serves `POST /auth/login` on port 8000 — the app's `EXPO_PUBLIC_API_URL` must
+point at this host's LAN IP.
+
+### Terminal 4 — Echo responder (optional, leave running)
 
 ```bash
 .venv-dev/bin/python python-publisher/echo.py
@@ -148,7 +164,7 @@ docker ps --filter name=sleep-postgres   # wait until STATUS shows "healthy"
 It answers the app's latency probes. Without it the Network screen shows `—` for
 latency; everything else keeps working.
 
-### Terminal 4 — Publisher (leave running)
+### Terminal 5 — Publisher (leave running)
 
 ```bash
 .venv-dev/bin/python python-publisher/publisher.py
@@ -161,7 +177,7 @@ per published reading. For a fast replay (handy for DB demos):
 PUBLISH_INTERVAL=0.05 .venv-dev/bin/python python-publisher/publisher.py
 ```
 
-### Terminal 5 — Expo app
+### Terminal 6 — Expo app
 
 ```bash
 cd app && npx expo start
@@ -267,7 +283,7 @@ docker compose --env-file .env.development up -d
 
 # 3. Python deps in a host venv
 python3 -m venv .venv-dev
-.venv-dev/bin/pip install -r ingest/requirements.txt -r python-publisher/requirements.txt
+.venv-dev/bin/pip install -r ingest/requirements.txt -r python-publisher/requirements.txt -r api/requirements.txt
 
 # 4. Run the ingest worker and publisher — terminals 2 and 4 of
 #    "Run the Full Stack" in the README. For DB demos a fast replay is convenient:
@@ -326,9 +342,9 @@ SleepMonitor/
 │   ├── App.js                        # Root — auth state, role-based routing
 │   ├── index.js                      # Expo entry point
 │   ├── app.json                      # Expo config (new arch enabled, package IDs)
-│   ├── .env.example                  # EXPO_PUBLIC_BROKER_IP template
+│   ├── .env.example                  # EXPO_PUBLIC_BROKER_IP + EXPO_PUBLIC_API_URL templates
 │   ├── auth/
-│   │   └── mockAuth.js               # In-memory login, AsyncStorage session persistence
+│   │   └── apiAuth.js                # DB-backed login (POST /auth/login via api/), AsyncStorage session + JWT
 │   ├── context/
 │   │   └── SleepContext.js           # Global MQTT state — useSleep() hook
 │   ├── services/
@@ -434,7 +450,7 @@ Every message published to any `sleep/*` topic is a JSON object:
 
 | Issue | Impact | Planned Fix |
 |---|---|---|
-| Mock authentication | Passwords hardcoded in source; no expiry | Replace with Supabase Auth or Clerk |
+| ~~Mock authentication~~ | **Fixed — DB-backed login** (`api/` FastAPI): bcrypt hashes in `users.password_hash`, 12h JWT; demo password `1234` is still weak | Change demo password + rotate `JWT_SECRET` before a real deployment |
 | Doctor roster is mostly mock | Only the patient whose `patientId` is streaming shows live vitals; the Alerts tab and report export cover that single live session (one at a time) | Later: per-patient topics + backend for true multi-patient |
 | No tests | No safety net for regressions | Add Jest unit tests + Maestro E2E |
 | Android package is `com.anonymous.*` | Cannot be submitted to Play Store | Update `app.json` before release |

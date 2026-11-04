@@ -75,7 +75,7 @@ app/                        Expo React Native app (own project root)
   app.json                  Expo config (new arch, package IDs)
   .env.example              EXPO_PUBLIC_BROKER_IP template (copy to .env.development)
 
-  auth/mockAuth.js          hardcoded credentials + AsyncStorage session
+  auth/apiAuth.js           database-backed login (bcrypt + JWT via the api/ FastAPI service), AsyncStorage session + token
   services/mqttService.js   Paho WebSocket client (broker host via EXPO_PUBLIC_BROKER_IP)
   context/SleepContext.js   global MQTT state, useSleep() hook
 
@@ -133,7 +133,7 @@ docs/                       ARCHITECTURE, DATA_MODEL, DATABASE, MQTT_SETUP, PROJ
 
 | Component | Status | Notes |
 |---|---|---|
-| App authentication | Working | Mock credentials, persisted via `AsyncStorage` |
+| App authentication | Working | DB-backed login: bcrypt in `users.password_hash`, 12h JWT from the `api/` FastAPI service; session persisted via `AsyncStorage`. API must be running before login |
 | Patient — Home | Working | Live vitals, SpO2 sparkline, tier card |
 | Patient — Alerts | Working | Filterable event log |
 | Patient — Network | Working | Delivery measured from `seq` vs publisher `stats`; latency is estimated `RTT/2` via `echo.py` |

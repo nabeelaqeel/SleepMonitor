@@ -10,11 +10,15 @@ CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
 -- Both doctors and patients are stored here. Role determines
 -- which navigator is shown in the React Native app.
 CREATE TABLE users (
-    user_id     UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-    email       VARCHAR(255) UNIQUE NOT NULL,
-    name        VARCHAR(255) NOT NULL,
-    role        VARCHAR(20) NOT NULL CHECK (role IN ('doctor', 'patient')),
-    created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    user_id       UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    email         VARCHAR(255) UNIQUE NOT NULL,
+    name          VARCHAR(255) NOT NULL,
+    role          VARCHAR(20) NOT NULL CHECK (role IN ('doctor', 'patient')),
+    -- bcrypt hash; empty for the seeded rows — the auth API seeds the real
+    -- hash of the demo password on startup (SQL cannot compute bcrypt),
+    -- so the API must run at least once before anyone can log in.
+    password_hash VARCHAR(255) DEFAULT '',
+    created_at    TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
 -- ── Doctor ↔ Patient assignments ──────────────────────────────

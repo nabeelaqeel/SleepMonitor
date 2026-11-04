@@ -12,7 +12,7 @@ import { SafeAreaProvider } from 'react-native-safe-area-context';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
 
 import { SleepProvider } from './context/SleepContext';
-import { getStoredUser, logout } from './auth/mockAuth';
+import { getStoredUser, logout } from './auth/apiAuth';
 import LoginScreen     from './screens/LoginScreen';
 import DoctorNavigator from './navigation/DoctorNavigator';
 
