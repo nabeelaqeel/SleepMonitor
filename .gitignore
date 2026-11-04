@@ -60,3 +60,11 @@ app/android
 # Claude Code agent config — local only
 .claude/
 CLAUDE.md
+
+# Graphify — local only
+.opencode/
+AGENTS.md
+graphify-out/
+
+# Graphify ignore rules (local)
+.graphifyignore
