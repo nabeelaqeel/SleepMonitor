@@ -43,3 +43,29 @@ def session_readings(session_id: str, dsn: str | None = None) -> list[dict]:
     with psycopg2.connect(dsn) as conn:
         table = pd.read_sql_query(SQL, conn, params=(session_id,))
     return table.to_dict(orient="records")
+
+
+def latest_session_for_patient(patient_id: str, dsn: str | None = None) -> str:
+    """Return the most recent session id for a single patient."""
+    load_dotenv(".env.development")
+    dsn = dsn or os.getenv("DATABASE_URL")
+    if not dsn:
+        raise RuntimeError("DATABASE_URL not set")
+
+    import psycopg2
+
+    sql = """
+    SELECT session_id
+    FROM sessions
+    WHERE patient_id = %s
+    ORDER BY started_at DESC
+    LIMIT 1
+    """
+
+    with psycopg2.connect(dsn) as conn, conn.cursor() as cur:
+        cur.execute(sql, (patient_id,))
+        result = cur.fetchone()
+
+    if result is None:
+        raise RuntimeError(f"No session found for patient_id={patient_id}")
+    return str(result[0])

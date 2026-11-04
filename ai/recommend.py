@@ -17,7 +17,7 @@ import json
 
 from .mqtt import publish
 from .nightly_adapter import get_recommendation
-from .session_loader import session_readings
+from .session_loader import latest_session_for_patient, session_readings
 
 DEFAULT_TOPIC = "sleep/recommendation"
 
@@ -37,7 +37,9 @@ def recommendation_payload(result: dict) -> dict:
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="Post-night AI recommendation")
-    parser.add_argument("--session-id", required=True, help="UUID of the completed session")
+    group = parser.add_mutually_exclusive_group(required=True)
+    group.add_argument("--session-id", help="UUID of a specific session")
+    group.add_argument("--patient-id", help="UUID of the patient; uses that patient's latest session")
     parser.add_argument("--publish", action="store_true",
                         help="publish the result to sleep/recommendation")
     parser.add_argument("--topic", default=DEFAULT_TOPIC,
@@ -48,12 +50,14 @@ def main() -> int:
                         help="retain the message so late subscribers see it")
     args = parser.parse_args()
 
-    readings = session_readings(args.session_id)
+    session_id = args.session_id or latest_session_for_patient(args.patient_id)
+
+    readings = session_readings(session_id)
     if not readings:
-        print("No readings found for session %s" % args.session_id, file=__import__("sys").stderr)
+        print("No readings found for session %s" % session_id, file=__import__("sys").stderr)
         return 1
 
-    result = get_recommendation(readings, session_id=args.session_id)
+    result = get_recommendation(readings, session_id=session_id)
     payload = recommendation_payload(result)
     if args.publish:
         publish(args.topic, payload, qos=args.qos, retain=args.retain)
