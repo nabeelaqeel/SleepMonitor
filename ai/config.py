@@ -32,6 +32,8 @@ class FeatureConfig:
     hr_nightly_plausible_bpm: tuple[float, float] = (30.0, 120.0)
     spo2_nightly_plausible_pct: tuple[float, float] = (85.0, 100.0)
     hrv_min_nightly_epochs: int = 30
+    min_valid_reading_coverage: float = 0.5
+    max_gap_seconds: float = 60.0
 
 
 @dataclass(frozen=True)
@@ -73,6 +75,10 @@ def load_config(path: Path | str | None = None) -> Phase2Config:
             float(v) for v in feat.get("spo2_nightly_plausible_pct", (85, 100))
         ),
         hrv_min_nightly_epochs=int(feat.get("hrv_min_nightly_epochs", 30)),
+        min_valid_reading_coverage=float(
+            feat.get("min_valid_reading_coverage", 0.5)
+        ),
+        max_gap_seconds=float(feat.get("max_gap_seconds", 60)),
     )
     runtime_cfg = RuntimeConfig(
         workers=int(runtime.get("workers", 4)),

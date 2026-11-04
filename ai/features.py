@@ -107,7 +107,7 @@ def aggregate_nightly(epochs: pd.DataFrame, cfg: FeatureConfig | None = None) ->
     rmssd_valid = rmssd[np.isfinite(rmssd)]
     out["rmssd_coverage"] = round(float(np.isfinite(rmssd).mean()), 4) if n else np.nan
     out["hrv_sufficient"] = bool((np.isfinite(rmssd).sum()) >= cfg.hrv_min_nightly_epochs)
-    if len(rmssd_valid):
+    if out["hrv_sufficient"] and rmssd_valid.size:
         out["rmssd_median"] = round(float(np.median(rmssd_valid)), 2)
         out["rmssd_iqr"] = round(float(np.percentile(rmssd_valid, 75) - np.percentile(rmssd_valid, 25)), 2)
     else:

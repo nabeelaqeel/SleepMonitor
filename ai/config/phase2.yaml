@@ -35,6 +35,8 @@ features:
   hr_nightly_plausible_bpm: [30, 120]
   spo2_nightly_plausible_pct: [85, 100]
   hrv_min_nightly_epochs: 30    # >=15 min of QC-passed HRV before a nightly RMSSD is reported
+  min_valid_reading_coverage: 0.5
+  max_gap_seconds: 60
 
 runtime:
   workers: 4

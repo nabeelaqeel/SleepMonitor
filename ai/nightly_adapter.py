@@ -69,6 +69,65 @@ def _session_duration_hours(session_readings: list[dict]) -> float | None:
     return (max(timestamps) - min(timestamps)).total_seconds() / 3600.0
 
 
+def _session_quality(
+    session_readings: list[dict],
+    cfg,
+) -> tuple[float, float] | None:
+    """Measure valid-reading coverage and the largest timestamp gap."""
+    timestamps: list = []
+    for reading in session_readings:
+        ts = pd.to_datetime(
+            reading.get("timestamp", reading.get("ts")),
+            errors="coerce",
+            utc=True,
+        )
+        if pd.isna(ts):
+            continue
+
+        has_signal = any(
+            pd.notna(reading.get(key))
+            for key in ("spo2", "heartRate", "heart_rate", "hrv", "motion")
+        )
+        if has_signal:
+            timestamps.append(ts)
+
+    timestamps.sort()
+    if len(timestamps) < 2:
+        return None
+
+    duration_seconds = (timestamps[-1] - timestamps[0]).total_seconds()
+    if duration_seconds <= 0:
+        return None
+
+    expected_readings = max(1, int(duration_seconds // cfg.features.epoch_seconds))
+    coverage = len(timestamps) / expected_readings
+    max_gap_seconds = max(
+        (later - earlier).total_seconds()
+        for earlier, later in zip(timestamps, timestamps[1:])
+    )
+    return coverage, max_gap_seconds
+
+
+def _unavailable_result(
+    *,
+    session_id: str | None = None,
+    patient_id: str | None = None,
+    nightly: dict,
+) -> dict:
+    return {
+        "band": None,
+        "probabilities": {},
+        "p_positive": None,
+        "positive_class": None,
+        "flagged_positive": False,
+        "threshold": None,
+        "nightly": nightly,
+        "session_id": session_id,
+        "patient_id": patient_id,
+        "disclaimer": "AI recommendation unavailable.",
+    }
+
+
 def get_recommendation(
     session_readings: list[dict],
     *,
@@ -115,6 +174,31 @@ def get_recommendation(
             "nightly": nightly,
             "disclaimer": "AI recommendation unavailable.",
         }
+
+    quality = _session_quality(session_readings, cfg)
+    if quality is None:
+        return _unavailable_result(
+            session_id=session_id,
+            patient_id=patient_id,
+            nightly={"error": "insufficient valid readings"},
+        )
+
+    coverage, max_gap_seconds = quality
+    if (
+        coverage < cfg.features.min_valid_reading_coverage
+        or max_gap_seconds > cfg.features.max_gap_seconds
+    ):
+        return _unavailable_result(
+            session_id=session_id,
+            patient_id=patient_id,
+            nightly={
+                "error": "session does not meet coverage/gap criteria",
+                "coverage": coverage,
+                "max_gap_seconds": max_gap_seconds,
+                "min_valid_reading_coverage": cfg.features.min_valid_reading_coverage,
+                "max_gap_seconds": cfg.features.max_gap_seconds,
+            },
+        )
 
     clf: Phase2Classifier = load_classifier()
     nightly_frame = pd.DataFrame([nightly])[clf.feature_names]

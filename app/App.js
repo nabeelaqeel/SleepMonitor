@@ -127,7 +127,7 @@ export default function App() {
   // ── Logged in: Patient ──
   return (
     <SafeAreaProvider>
-      <SleepProvider>
+      <SleepProvider patientId={user.patientId || user.id}>
         <PatientNavigator onLogout={handleLogout} />
       </SleepProvider>
     </SafeAreaProvider>

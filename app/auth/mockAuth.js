@@ -16,6 +16,7 @@ export const MOCK_USERS = [
     password: '1234',
     role: 'patient',
     name: 'Ali Hassan',
+    patientId: '00000000-0000-0000-0000-000000000002',
   },
 ];
 
