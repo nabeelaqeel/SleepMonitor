@@ -66,8 +66,8 @@ Tier assignment is done with the shared rules module
 benchmark runner and the production publisher use the exact same code:
 
 - SpO2 < 90 OR HR < 40 OR HR > 100 → **Critical** (QoS 2 in B)
-- SpO2 90–94 OR HR 40–50 / 90–100 OR HRV < 20 → **Important** (QoS 1 in B)
-- SpO2 95–100 AND HR 50–90 → **Normal** (QoS 0 in B)
+- 90 ≤ SpO2 < 95 OR 40 ≤ HR < 50 OR 90 < HR ≤ 100 OR HRV < 20 → **Important** (QoS 1 in B)
+- 95 ≤ SpO2 ≤ 100 AND 50 ≤ HR ≤ 90 AND HRV ≥ 20 → **Normal** (QoS 0 in B)
 - session statistics → **Background** (QoS 0 in B, emitted every 10 readings,
   mirroring the production publisher)
 

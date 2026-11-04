@@ -39,13 +39,18 @@ def safe_median(series):
     return values.median() if len(values) else float("nan")
 
 
-def published_qos(experiment, tier):
-    """A publishes everything at QoS 0, C everything at QoS 2; B is tiered."""
+def published_qos(experiment, tier, tier_qos=None):
+    """A publishes everything at QoS 0, C everything at QoS 2; B is tiered.
+
+    tier_qos is the tier→QoS map recorded in the study's own config
+    (config["tier_qos"]); it falls back to the current tier_rules.py map
+    for archives recorded before the map was embedded in the results.
+    """
     if experiment == "A":
         return 0
     if experiment == "C":
         return 2
-    return TIER_QOS[tier]
+    return (tier_qos or TIER_QOS)[tier]
 TIER_COLORS = {"Critical": "#d62728", "Important": "#ff7f0e",
                "Normal": "#2ca02c", "Background": "#7f7f7f"}
 
@@ -282,13 +287,40 @@ def a_netem_on_publish_gate(frames, config, hard, notes):
                      f"{len(pooled)} run(s) with samples; note only)")
 
 
+def recorded_qos_mismatches(frames, tier_qos):
+    """Find runs whose sent experiment-B qos values contradict the map."""
+    findings = []
+    for f in frames:
+        sent_b = f[f["experiment"] == "B"]
+        if sent_b.empty:
+            continue
+        expected = sent_b["tier"].map(tier_qos)
+        if expected.isna().any():
+            findings.append((str(sent_b["run_id"].iloc[0]),
+                             "unknown tier in sent log"))
+            continue
+        mismatch = int((sent_b["qos"].astype(int)
+                        != expected.astype(int)).sum())
+        if mismatch:
+            findings.append((str(sent_b["run_id"].iloc[0]), mismatch))
+    return findings
+
+
 def sanity_checks(run_df, agg, frames, config):
     hard, soft, notes = [], [], []
     interval_ms = config["pacing_interval_s"] * 1000.0
     expected_rows = config["dataset_rows"]
-    if config.get("tier_qos") != TIER_QOS:
-        hard.append(f"config tier→QoS map {config.get('tier_qos')} does not match "
-                    f"the analysis map {TIER_QOS}")
+    # The study is judged by the tier→QoS map recorded at run time, not by
+    # whichever map tier_rules.py defines today. Old archives are compared
+    # against the recorded map (informationally below); the recorded map
+    # itself is validated against the messages that were actually sent.
+    tier_qos = config.get("tier_qos") or TIER_QOS
+    if tier_qos != TIER_QOS:
+        notes.append(f"recorded tier→QoS map {tier_qos} differs from the "
+                     f"current tier_rules.py map {TIER_QOS}")
+    for run_id, detail in recorded_qos_mismatches(frames, tier_qos):
+        hard.append(f"{run_id}: {detail} violating the recorded tier→QoS map "
+                    f"{tier_qos}")
 
     for row in run_df.itertuples():
         rid = row.run_id
@@ -341,7 +373,7 @@ def sanity_checks(run_df, agg, frames, config):
 
     netem = agg[agg["scenario"] == "netem"]
     for row in netem.itertuples():
-        qos = published_qos(row.experiment, row.tier)
+        qos = published_qos(row.experiment, row.tier, tier_qos)
         if qos <= 1:
             low, high = 30.0, 80.0
         else:
@@ -368,7 +400,7 @@ def sanity_checks(run_df, agg, frames, config):
 
     outage = agg[(agg["scenario"] == "outage") & agg["position"].notna()]
     for row in outage.itertuples():
-        qos = published_qos(row.experiment, row.tier)
+        qos = published_qos(row.experiment, row.tier, tier_qos)
         if qos == 0:
             if row.delivery_in_pct_median > 5:
                 soft.append(f"outage {row.experiment}/{row.tier}/p{int(row.position*100):02d}: "

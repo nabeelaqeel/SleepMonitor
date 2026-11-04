@@ -50,9 +50,13 @@ All four MQTT topics share the same JSON payload schema. The publisher construct
 | `topic` | string | Yes | MQTT topic name, echoed inside the payload and shown in the event log |
 | `stats` | object | No | Cumulative session counters maintained by the publisher |
 
-`sleep/background` messages carry `sessionId`, `patientId` and `publishedAt` but **no `seq`**;
-the ingest worker ignores them (session statistics are computed from the readings
-themselves). See `docs/DATABASE.md`.
+`sleep/background` carries two message types: **Background-tier readings**
+(out-of-band values classified by `tier_rules.py`) and **periodic statistics**:
+the statistics message carries `sessionId`, `patientId` and `publishedAt` but
+**no `seq`**. Consumers must distinguish by `seq` presence — readings (any
+tier, with `seq`) are persisted and shown live; stats messages are skipped for
+storage and the vitals display, but still update session/network statistics.
+See `docs/DATABASE.md`.
 
 ### Session Lifecycle Messages
 
@@ -95,8 +99,8 @@ not Important):
 | # | Condition | Tier | Topic | QoS |
 |---|---|---|---|---|
 | 1 | SpO2 < 90% OR HR < 40 bpm OR HR > 100 bpm | Critical | `sleep/critical` | 2 |
-| 2 | SpO2 90–94% OR HR 40–50/90–100 bpm OR HRV < 20 ms | Important | `sleep/important` | 1 |
-| 3 | SpO2 95–100% AND HR 50–90 bpm | Normal | `sleep/normal` | 0 |
+| 2 | 90 ≤ SpO2 < 95% OR 40 ≤ HR < 50 bpm OR 90 < HR ≤ 100 bpm OR HRV < 20 ms | Important | `sleep/important` | 1 |
+| 3 | 95 ≤ SpO2 ≤ 100% AND 50 ≤ HR ≤ 90 bpm AND HRV ≥ 20 ms | Normal | `sleep/normal` | 0 |
 | 4 | All other readings (out-of-band values) | Background | `sleep/background` | 0 |
 
 Boundary convention: the checks are exclusive on the Critical side

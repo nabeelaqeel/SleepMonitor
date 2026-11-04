@@ -15,11 +15,11 @@ that tier's urgency. An Expo React Native app (`app/`) subscribes to the broker
 over WebSocket and renders patient and doctor dashboards.
 
 | Tier | Trigger Condition | MQTT Topic | QoS | Colour |
-|---|---|---|---|
-| Critical | SpO2 < 90% OR HR < 40/ > 100 bpm | `sleep/critical` | 2 — Exactly once | Red |
-| Important | SpO2 90–94% OR HR 40–50/90–100 bpm OR HRV < 20 ms | `sleep/important` | 1 — At least once | Amber |
-| Normal | SpO2 95–100% AND HR 50–90 bpm | `sleep/normal` | 0 — Best effort | Green |
-| Background | All other readings | `sleep/background` | 0 — Best effort | Grey |
+|---|---|---|---|---|
+| Critical | SpO2 < 90% OR HR < 40 OR HR > 100 bpm | `sleep/critical` | 2 — Exactly once | Red |
+| Important | 90 ≤ SpO2 < 95% OR 40 ≤ HR < 50 OR 90 < HR ≤ 100 bpm OR HRV < 20 ms | `sleep/important` | 1 — At least once | Amber |
+| Normal | 95 ≤ SpO2 ≤ 100% AND 50 ≤ HR ≤ 90 bpm AND HRV ≥ 20 ms | `sleep/normal` | 0 — Best effort | Green |
+| Background | All other readings + periodic session stats | `sleep/background` | 0 — Best effort | Grey |
 
 **Thesis claim:** routing clinically urgent data at higher QoS improves the
 reliability of critical-event delivery compared with uniform (non-prioritised)
