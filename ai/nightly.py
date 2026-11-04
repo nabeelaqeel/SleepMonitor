@@ -58,7 +58,7 @@ def to_dicts_from_csv(csv_path: Path) -> list[dict]:
     df = pd.read_csv(csv_path)
     # The demo CSV uses these columns; `hrv` may not exist.
     careful = df.copy()
-    careful["timestamp"] = pd.to_datetime(careful["minute"] * 1000, unit="s", utc=True)
+    careful["timestamp"] = pd.to_datetime(careful["minute"] * 60, unit="s", utc=True)
     for c in ("spo2", "heartRate", "hrv", "motion"):
         if c not in careful.columns:
             careful[c] = None

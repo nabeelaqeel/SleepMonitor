@@ -28,7 +28,9 @@ function readableAiBand(band) {
   if (typeof band !== 'string' || band.length === 0) {
     return '—';
   }
-  return AI_BAND_LABELS[band] || band;
+  return Object.hasOwn(AI_BAND_LABELS, band)
+    ? AI_BAND_LABELS[band]
+    : band;
 }
 
 export default function HomeScreen() {
