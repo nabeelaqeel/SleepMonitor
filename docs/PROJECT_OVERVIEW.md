@@ -110,7 +110,14 @@ ingest/                     DATABASE INGEST
   db.py                     idempotent Postgres access layer
   requirements.txt
 
-postgres/init/01_schema.sql database schema (seq, published_at, delivery columns)
+api/                        AUTH (FASTAPI, HOST VENV) — see docs/AUTH_API.md
+  main.py                   FastAPI app — POST /auth/login, JWT issue, CORS
+  db.py                     users access + idempotent bcrypt seeding (hash only when empty)
+  security.py               bcrypt hash/verify, HS256 JWT (12h expiry)
+  config.py                 loads .env.development first (DATABASE_URL, JWT_SECRET)
+  requirements.txt
+
+postgres/init/01_schema.sql database schema (seq, published_at, password_hash, delivery columns)
 docker-compose.yml          postgres only
 Makefile                    common dev tasks
 
@@ -124,7 +131,7 @@ benchmark/                  single-clock MQTT QoS benchmark v1
   evaluation.py             legacy simulation — kept, not evidence
 
 .env.example                environment template (no secrets)
-docs/                       ARCHITECTURE, DATA_MODEL, DATABASE, MQTT_SETUP, PROJECT_OVERVIEW
+docs/                       ARCHITECTURE, DATA_MODEL, DATABASE, AUTH_API, MQTT_SETUP, PROJECT_OVERVIEW
 ```
 
 ---
@@ -331,7 +338,8 @@ remains an on-device estimate, not a thesis result.
 | `README.md` | Setup, running instructions, payload schema, limitations |
 | `docs/ARCHITECTURE.md` | App bootstrapping, state shape, component responsibilities |
 | `docs/DATA_MODEL.md` | Payload fields and app state mapping |
-| `docs/DATABASE.md` | Postgres schema, ingest worker, QoS delivery accounting |
+| `docs/DATABASE.md` | Postgres schema, ingest worker, QoS delivery accounting; users + password_hash |
+| `docs/AUTH_API.md` | Login API: runbook, endpoints, JWT design, bcrypt/HS256 security summary |
 | `docs/MQTT_SETUP.md` | Broker configuration and topic layout |
 | `docs/DOCKER.md` | Containers, image tagging, CI/CD, branching *(on `feature/docker-cicd-infra`)* |
 | `docs/AWS_MIGRATION.md` | Target AWS architecture *(on `feature/docker-cicd-infra`)* |

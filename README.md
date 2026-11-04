@@ -13,6 +13,7 @@ A QoS-aware real-time sleep monitoring system built as a Final Year Project (FYP
 - [Run the Full Stack](#run-the-full-stack)
 - [Broker Setup (Mosquitto)](#broker-setup-mosquitto)
 - [Database & Ingest (PostgreSQL)](#database--ingest-postgresql)
+- [Authentication (HTTP Login)](#authentication-http-login)
 - [Running the App](#running-the-app)
 - [Test Credentials](#test-credentials)
 - [Project Structure](#project-structure)
@@ -305,6 +306,33 @@ See [`docs/DATABASE.md`](docs/DATABASE.md) for the schema, payload fields, and d
 
 ---
 
+## Authentication (HTTP Login)
+
+Login is no longer hardcoded in the app. `app/auth/apiAuth.js` POSTs
+`{email, password}` to the FastAPI service in `api/` (host venv, port 8000),
+which bcrypt-verifies against `users.password_hash` and issues a 12-hour
+HS256 JWT. The database stores hashes only (`$2b$12$…`, cost factor 12,
+per-user salts) — no plaintext password exists in SQL or client code, and
+the same 401 message covers unknown emails and wrong passwords.
+
+```bash
+# Terminal 3 — required for login (after PostgreSQL is up)
+.venv-dev/bin/uvicorn api.main:app --host 0.0.0.0 --port 8000
+```
+
+Set `EXPO_PUBLIC_API_URL=http://<LAN-IP>:8000` in `app/.env.development`
+(next to the broker IP) and restart `npx expo start` — the phone must reach
+the same LAN host as the MQTT broker.
+
+The API seeds the demo hashes on startup (only when a user's hash is empty),
+so Postgres **and** the API must be running before anyone can log in. MQTT
+streaming beyond the login screen is unaffected.
+
+See [`docs/AUTH_API.md`](docs/AUTH_API.md) for endpoints, JWT claims, the
+bcrypt/HS256 security matrix, and troubleshooting.
+
+---
+
 ## Running the App
 
 ```bash
@@ -330,7 +358,13 @@ Scan the QR code with Expo Go on your phone, or press `a` for Android emulator /
 | Doctor | `doctor@sleep.com` | `1234` |
 | Patient | `patient@sleep.com` | `1234` |
 
-Sessions persist across app restarts via `AsyncStorage`.
+Password `1234` is stored as a **bcrypt hash (cost 12)** in
+`users.password_hash` and verified server-side by the Auth API — see
+[Authentication (HTTP Login)](#authentication-http-login). Both accounts are
+fixed on purpose: the project monitors a single patient with a single watch.
+
+Sessions persist across app restarts via `AsyncStorage`; the 12-hour JWT in
+`auth_token` is cleared together with the user on logout.
 
 ---
 
@@ -380,12 +414,13 @@ SleepMonitor/
 │   └── echo.py                       # qos/ping → qos/pong latency relay
 │
 ├── ingest/                           # MQTT → PostgreSQL ingest worker
+├── api/                              # Auth backend — FastAPI, bcrypt + JWT (docs/AUTH_API.md)
 ├── postgres/init/01_schema.sql       # Database schema (applied on first boot)
 ├── ml/                               # Dataset generation (training work lands here)
 ├── benchmark/                        # Latency benchmark harness (single-clock)
 ├── docker-compose.yml                # PostgreSQL service (Docker)
 ├── .env.example                      # Python env template (copy to .env.development)
-└── docs/                             # ARCHITECTURE, DATA_MODEL, DATABASE, MQTT_SETUP
+└── docs/                             # ARCHITECTURE, DATA_MODEL, DATABASE, AUTH_API, MQTT_SETUP
 ```
 
 ---
@@ -450,7 +485,7 @@ Every message published to any `sleep/*` topic is a JSON object:
 
 | Issue | Impact | Planned Fix |
 |---|---|---|
-| ~~Mock authentication~~ | **Fixed — DB-backed login** (`api/` FastAPI): bcrypt hashes in `users.password_hash`, 12h JWT; demo password `1234` is still weak | Change demo password + rotate `JWT_SECRET` before a real deployment |
+| ~~Mock authentication~~ | **Fixed — DB-backed login** (`api/` FastAPI): bcrypt (cost 12) in `users.password_hash`, 12h HS256 JWT; demo password `1234` is still weak, and dev transport is plain HTTP | Change demo password + rotate `JWT_SECRET` + add TLS (reverse proxy or `uvicorn --ssl-*`) before a real deployment |
 | Doctor roster is mostly mock | Only the patient whose `patientId` is streaming shows live vitals; the Alerts tab and report export cover that single live session (one at a time) | Later: per-patient topics + backend for true multi-patient |
 | No tests | No safety net for regressions | Add Jest unit tests + Maestro E2E |
 | Android package is `com.anonymous.*` | Cannot be submitted to Play Store | Update `app.json` before release |
