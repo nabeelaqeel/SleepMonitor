@@ -8,10 +8,11 @@ ingest worker or QoS framework.
 from __future__ import annotations
 
 import argparse
-import json
-import os
 from datetime import datetime, timezone
+import json
+import math
 from pathlib import Path
+import os
 
 from dotenv import load_dotenv
 
@@ -65,6 +66,26 @@ def to_dicts_from_csv(csv_path: Path) -> list[dict]:
     return careful.to_dict(orient="records")
 
 
+def _json_safe(value: object) -> object:
+    """Recursively make a value JSON serializable.
+
+    `aggregate_nightly` can legitimately leave NaN in nightly features. That
+    should not leak into the exported JSON as an NaN token, so we map it to
+    `None` here and use `allow_nan=False` as the final guard.
+    """
+    if isinstance(value, float):
+        return value if math.isfinite(value) else None
+    if isinstance(value, dict):
+        return {key: _json_safe(item) for key, item in value.items()}
+    if isinstance(value, list):
+        return [_json_safe(item) for item in value]
+    return value
+
+
+def _serialize(value: object) -> str:
+    return json.dumps(_json_safe(value), indent=2, allow_nan=False, default=str)
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="Run the post-night AI recommendation")
     parser.add_argument("--csv", type=Path, help="override the DB source with a CSV file")
@@ -76,7 +97,11 @@ def main() -> int:
         session_id = "csv-session"
     else:
         load_dotenv(".env.development")
-        dsn = os.getenv("DATABASE_URL", "postgresql://sleep_user:sqlite@localhost/sleep_monitor")
+        dsn = os.getenv("DATABASE_URL")
+        if not dsn:
+            raise RuntimeError(
+                "DATABASE_URL is not set. Set DATABASE_URL in .env.development, or use --csv."
+            )
         session_id = os.getenv("SESSION_ID", "")
         if not session_id:
             raise ValueError("SESSION_ID is not set. Run with --csv or set SESSION_ID in .env.development.")
@@ -86,11 +111,16 @@ def main() -> int:
         print("No readings available", file=__import__("sys").stderr)
         return 2
 
-    result = get_recommendation(readings, session_id=session_id, patient_id=readings[0]["patient_id"])
+    result = get_recommendation(
+        readings,
+        session_id=session_id,
+        patient_id=readings[0].get("patient_id"),
+    )
     args.out_dir.mkdir(parents=True, exist_ok=True)
     out_path = args.out_dir / f"{session_id or 'local'}-ai-recommendation.json"
-    out_path.write_text(json.dumps(result, indent=2, default=str))
-    print(json.dumps(result, indent=2, default=str))
+    serialized = _serialize(result)
+    out_path.write_text(serialized)
+    print(serialized)
     print(f"Recommendation saved: {out_path}")
     return 0
 

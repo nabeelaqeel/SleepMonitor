@@ -44,6 +44,7 @@ class RuntimeConfig:
 @dataclass(frozen=True)
 class Phase2Config:
     labels_3class: tuple[str, ...] = ("healthy", "monitor", "see_doctor")
+    min_tst_h: float = 2.0
     features: FeatureConfig = FeatureConfig()
     runtime: RuntimeConfig = RuntimeConfig()
 
@@ -89,4 +90,9 @@ def load_config(path: Path | str | None = None) -> Phase2Config:
     )
     if len(three_class) == 0:
         labels = tuple(labels)
-    return Phase2Config(labels_3class=labels, features=features, runtime=runtime_cfg)
+    return Phase2Config(
+        labels_3class=labels,
+        min_tst_h=float(lab.get("min_tst_h", 2.0)),
+        features=features,
+        runtime=runtime_cfg,
+    )

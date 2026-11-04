@@ -35,8 +35,14 @@ def publish(
     port = int(os.getenv("MQTT_PORT", "1883"))
     client = build_client()
     client.connect(host, port, keepalive=60)
-    client.loop_start()
-    info = client.publish(topic, json.dumps(payload, default=str), qos=qos, retain=retain)
-    info.wait_for_publish(timeout=timeout)
-    client.loop_stop()
-    client.disconnect()
+    try:
+        client.loop_start()
+        info = client.publish(topic, json.dumps(payload, default=str), qos=qos, retain=retain)
+        info.wait_for_publish(timeout=timeout)
+        if not info.is_published():
+            raise RuntimeError(
+                f"MQTT publish to {topic} did not complete within {timeout}s"
+            )
+    finally:
+        client.loop_stop()
+        client.disconnect()

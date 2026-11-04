@@ -47,13 +47,58 @@ def session_to_nightly_features(
     return nightly
 
 
+def _session_duration_hours(session_readings: list[dict]) -> float | None:
+    """Derive duration from the stored reading timestamps.
+
+    This deliberately avoids assuming a fixed reading cadence, because the ingest
+    worker does not impose one; it also keeps the AI module independent from the
+    QoS pipeline.
+    """
+    timestamps = [
+        pd.to_datetime(
+            reading.get("timestamp", reading.get("ts")),
+            errors="coerce",
+            utc=True,
+        )
+        for reading in session_readings
+    ]
+    timestamps = [ts for ts in timestamps if pd.notna(ts)]
+    if not timestamps or len(timestamps) < 2:
+        return None
+
+    return (max(timestamps) - min(timestamps)).total_seconds() / 3600.0
+
+
 def get_recommendation(
     session_readings: list[dict],
     *,
     session_id: str | None = None,
     patient_id: str | None = None,
 ) -> dict:
-    """Run the full pipeline: session data -> features -> model -> band."""
+    """Run the full pipeline: session data -> features -> model -> band.
+
+    A session shorter than `min_tst_h` is not interpreted, because the trained
+    model is only valid on nightly sessions above this threshold.
+    """
+    cfg = load_config()
+    duration_hours = _session_duration_hours(session_readings)
+    if duration_hours is None or duration_hours < cfg.min_tst_h:
+        return {
+            "band": None,
+            "probabilities": {},
+            "p_positive": None,
+            "positive_class": None,
+            "flagged_positive": False,
+            "threshold": None,
+            "nightly": {
+                "error": "session shorter than min_tst_h",
+                "duration_hours": duration_hours,
+                "min_tst_h": cfg.min_tst_h,
+            },
+            "session_id": session_id,
+            "patient_id": patient_id,
+            "disclaimer": "AI recommendation unavailable.",
+        }
     nightly = session_to_nightly_features(
         session_readings,
         session_id=session_id,

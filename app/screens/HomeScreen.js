@@ -17,6 +17,20 @@ const TIER_CONFIG = {
                 label: 'BACKGROUND — statistics',   dot: '#6b7280' },
 };
 
+// Maps the trained model's band labels to readable UI text.
+const AI_BAND_LABELS = {
+  healthy:    'Healthy',
+  monitor:    'Monitor',
+  see_doctor: 'See Doctor',
+};
+
+function readableAiBand(band) {
+  if (typeof band !== 'string' || band.length === 0) {
+    return '—';
+  }
+  return AI_BAND_LABELS[band] || band;
+}
+
 export default function HomeScreen() {
   const { currentData, spo2History, aiRecommendation } = useSleep();
 
@@ -114,7 +128,7 @@ export default function HomeScreen() {
         <View style={styles.mqttRow}>
           <Text style={styles.mqttLabel}>Sleep assessment</Text>
           <Text style={styles.mqttTopic}>
-            {aiRecommendation?.band || '—'}
+            {readableAiBand(aiRecommendation?.band)}
           </Text>
         </View>
 

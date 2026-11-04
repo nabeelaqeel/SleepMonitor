@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import unittest
 from unittest.mock import MagicMock, patch
-
 from ai.nightly_adapter import get_recommendation, session_to_nightly_features
 from ai.recommend import recommendation_payload
 
@@ -39,6 +38,19 @@ class GetRecommendationTestCase(unittest.TestCase):
         result = get_recommendation([], session_id="empty", patient_id="p")
         self.assertTrue(result["nightly"].get("error"))
         self.assertIsNone(result["band"])
+
+    def test_short_session_is_not_interpreted(self):
+        readings = [
+            {"timestamp": "2026-11-04T01:00:00Z", "spo2": 97, "heartRate": 60, "hrv": 40, "motion": 0.1},
+            {"timestamp": "2026-11-04T01:59:00Z", "spo2": 97, "heartRate": 60, "hrv": 40, "motion": 0.1},
+        ]
+        with patch("ai.nightly_adapter.load_config") as load_config:
+            load_config.return_value.min_tst_h = 2.0
+            result = get_recommendation(readings, session_id="short", patient_id="p")
+
+        self.assertIsNone(result["band"])
+        self.assertEqual(result["nightly"]["error"], "session shorter than min_tst_h")
+        self.assertLess(result["nightly"]["duration_hours"], 2.0)
 
 
 class RecommendationPayloadTestCase(unittest.TestCase):

@@ -8,6 +8,9 @@ from unittest.mock import MagicMock, patch
 from ai.session_loader import latest_session_for_patient
 
 
+TEST_DSN = "postgresql://user:password@localhost:5432/test"
+
+
 class LatestSessionForPatientTestCase(unittest.TestCase):
     def test_returns_latest_session_id(self):
         cursor = MagicMock()
@@ -17,7 +20,9 @@ class LatestSessionForPatientTestCase(unittest.TestCase):
         conn.cursor.return_value.__enter__.return_value = cursor
 
         with patch("psycopg2.connect", return_value=conn):
-            session_id = latest_session_for_patient("00000000-0000-0000-0000-000000000002")
+            session_id = latest_session_for_patient(
+                "00000000-0000-0000-0000-000000000002", dsn=TEST_DSN
+            )
 
         self.assertEqual(session_id, "abc")
 
@@ -30,7 +35,9 @@ class LatestSessionForPatientTestCase(unittest.TestCase):
 
         with patch("psycopg2.connect", return_value=conn):
             with self.assertRaises(RuntimeError):
-                latest_session_for_patient("00000000-0000-0000-0000-000000000002")
+                latest_session_for_patient(
+                    "00000000-0000-0000-0000-000000000002", dsn=TEST_DSN
+                )
 
 
 if __name__ == "__main__":
