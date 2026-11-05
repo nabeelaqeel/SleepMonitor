@@ -119,7 +119,7 @@ WHERE: 🖥 EC2
 cd /opt/SleepMonitor
 read -rp  'RDS endpoint (from §2.5 console): ' RDS_ENDPOINT
 read -rsp 'RDS master password (§2.5): ' RDS_PW && echo
-export PGPASSWORD="$RDS_PW"
+export PGPASSWORD="$RDS_PW" PGSSLMODE=require
 
 PGPASSWORD="$RDS_PW" psql -h "$RDS_ENDPOINT" -U sleep_user -d sleep_monitor \
   -f postgres/init/01_schema.sql        # expect: CREATE TABLE / CREATE INDEX lines
@@ -185,7 +185,7 @@ EOF
 # replace the remaining two placeholder secrets — generated here, never committed;
 # in DEMO sessions where RDS was created (§2.6), the RDS line above already
 # carries the §2.5/§2.6 values
-sed -i -e "s/<FILL_JWT_SECRET>/$(python3 -c 'import secrets; print(secrets.token_hex(32))')" \
+sed -i -e "s/<FILL_JWT_SECRET>/$(python3 -c 'import secrets; print(secrets.token_hex(32))')/" \
        -e "s/<FILL_MQTT_PASSWORD>/$(openssl rand -hex 12)/" .env.development
 
 grep -c '^[^#]*<FILL' .env.development   # expect: 0 — ACTIVE-line placeholders only;
@@ -225,19 +225,28 @@ WHERE: 🖥 EC2
 cd /opt/SleepMonitor
 # --env-file is REQUIRED on every compose call — even profile-gated services
 # are interpolated, and compose only auto-loads `.env`, not .env.development:
-# DEMO mode (RDS line active): broker only
-docker compose -f docker-compose.aws.yml --env-file .env.development up -d
-# TEST mode (localhost line active): ALSO bring the local DB — do this BEFORE
-# starting systemd services (publisher/ingest write at boot):
-docker compose -f docker-compose.aws.yml --env-file .env.development --profile local-db up -d
-# wait up to 60s for EXACT 'healthy' ('unhealthy' must NOT satisfy this),
-# and abort loudly if it never arrives:
-for i in $(seq 1 12); do
-  [ "$(docker inspect --format '{{.State.Health.Status}}' sleep-postgres)" = "healthy" ] && break
-  sleep 5
-done
-[ "$(docker inspect --format '{{.State.Health.Status}}' sleep-postgres)" = "healthy" ] || { echo "sleep-postgres failed to reach healthy within 60s — check: docker logs sleep-postgres"; exit 1; }
+# the ACTIVE DATABASE_URL (§2.7) picks the variant — comments don't gate shell:
+DB_URL=$(sed -n 's/^DATABASE_URL=//p' .env.development)
+case "$DB_URL" in
+  *'@localhost:5432/sleep_monitor'*)
+    # ── TEST variant: broker + local DB (BEFORE systemd starts the units):
+    docker compose -f docker-compose.aws.yml --env-file .env.development --profile local-db up -d
+    # wait up to 60s for EXACT 'healthy' — never let ingest boot race it:
+    for i in $(seq 1 12); do
+      [ "$(docker inspect --format '{{.State.Health.Status}}' sleep-postgres)" = "healthy" ] && break
+      sleep 5
+    done
+    [ "$(docker inspect --format '{{.State.Health.Status}}' sleep-postgres)" = "healthy" ] || { echo "sleep-postgres failed to reach healthy within 60s — check: docker logs sleep-postgres"; exit 1; }
+    ;;
+  *)
+    # ── DEMO variant (RDS): broker only
+    docker compose -f docker-compose.aws.yml --env-file .env.development up -d
+    ;;
+esac
 docker ps --format 'table {{.Names}}\t{{.Status}}'
+# expect: sleep-broker Up (+ sleep-postgres Up & healthy in TEST mode)
+docker logs sleep-broker   # expect: "Opening ipv4 listen socket on port 9001."
+```
 # expect: sleep-broker Up (+ sleep-postgres Up & healthy in TEST mode)
 docker logs sleep-broker   # expect: "Opening ipv4 listen socket on port 9001."
 ```
@@ -358,7 +367,7 @@ WHERE: 🖥 EC2
 # TEST mode active (localhost) → check inside the container:
 docker exec sleep-postgres psql -U sleep_user -d sleep_monitor -c "SELECT count(*) FROM readings;"
 # DEMO mode active (RDS) → check over TLS:
-PGPASSWORD='<master password from §2.5>' psql -h "<RDS_ENDPOINT>" -U sleep_user -d sleep_monitor \
+PGSSLMODE=require PGPASSWORD='<master password from §2.5>' psql -h "<RDS_ENDPOINT>" -U sleep_user -d sleep_monitor \
   -c "SELECT count(*) FROM readings;"
 # expect: a count that grows every second while the publisher streams
 # count stuck at 0? → wrong active DATABASE_URL — see §7
@@ -492,7 +501,7 @@ cd /opt/SleepMonitor
 # values derived from the ACTIVE .env.development — no manual re-entry:
 EP=$(grep '^DATABASE_URL=' .env.development | sed 's/.*@//; s/:5432.*//')
 PW=$(grep '^DATABASE_URL=' .env.development | sed 's|.*://sleep_user:||; s|@.*||')
-PGPASSWORD="$PW" psql -h "$EP" -U sleep_user -d sleep_monitor \
+PGSSLMODE=require PGPASSWORD="$PW" psql -h "$EP" -U sleep_user -d sleep_monitor \
   -c "SELECT count(*) FROM readings;"
 # expect: a count that grows every second (fresh RDS without re-apply? §5 re-apply step)
 ```
@@ -554,31 +563,47 @@ sudo systemctl stop sm-pub && sleep 2             # session/end flushed into the
 sudo systemctl stop sm-ingest
 SQL="backup-$(date +%F-%H%M).sql"
 
-# ── TEST branch (active DATABASE_URL = localhost):
-docker exec sleep-postgres pg_dump -U sleep_user -d sleep_monitor > "$SQL" || { echo "pg_dump FAILED — aborting"; exit 1; }
-[ -s "$SQL" ] || { echo "backup EMPTY — aborting"; exit 1; }
-docker compose -f docker-compose.aws.yml --env-file .env.development --profile local-db down -v
-docker compose -f docker-compose.aws.yml --env-file .env.development --profile local-db up -d
-# wait up to 60s for EXACT 'healthy' ('unhealthy' must NOT satisfy this),
-# and abort loudly if it never arrives:
-for i in $(seq 1 12); do
-  [ "$(docker inspect --format '{{.State.Health.Status}}' sleep-postgres)" = "healthy" ] && break
-  sleep 5
-done
-[ "$(docker inspect --format '{{.State.Health.Status}}' sleep-postgres)" = "healthy" ] || { echo "sleep-postgres failed to reach healthy within 60s — check: docker logs sleep-postgres"; exit 1; }
-
-# ── DEMO branch (active DATABASE_URL = RDS):
-# atomic reset: DROP + re-apply in ONE transaction (ON_ERROR_STOP → rollback)
-# one silent prompt for the master password — keeps it out of shell history:
-read -rsp 'RDS master password: ' RDS_PW < /dev/tty && echo
-PGPASSWORD="$RDS_PW" \
-  pg_dump -h "<RDS_ENDPOINT>" -U sleep_user -d sleep_monitor > "$SQL" || { echo "pg_dump FAILED — aborting"; exit 1; }
-[ -s "$SQL" ] || { echo "backup EMPTY — aborting"; exit 1; }
-PGPASSWORD="$RDS_PW" psql -v ON_ERROR_STOP=1 -1 \
-  -h "<RDS_ENDPOINT>" -U sleep_user -d sleep_monitor \
-  -c "DROP SCHEMA public CASCADE; CREATE SCHEMA public;" \
-  -f postgres/init/01_schema.sql
-
+# ── the ACTIVE DATABASE_URL (§2.7) selects EXACTLY ONE reset branch:
+#    comments don't gate shell execution — this dispatch is explicit:
+DB_URL=$(sed -n 's/^DATABASE_URL=//p' .env.development)
+# 0. stop the stream BEFORE touching the schema:
+sudo systemctl stop sm-pub && sleep 2             # session/end flushed into the OLD db
+sudo systemctl stop sm-ingest
+SQL="backup-$(date +%F-%H%M).sql"
+case "$DB_URL" in
+*'@localhost:5432/sleep_monitor'*)
+  # ── TEST branch: local Postgres
+  docker exec sleep-postgres pg_dump -U sleep_user -d sleep_monitor > "$SQL" || { echo "pg_dump FAILED — aborting"; exit 1; }
+  [ -s "$SQL" ] || { echo "backup EMPTY — aborting"; exit 1; }
+  docker compose -f docker-compose.aws.yml --env-file .env.development --profile local-db down -v
+  docker compose -f docker-compose.aws.yml --env-file .env.development --profile local-db up -d
+  # wait up to 60s for EXACT 'healthy' ('unhealthy' must NOT satisfy this),
+  # and abort loudly if it never arrives:
+  for i in $(seq 1 12); do
+    [ "$(docker inspect --format '{{.State.Health.Status}}' sleep-postgres)" = "healthy" ] && break
+    sleep 5
+  done
+  [ "$(docker inspect --format '{{.State.Health.Status}}' sleep-postgres)" = "healthy" ] || { echo "sleep-postgres failed to reach healthy within 60s — check: docker logs sleep-postgres"; exit 1; }
+  ;;
+*'@'*':5432/sleep_monitor?sslmode=require'*)
+  # ── DEMO branch: RDS over TLS
+  # endpoint + password DERIVED from the active DATABASE_URL (no re-paste):
+  EP=$(echo "$DB_URL" | sed 's/.*@//; s/:5432.*//')
+  PW=$(echo "$DB_URL" | sed 's|.*://sleep_user:||; s|@.*||')
+  # atomic reset: DROP + re-apply in ONE transaction (ON_ERROR_STOP → rollback)
+  PGSSLMODE=require PGPASSWORD="$PW" \
+    pg_dump -h "$EP" -U sleep_user -d sleep_monitor > "$SQL" || { echo "pg_dump FAILED — aborting"; exit 1; }
+  [ -s "$SQL" ] || { echo "backup EMPTY — aborting"; exit 1; }
+  PGSSLMODE=require PGPASSWORD="$PW" psql -v ON_ERROR_STOP=1 -1 \
+    -h "$EP" -U sleep_user -d sleep_monitor \
+    -c "DROP SCHEMA public CASCADE; CREATE SCHEMA public;" \
+    -f postgres/init/01_schema.sql
+  ;;
+*)
+  echo "active DATABASE_URL must select TEST (localhost) or DEMO (RDS) — see §2.7" >&2
+  exit 1
+  ;;
+esac
 # bring services back IN ORDER (api+ingest on the fresh schema, then streaming):
 sudo systemctl restart sm-api sm-ingest && systemctl is-active sm-api sm-ingest
 sudo systemctl start sm-pub && systemctl is-active sm-pub
