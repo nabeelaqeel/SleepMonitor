@@ -21,13 +21,25 @@
         "backgroundColor": "#ffffff"
       },
       "edgeToEdgeEnabled": true,
-      "package": "com.anonymous.SleepMonitor"
+      "package": "com.aqeel.sleepmonitor"
     },
     "web": {
       "favicon": "./assets/favicon.png"
     },
     "plugins": [
       "expo-secure-store"
-    ]
+    ],
+    "extra": {
+      "eas": {
+        "projectId": "24269c69-53bf-4c5d-a078-4d8b3a702115"
+      }
+    },
+    "owner": "meowplayer",
+    "runtimeVersion": {
+      "policy": "appVersion"
+    },
+    "updates": {
+      "url": "https://u.expo.dev/24269c69-53bf-4c5d-a078-4d8b3a702115"
+    }
   }
 }

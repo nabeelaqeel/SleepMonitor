@@ -19,6 +19,13 @@ let generation = 0;
 const BROKER_IP = process.env.EXPO_PUBLIC_BROKER_IP || '192.168.68.68';
 const BROKER_PORT = 9001;          // WebSocket port — important, use 9001 not 1883
 
+// Broker credentials — the AWS broker runs locked (allow_anonymous false,
+// see mosquitto/mosquitto.conf). On laptop dev the native broker is
+// anonymous: Mosquitto ignores client-supplied credentials there, and Paho
+// treats `undefined` as "connect with none", so the fallback is safe.
+const BROKER_USER = process.env.EXPO_PUBLIC_MQTT_USER || undefined;
+const BROKER_PASS = process.env.EXPO_PUBLIC_MQTT_PASSWORD || undefined;
+
 const CLIENT_ID_KEY = 'mqtt_client_id';
 const MAX_RECONNECT_DELAY = 10000;
 
@@ -59,6 +66,8 @@ function doConnect(gen) {
     cleanSession: false,
     keepAliveInterval: 30,
     useSSL: false,
+    userName: BROKER_USER,
+    password: BROKER_PASS,
     onSuccess: () => {
       connecting = false;
       if (gen !== generation) return;
