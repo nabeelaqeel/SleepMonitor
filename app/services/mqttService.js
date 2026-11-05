@@ -29,10 +29,13 @@ const BROKER_PASS = process.env.EXPO_PUBLIC_MQTT_PASSWORD || undefined;
 const CLIENT_ID_KEY = 'mqtt_client_id';
 const MAX_RECONNECT_DELAY = 10000;
 
-// Per-install client ID, persisted locally. A stable ID is required for the
-// broker to keep a persistent session (cleanSession: false) and queue QoS 1/2
-// messages while the app is offline. A random per-install ID keeps two
-// different installs from kicking each other off the broker.
+/**
+ * Per-install client ID, persisted locally. A stable ID is required for the
+ * broker to keep a persistent session (cleanSession: false) and queue QoS 1/2
+ * messages while the app is offline. A random per-install ID keeps two
+ * different installs from kicking each other off the broker.
+ * @returns {Promise<string>} the install's deterministic client ID
+ */
 async function getClientId() {
   try {
     let id = await AsyncStorage.getItem(CLIENT_ID_KEY);
@@ -46,6 +49,12 @@ async function getClientId() {
   }
 }
 
+/**
+ * Schedules a reconnect attempt with exponential backoff (1s → MAX). A tie
+ * applies a single pending timer at a time; `gen` guards against a torn-down
+ * generation rescheduling itself.
+ * @param {number} gen — the generation doing the reconnecting
+ */
 function scheduleReconnect(gen) {
   if (reconnectTimer) return;
   reconnectTimer = setTimeout(() => {
@@ -55,19 +64,26 @@ function scheduleReconnect(gen) {
   reconnectDelay = Math.min(reconnectDelay * 2, MAX_RECONNECT_DELAY);
 }
 
+/**
+ * Connect (or reconnect after loss). The persistent session is what lets
+ * the broker queue QoS 1/2 while the app is offline; `gen` guards against
+ * a torn-down generation racing a late broker callback.
+ * @param {number} gen — the generation attempting to connect
+ */
 function doConnect(gen) {
   if (gen !== generation || !client || connecting) return;
   connecting = true;
   const c = client;
 
-  c.connect({
+  // Credential fields are attached only when real strings exist — anonymous
+  // brokers (laptop dev) then connect with no credential fields at all,
+  // instead of fields carrying `undefined`.
+  const options = {
     // Explicit (do not rely on the Paho default): the persistent session is
     // what lets the broker queue QoS 1/2 while the app is disconnected.
     cleanSession: false,
     keepAliveInterval: 30,
     useSSL: false,
-    userName: BROKER_USER,
-    password: BROKER_PASS,
     onSuccess: () => {
       connecting = false;
       if (gen !== generation) return;
@@ -86,9 +102,20 @@ function doConnect(gen) {
       if (onStatusChange) onStatusChange(false);
       scheduleReconnect(gen);
     },
-  });
+  };
+  if (BROKER_USER && BROKER_PASS) {
+    options.userName = BROKER_USER;
+    options.password = BROKER_PASS;
+  }
+  c.connect(options);
 }
 
+/**
+ * Creates the Paho client for this generation, wires the connection-lost
+ * and message-arrival callbacks, then connects.
+ * @param {string} clientId — per-install ID (drives cleanSession:false queueing)
+ * @param {number} gen — generation identity for this connect cycle
+ */
 function startClient(clientId, gen) {
   if (gen !== generation || client) return;
   const c = new Paho.Client(BROKER_IP, BROKER_PORT, clientId);
@@ -113,6 +140,13 @@ function startClient(clientId, gen) {
   doConnect(gen);
 }
 
+/**
+ * Entry point — SleepContext calls this with its message/status handlers.
+ * Connects (or restarts) the MQTT client under a fresh generation; the
+ * previous generation's timer/teardown can't resurrect a dead connection.
+ * @param {function} onMessage — (topic, payloadObject) on every arrival
+ * @param {function} [onStatus] — boolean status whenever connectivity changes
+ */
 export function connectMQTT(onMessage, onStatus = () => {}) {
   const gen = ++generation;
   onMessageHandler = onMessage;
@@ -120,7 +154,10 @@ export function connectMQTT(onMessage, onStatus = () => {}) {
   getClientId().then(id => startClient(id, gen));
 }
 
-// Publish a message. Returns false when not connected (caller can ignore).
+/**
+ * Publish a message at `qos`. Returns false when not connected — callers
+ * should not treat that as fatal (Paho has no buffering here).
+ */
 export function publish(topic, payloadString, qos = 0) {
   if (client && client.isConnected()) {
     client.publish(topic, payloadString, qos, false);
@@ -129,10 +166,16 @@ export function publish(topic, payloadString, qos = 0) {
   return false;
 }
 
+/** Connectivity probe — true only while a live Paho client is connected. */
 export function isConnected() {
   return !!(client && client.isConnected());
 }
 
+/**
+ * Full teardown: bumps the generation (orphaning timers and late broker
+ * callbacks), clears reconnect state, and disconnects the live client.
+ * Handlers clear after, so in-flight callbacks see no stale targets.
+ */
 export function disconnectMQTT() {
   generation += 1;
   connecting = false;
