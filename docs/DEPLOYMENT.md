@@ -381,19 +381,29 @@ WHERE: 💻 laptop, app/
 # machine-local and never reach the repo. <BROKER_PASSWORD> is the §2.9 value
 # again (grep it on the server).
 cd app
-# scope: builds run on the PREVIEW profile (§4.3) — its two placeholders are
-# filled here; the production profile keeps its own SET_ME_HTTPS_ENDPOINT
-# placeholder (deliberately unfilled — fail-closed, see DEPLOYMENT_NOTES §3).
-sed -i -e 's/SET_ME_EC2_PUBLIC_IP/<EC2_IP>/g' \
-       -e 's/SET_ME_MQTT_PASSWORD/<BROKER_PASSWORD>/g' eas.json
-# mirror the same values into app/.env.local — SDK 54 `eas update` (§6.3)
-# reads envs from local .env files, NOT from the eas.json profile env block
-cat > .env.local <<'EOF'
-EXPO_PUBLIC_BROKER_IP=<EC2_IP>
-EXPO_PUBLIC_API_URL=http://<EC2_IP>:8000
-EXPO_PUBLIC_MQTT_USER=sm
-EXPO_PUBLIC_MQTT_PASSWORD=<BROKER_PASSWORD>
-EXPO_PUBLIC_ALLOW_PLAIN_HTTP=true
+# scope: builds run on the PREVIEW profile (§4.3) — its placeholders get filled
+# here only; the production profile keeps ITS OWN unfilled placeholders
+# (deliberately unfilled — fail-closed, see DEPLOYMENT_NOTES §3).
+# Profile-aware fill (python touches build.preview only — global seds would
+# also replace the production placeholders, which must stay):
+python3 - <<'EOF'
+import json
+
+p = json.load(open("eas.json"))
+pv = p["build"]["preview"]["env"]
+pv["EXPO_PUBLIC_BROKER_IP"] = "<EC2_IP>"
+pv["EXPO_PUBLIC_API_URL"] = "http://<EC2_IP>:8000"
+pv["EXPO_PUBLIC_MQTT_PASSWORD"] = "<BROKER_PASSWORD>"
+json.dump(p, open("eas.json", "w"), indent=2)
+
+# .env.local mirrors the same values — SDK 54 `eas update` (§6.3) publishes
+# read envs from local .env files, NOT from the eas.json profile env block
+open(".env.local", "w").write(
+    "EXPO_PUBLIC_BROKER_IP=<EC2_IP>\n"
+    "EXPO_PUBLIC_API_URL=http://<EC2_IP>:8000\n"
+    "EXPO_PUBLIC_MQTT_USER=sm\n"
+    "EXPO_PUBLIC_MQTT_PASSWORD=<BROKER_PASSWORD>\n"
+    "EXPO_PUBLIC_ALLOW_PLAIN_HTTP=true\n")
 EOF
 grep SET_ME eas.json                        # expect EXACTLY 2 lines — the consciously
                                             # unfilled production placeholders
@@ -464,9 +474,18 @@ curl -sS -X POST http://<IP>:8000/auth/login -H 'Content-Type: application/json'
   -d '{"email":"patient@sleep.com","password":"1234"}'
 # -P <BROKER_PASSWORD>: the §2.9 value again (grep it on the server)
 mosquitto_sub -h <IP> -p 1883 -t 'sleep/#' -u sm -P '<BROKER_PASSWORD>' -v
-# DB count check runs ON THE EC2 — the RDS security group admits only the EC2:
-ssh -i sm-key.pem ubuntu@<IP> "PGPASSWORD='<master password>' psql -h \"\$RDS_ENDPOINT\" -U sleep_user -d sleep_monitor -c 'SELECT count(*) FROM readings;'"
-# (TEST mode: `docker exec sleep-postgres psql ...` on the EC2 per §3.3)
+```
+
+```bash
+# 🖥 EC2 — DB count check (the RDS SG admits only the EC2; TEST mode → §3.3):
+WHERE: 🖥 EC2
+cd /opt/SleepMonitor
+# values derived from the ACTIVE .env.development — no manual re-entry:
+EP=$(grep '^DATABASE_URL=' .env.development | sed 's/.*@//; s/:5432.*//')
+PW=$(grep '^DATABASE_URL=' .env.development | sed 's|.*://sleep_user:||; s|@.*||')
+PGPASSWORD="$PW" psql -h "$EP" -U sleep_user -d sleep_monitor \
+  -c "SELECT count(*) FROM readings;"
+# expect: a count that grows every second (fresh RDS without re-apply? §5 re-apply step)
 ```
 
 **Session end (⚠ order matters — delete RDS FIRST, then End Lab):**
@@ -513,37 +532,27 @@ systemctl is-active sm-api                # expect: active
 # 6.2a — broker config change (non-destructive restart)
 WHERE: 🖥 EC2
 cd /opt/SleepMonitor
-docker compose -f docker-compose.aws.yml restart broker
+# --env-file required on EVERY compose call (profile-gated services still get
+# interpolated, and compose only auto-loads `.env` — never our `.env.development`):
+docker compose -f docker-compose.aws.yml --env-file .env.development restart broker
 docker logs sleep-broker --tail 20    # expect: "Opening ... port 9001" again
 
-# 6.2b — schema change (guarded backup → wipe the ACTIVE database → re-apply)
-# Pick the branch matching the ACTIVE DATABASE_URL (§2.7):
-
-# ── TEST mode (local Postgres): backup, wipe volume, compose re-applies on boot
+# 6.2b — schema change (SESSION-SAFE reset: the publisher owns session/end)
 WHERE: 🖥 EC2
 cd /opt/SleepMonitor
+# 0. stop the stream BEFORE touching the schema:
+sudo systemctl stop sm-pub && sleep 2             # session/end flushed into the OLD db
+sudo systemctl stop sm-ingest
 SQL="backup-$(date +%F-%H%M).sql"
-docker exec sleep-postgres pg_dump -U sleep_user -d sleep_monitor > "$SQL" || { echo "pg_dump FAILED — aborting"; exit 1; }
-[ -s "$SQL" ] || { echo "backup EMPTY — aborting"; exit 1; }
-# 6.2b — schema change (guarded backup → wipe the ACTIVE database → re-apply)
-# Pick the branch matching the ACTIVE DATABASE_URL (§2.7):
 
-# ── TEST mode (local Postgres): backup, wipe volume, compose re-applies on boot
-WHERE: 🖥 EC2
-cd /opt/SleepMonitor
-SQL="backup-$(date +%F-%H%M).sql"
+# ── TEST branch (active DATABASE_URL = localhost):
 docker exec sleep-postgres pg_dump -U sleep_user -d sleep_monitor > "$SQL" || { echo "pg_dump FAILED — aborting"; exit 1; }
 [ -s "$SQL" ] || { echo "backup EMPTY — aborting"; exit 1; }
 docker compose -f docker-compose.aws.yml --env-file .env.development --profile local-db down -v
 docker compose -f docker-compose.aws.yml --env-file .env.development --profile local-db up -d
 
-# ── DEMO mode (RDS): backup over TLS, wipe schema, re-apply
-# one psql session: --single-transaction (-1) wraps DROP+apply atomically;
-# ON_ERROR_STOP aborts on the first error and the transaction rolls back
-# (a failure can never leave a half-applied schema behind)
-WHERE: 🖥 EC2
-cd /opt/SleepMonitor
-SQL="backup-$(date +%F-%H%M).sql"
+# ── DEMO branch (active DATABASE_URL = RDS):
+# atomic reset: DROP + re-apply in ONE transaction (ON_ERROR_STOP → rollback)
 PGPASSWORD='<master password>' \
   pg_dump -h "<RDS_ENDPOINT>" -U sleep_user -d sleep_monitor > "$SQL" || { echo "pg_dump FAILED — aborting"; exit 1; }
 [ -s "$SQL" ] || { echo "backup EMPTY — aborting"; exit 1; }
@@ -551,11 +560,10 @@ PGPASSWORD='<master password>' psql -v ON_ERROR_STOP=1 -1 \
   -h "<RDS_ENDPOINT>" -U sleep_user -d sleep_monitor \
   -c "DROP SCHEMA public CASCADE; CREATE SCHEMA public;" \
   -f postgres/init/01_schema.sql
-# schema is fresh — restart the API unit so no stale prepared statements remain:
-sudo systemctl restart sm-api && systemctl is-active sm-api   # active
 
-# ── TEST mode restart follows the up -d above:
-sudo systemctl restart sm-api && systemctl is-active sm-api   # active
+# bring services back IN ORDER (api+ingest on the fresh schema, then streaming):
+sudo systemctl restart sm-api sm-ingest && systemctl is-active sm-api sm-ingest
+sudo systemctl start sm-pub && systemctl is-active sm-pub
 ```
 
 ```bash
