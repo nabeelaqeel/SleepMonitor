@@ -8,7 +8,7 @@
  * build instead of silently producing an APK with useless endpoints.
  *
  * Local dev is unaffected: `npx expo start` does not set EAS_BUILD, and its
- * values (from app/.env.development) are real. See docs/DEPLOYMENT.md §4.2.
+ * values (from app/.env.development) are real. See the author-side deployment runbook for §-references.
  */
 
 module.exports = ({ config }) => {
@@ -19,7 +19,7 @@ module.exports = ({ config }) => {
       if (!value || value.includes("SET_ME")) {
         throw new Error(
           `${name} is missing or still a placeholder (value: ${value || "unset"}) — ` +
-            "fill it in app/eas.json per docs/DEPLOYMENT.md §4.2 before building."
+            "fill it in app/eas.json before building (see the author-side deployment runbook)."
         );
       }
     }

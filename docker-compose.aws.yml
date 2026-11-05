@@ -1,7 +1,8 @@
 # =============================================================
 # Sleep Monitor — AWS stack (broker always; local Postgres = TEST mode)
 #
-# TWO DATABASE MODES — pick one line in .env.development (DEPLOYMENT.md §2.7):
+# TWO DATABASE MODES — pick one line in .env.development (see the author-side
+# deployment runbook for the mode-switch steps):
 #
 #   TEST (default for a non-demo session)
 #     docker compose -f docker-compose.aws.yml --env-file .env.development --profile local-db up -d
