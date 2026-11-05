@@ -59,9 +59,9 @@ All of this **ships in the repo**; nothing here happens again per deployment.
 | `./mosquitto:/mosquitto/config` (read-write dir mount) | `mosquitto_passwd` writes `mosquitto/passwd` from inside the container; a read-only file mount would block that, and a container-only path wouldn't survive recreates. |
 | `mosquitto/mosquitto.conf` (locked) | The broker is reachable from the whole internet on 1883/9001. With anonymous access, anyone scanning the IP can **inject fake patient vitals**. `allow_anonymous false` + `password_file` closes it. The passwd file itself is generated on the server (runbook §2.7) and **never committed** (gitignored). |
 | Passwd *before* first start | Mosquitto refuses to boot when its `password_file` is missing — that's why runbook step 2.7 exists before the compose `up`. |
-| `app/eas.json` (gitignored) + `app/eas.example.json` (tracked) | `preview` profile builds an **installable APK** (`buildType: apk`), not a Play-Store AAB, and carries the five `EXPO_PUBLIC_*` values the app bakes. Both `preview` and `production` carry the same env, so an accidental production build can't silently fall back to legacy hardcoded IPs. **`eas.json` is gitignored** — the tracked `eas.example.json` template carries placeholders; real endpoints + broker password are filled locally at runbook §4.2, so the repo never holds them. EAS cloud builds read profile env from the working tree, not from git. |
+| `app/eas.json` (gitignored) + `app/eas.example.json` (tracked) | `preview` profile builds an **installable APK** (`buildType: apk`), not a Play-Store AAB, and carries the five `EXPO_PUBLIC_*` values the app bakes. **`eas.json` is gitignored** — the tracked `eas.example.json` template carries placeholders; real endpoints + broker password are filled locally at runbook §4.2, so the repo never holds them. EAS cloud builds read profile env from the working tree, not from git. **Production profile diverges deliberately**: it drops `EXPO_PUBLIC_ALLOW_PLAIN_HTTP` and its `API_URL` placeholder is an HTTPS endpoint — any non-demo (store) build fails closed without TLS instead of shipping the demo relaxations. |
 | `app/app.config.js` | Fail-guard: EAS cloud builds **throw** while `EXPO_PUBLIC_BROKER_IP`/`EXPO_PUBLIC_API_URL` are unset or still `SET_ME…` — an unfilled `eas.json` can no longer silently produce an APK with dead endpoints (the app would fall back to legacy hardcoded IPs). Local `npx expo start` is unaffected (no `EAS_BUILD` env set there). |
-| MQTT creds inside `eas.json` (committed) | Deliberate: the APK embeds these strings anyway (phone-side credential), so keeping them next to the endpoints in the same file is one source of truth. If you later want them repo-hidden, switch to EAS env vars (`npx eas-cli env:create`). |
+| MQTT creds & endpoints inside `eas.json` (local + gitignored; template `eas.example.json` tracks placeholders) | The APK embeds these strings anyway (phone-side credential), so they live beside the endpoints in one local file, filled at runbook §4.2 and rotated via §6. Repo-visible upgrade path: move them to EAS environment variables (`npx eas-cli env:create`) once supporting that is worth it. |
 | `app.json` package fix (`com.aqeel.sleepmonitor`) | The Android package name is the app's identity — changing it after the first installed APK makes every future build a *different app* on the phone. Fixed before any build could run. |
 | `mqttService.js` credentials | `doConnect()` now passes `userName`/`password` from `EXPO_PUBLIC_MQTT_*`. With `undefined` fallback so **anonymous brokers keep working** — your laptop's native broker ignores credentials anyway. |
 | Credential parity (all consumers same user `sm`) | `publisher.py` defaults to `admin`/`changeme` when env is missing; ingest and echo default to empty. Explicit `MQTT_USER`/`MQTT_PASSWORD` in `.env.development` makes all three connect to the locked broker the same way. |
@@ -119,7 +119,7 @@ Rotation is an ordered sequence — **restarts are required, a rebuild usually i
 #    in /opt/SleepMonitor:
 NEWPW=$(openssl rand -hex 12)
 docker run --rm -u 1883 -v "$PWD/mosquitto:/mosquitto/config" eclipse-mosquitto:2 \
-  mosquitto_passwd /mosquitto/config/passwd sm "$NEWPW"     # no -c: add-or-update mode, keeps 1883 ownership
+  mosquitto_passwd -b /mosquitto/config/passwd sm "$NEWPW" || exit 1   # batch mode + add-or-update; aborts on failure
 sed -i "s/^MQTT_PASSWORD=.*/MQTT_PASSWORD=$NEWPW/" .env.development
 
 # 2. server: broker reload — password_file is only read at startup
@@ -130,9 +130,13 @@ docker compose -f docker-compose.aws.yml restart broker
 sudo systemctl restart sm-api sm-ingest sm-pub sm-echo
 systemctl is-active sm-api sm-ingest sm-pub sm-echo        # 4× active
 
-# 4. laptop: app/eas.json gets the new value, then OTA carries it (§7) —
-#    a full rebuild only if that installed APK predates the OTA wiring
+# 4. laptop (from the repo ROOT): rotate BOTH sources of EXPO_PUBLIC_* —
+#    eas.json feeds future BUILDS; app/.env.local feeds OTA publishes
+#    (SDK 54 `eas update` reads local .env, NOT the eas.json profile env)
+cd app
 sed -i 's/^EXPO_PUBLIC_MQTT_PASSWORD.*/EXPO_PUBLIC_MQTT_PASSWORD=<new password>/' eas.json
+sed -i 's/^EXPO_PUBLIC_MQTT_PASSWORD.*/EXPO_PUBLIC_MQTT_PASSWORD=<new password>/' .env.local 2>/dev/null \
+  || echo 'EXPO_PUBLIC_MQTT_PASSWORD=<new password>' >> .env.local
 npx eas-cli update --branch preview --message "rotate MQTT credential"
 
 # 5. laptop copies (4) — at leisure, they are local-only

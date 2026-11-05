@@ -42,7 +42,7 @@ Step 1.1 — 🖱 console: **Start Lab** → AWS Console (region is fixed for yo
 | Port | Source | Purpose |
 |---|---|---|
 | 22 | `0.0.0.0/0` | ssh |
-| 1883 | `0.0.0.0/0` | MQTT TCP |
+| 1883 | your IP (operator MQTT checks) | MQTT TCP — the phone only ever uses 9001; tighten this rule's source after §3.2 (NOTES §8) |
 | 9001 | `0.0.0.0/0` | MQTT WebSocket — the app's only broker path |
 | 8000 | `0.0.0.0/0` | Auth API — login |
 
@@ -72,7 +72,11 @@ ssh -i sm-key.pem ubuntu@<EC2_IP>        # 🖥 EC2 from here until §3
 docker version && docker compose version   # both print versions — Docker ✔
 ```
 
-**Step 2.4 — get the repo** — pick ONE:
+**Step 2.4 — get the repo** — pick ONE (both need the target dir ready first):
+
+```bash
+sudo mkdir -p /opt/SleepMonitor && sudo chown ubuntu:ubuntu /opt/SleepMonitor
+```
 
 ```bash
 # Option A — git (you have a remote + pushed, see §0)
@@ -88,7 +92,6 @@ tar --exclude='node_modules' --exclude='.venv*' --exclude='.git' \
 scp -i sm-key.pem sm.tar.gz ubuntu@<EC2_IP>:/tmp/
 
 # then 🖥 EC2:
-sudo mkdir -p /opt/SleepMonitor && sudo chown ubuntu:ubuntu /opt/SleepMonitor
 tar -xzf /tmp/sm.tar.gz -C /opt/SleepMonitor/
 ```
 
@@ -106,6 +109,9 @@ POSTGRES_PASSWORD=<FILL_PG_PASSWORD>
 DATABASE_URL=postgresql://sleep_user:<FILL_PG_PASSWORD>@localhost:5432/sleep_monitor
 
 JWT_SECRET=<FILL_JWT_SECRET>
+# demo accounts are seeded (patient@sleep.com / 1234) — they are what the
+# evaluation logs in with; flip to false and provision your own users
+# (api.security.hash_password) for anything beyond the demo.
 SEED_DEMO_USERS=true
 
 MQTT_HOST=localhost
@@ -368,10 +374,12 @@ First, classify the change:
 | You changed… | Go to |
 |---|---|
 | Backend Python (`api/`, `ingest/`, `publisher/`) | 6.1 |
-| Broker config, or the schema (`postgres/init/01_schema.sql`) | 6.2 |
+| Broker config (`mosquitto/mosquitto.conf`) | 6.2a — non-destructive restart only |
+| Database schema (`postgres/init/01_schema.sql`) | 6.2b — wipe + re-up (**data loss**; backup first) |
 | App JS code (screens, logic) | 6.3 — cheap OTA |
 | `app.json`, plugins, icons, native deps | 6.4 — only path |
-| `EXPO_PUBLIC_*` values in `app/eas.json` | 6.3 OTA **or** 6.4 rebuild — see NOTES §7 |
+| `EXPO_PUBLIC_*` values in `app/eas.json` (via `eas build`) | 6.4 rebuild — `eas update` does NOT read the `eas.json` env block (NOTES §7) |
+| `EXPO_PUBLIC_*` values in `app/.env.local` (via OTA updates) | 6.3 OTA |
 
 ```bash
 # 6.1 — backend fix
@@ -385,13 +393,18 @@ systemctl is-active sm-api                # expect: active
 ```
 
 ```bash
-# 6.2 — broker/schema change (⚠ WIPES all stored data)
+# 6.2a — broker config change (non-destructive restart)
 WHERE: 🖥 EC2
 cd /opt/SleepMonitor
-# schema re-applied only on a fresh volume — data loss is the point of a migration here
-docker compose -f docker-compose.aws.yml down -v
+docker compose -f docker-compose.aws.yml restart broker
+docker logs sleep-broker --tail 20    # expect: "Opening ... port 9001" again
+
+# 6.2b — schema change (DESTRUCTIVE: wipe + re-up; backup first)
+WHERE: 🖥 EC2
+cd /opt/SleepMonitor
+docker exec sleep-postgres pg_dump -U sleep_user sleep_monitor > backup-$(date +%F).sql
+docker compose -f docker-compose.aws.yml down -v          # ⚠ confirm: deletes ALL stored data
 docker compose -f docker-compose.aws.yml --env-file .env.development up -d
-# broker.conf change (no passwd touching): docker compose -f docker-compose.aws.yml restart broker
 ```
 
 ```bash
@@ -401,9 +414,10 @@ cd app
 npx eas-cli update --branch preview --message "what and why in plain words"
 # expect: "Update published" + an update ID
 
-# EXPO_PUBLIC_* value changes (e.g. IP move) ride this same path — update
-# eas.json first, then eas update (see DEPLOYMENT_NOTES §7); rebuild only
-# when phones can't reach EAS itself.
+# EXPO_PUBLIC_* value changes ride 6.3 ONLY through app/.env.local:
+# on SDK 54 `eas update` reads local .env files — NOT the eas.json profile
+# env block (that feeds eas build only). Keep both sources in sync, publish,
+# and rebuild via 6.4 whenever phones can't reach EAS (NOTES §7 trade-offs).
 ```
 
 ```bash
@@ -423,7 +437,7 @@ npx eas-cli build -p android --profile preview --non-interactive
 | API "RuntimeError: JWT_SECRET …" on start | `journalctl -u sm-api -n 20` | regenerate: it rejects `.env.example` placeholder values (`change_me…`) by design |
 | broker refuses to start / no "Opening port 9001" in logs | `docker logs sleep-broker --tail 20` | passwd file missing — repeat §2.7 |
 | mosquitto_sub says "not authorised" | re-run §3.2 | `-u sm -P '<BROKER_PASSWORD>'` (the §2.5-generated value) is mandatory — the broker is locked |
-| `sleep-postgres` restart-loop / unhealthy | `docker logs sleep-postgres --tail 20` | password mismatch: §2.5 vs the old volume → match values, or wipe (§6.2) |
+| `sleep-postgres` restart-loop / unhealthy | `docker logs sleep-postgres --tail 20` | password mismatch: §2.5 vs the old volume → match values, or wipe (§6.2b) |
 | App "Broker: disconnected" after lab restart | §5 commands | IP changed without an EIP — §6.4 rebuild with new IP, or set up the EIP (NOTES §5) |
 | Publisher logs "connection refused" | `docker ps` | broker container not up — §2.8 again |
 | `eas build` fails immediately | `npx eas-cli whoami` | not logged in, or `eas.json` missing in `app/` (copy `eas.example.json` → `eas.json`, §0) |
