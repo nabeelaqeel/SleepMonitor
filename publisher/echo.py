@@ -21,11 +21,14 @@ import logging
 import os
 import signal
 import sys
+from pathlib import Path
 
 import paho.mqtt.client as mqtt
 from dotenv import load_dotenv
 
-load_dotenv(".env.development")
+# Anchor the env file to the repo root so the echo responder loads the same
+# configuration wherever it is launched from.
+load_dotenv(Path(__file__).resolve().parents[1] / ".env.development")
 
 logging.basicConfig(
     level=logging.INFO,
@@ -48,6 +51,7 @@ PONG_TOPIC = "qos/pong"
 # ── MQTT callbacks ────────────────────────────────────────────
 
 def on_connect(client, userdata, connect_flags, reason_code, properties=None):
+    """Subscribe to qos/ping at QoS 2, or exit when the broker refuses the connection."""
     if reason_code.is_failure:
         log.error("Connection refused — %s", reason_code)
         sys.exit(1)
@@ -56,6 +60,7 @@ def on_connect(client, userdata, connect_flags, reason_code, properties=None):
 
 
 def on_message(client, userdata, msg):
+    """Echo a JSON probe verbatim to qos/pong at the probe's advertised QoS (0-2); drop non-JSON payloads."""
     try:
         payload = json.loads(msg.payload.decode())
     except (ValueError, UnicodeDecodeError):
@@ -71,6 +76,7 @@ def on_message(client, userdata, msg):
 # ── Client setup ──────────────────────────────────────────────
 
 def build_client() -> mqtt.Client:
+    """Build the MQTT v5 echo client with its persisted client id and wired callbacks."""
     client = mqtt.Client(
         mqtt.CallbackAPIVersion.VERSION2,
         client_id=CLIENT_ID,
@@ -85,9 +91,11 @@ def build_client() -> mqtt.Client:
 
 
 def main() -> None:
+    """Connect to the broker and relay pings until SIGINT/SIGTERM disconnects the client."""
     client = build_client()
 
     def handle_signal(sig, frame):
+        """Disconnect from the broker on SIGINT/SIGTERM to end loop_forever."""
         log.info("Signal %s received — shutting down", sig)
         client.disconnect()
 

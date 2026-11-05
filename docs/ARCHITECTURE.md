@@ -89,7 +89,7 @@ onMessage(topic, data)
 
 ### Estimated latency (RTT/2)
 
-`mqttService.connectMQTT` exposes `publish()`, which the context uses to emit a `qos/ping` every second (cycling QoS 2 → 1 → 0). `python-publisher/echo.py`, running beside the broker, republishes each ping verbatim to `qos/pong`; the context times the round trip with the **monotonic** `performance.now()` clock and stores `RTT / 2` per QoS. Both timestamps originate on the phone, so phone↔laptop clock skew cancels.
+`mqttService.connectMQTT` exposes `publish()`, which the context uses to emit a `qos/ping` every second (cycling QoS 2 → 1 → 0). `publisher/echo.py`, running beside the broker, republishes each ping verbatim to `qos/pong`; the context times the round trip with the **monotonic** `performance.now()` clock and stores `RTT / 2` per QoS. Both timestamps originate on the phone, so phone↔laptop clock skew cancels.
 
 - The per-QoS window holds up to 21 samples; samples older than 15 s are dropped, and the displayed value is the **window median** (rounded to 2 dp, so sub-millisecond values are shown).
 - If the window is empty (echo responder stopped), the readout is `—`.

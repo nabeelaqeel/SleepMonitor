@@ -175,7 +175,7 @@ The Network screen shows estimated latency measured by `qos/ping` → `qos/pong`
 
 ```bash
 # from the repository root
-.venv-dev/bin/python python-publisher/echo.py
+.venv-dev/bin/python publisher/echo.py
 ```
 
 Without it, pings go unanswered and the Network screen shows `—` for latency; everything else keeps working.
@@ -191,7 +191,7 @@ Without it, pings go unanswered and the Network screen shows `—` for latency; 
 | `sleep/normal` | 0 | Best effort (fire and forget) | SpO2 ≥ 95% — routine readings |
 | `sleep/background` | 0 | Best effort | Session statistics batch |
 | `qos/ping` | 2 | Exactly once | App latency probe (published by the app) |
-| `qos/pong` | 2 | Exactly once | Probe echo (`python-publisher/echo.py`) |
+| `qos/pong` | 2 | Exactly once | Probe echo (`publisher/echo.py`) |
 | `session/start` / `session/end` | 1 | At least once | Publisher session lifecycle (+ Last Will) |
 
 ### QoS 2 — Exactly Once

@@ -17,7 +17,7 @@ beneath the existing MQTT pipeline. It is deliberately split into three parts:
 |---|---|---|
 | `docker-compose.yml` | Docker | Runs PostgreSQL 16 on `:5432` and applies the schema on first boot |
 | `ingest/worker.py` | Host venv | Subscribes to the broker, writes readings/alerts to Postgres |
-| `python-publisher/publisher.py` | Host venv | Owns the session lifecycle and tags every reading with `sessionId` / `seq` |
+| `publisher/publisher.py` | Host venv | Owns the session lifecycle and tags every reading with `sessionId` / `seq` |
 
 Mosquitto is **not** containerised here — it already runs natively on the host
 bound to `:1883` (TCP) and `:9001` (WebSocket), so exposing it again via Docker
@@ -31,7 +31,7 @@ schema is covered in [Users & Login](#users--login) below.
 ### Data flow
 
 ```
-python-publisher/publisher.py
+publisher/publisher.py
       │  session/start ──────────────┐
       │  sleep/{critical,important,normal} (QoS 2/1/0, seq, publishedAt)
       │  sleep/background (QoS 0)      │
@@ -58,7 +58,7 @@ docker compose --env-file .env.development up -d
 
 # 2. Python deps (host venv — gitignored)
 python3 -m venv .venv-dev
-.venv-dev/bin/pip install -r ingest/requirements.txt -r python-publisher/requirements.txt -r api/requirements.txt
+.venv-dev/bin/pip install -r ingest/requirements.txt -r publisher/requirements.txt -r api/requirements.txt
 
 # 3. Ingest worker (leave running)
 .venv-dev/bin/python ingest/worker.py
@@ -85,11 +85,11 @@ fi
 .venv-dev/bin/uvicorn api.main:app --host 0.0.0.0 --port 8000
 
 # 5. Latency echo responder (leave running; beside the broker)
-.venv-dev/bin/python python-publisher/echo.py
+.venv-dev/bin/python publisher/echo.py
 
 # 6. Publisher — in another shell (it reads .env.development itself)
 LOOP_CSV=false PUBLISH_INTERVAL=0.05 \
-  .venv-dev/bin/python python-publisher/publisher.py
+  .venv-dev/bin/python publisher/publisher.py
 
 # 7. Inspect
 docker exec sleep-postgres psql -U sleep_user -d sleep_monitor \
@@ -362,7 +362,7 @@ of urgent data under an unreliable consumer.
 | `ingest/db.py` | new | Idempotent Postgres access layer |
 | `ingest/requirements.txt` | new | `paho-mqtt`, `psycopg2-binary`, `python-dotenv` |
 | `postgres/init/01_schema.sql` | modified | `seq`, `published_at`, unique keys, delivery columns |
-| `python-publisher/publisher.py` | modified | Session lifecycle, `seq`/`publishedAt`, VERSION2, LWT |
+| `publisher/publisher.py` | modified | Session lifecycle, `seq`/`publishedAt`, VERSION2, LWT |
 | `api/` | new | Auth backend: `main.py` (FastAPI), `db.py` (users access + seeding), `security.py` (bcrypt + JWT), `config.py` (env) |
 | `.gitignore` | modified | `.venv-dev/`, `__pycache__/`, `*.py[cod]` |
 
@@ -373,9 +373,11 @@ of urgent data under an unreliable consumer.
 * **Tail loss when `totalReadings` is absent.** The `max(seq)+1` fallback cannot
   detect a dropped trailing QoS 0 run. The publisher always sends `totalReadings`,
   so this only applies to a Last-Will close with no clean `session/end`.
-* **HRV is still a constant.** `publisher.py` uses `row.get("hrv", 35)` and
-  `data/sleep_data_realistic.csv` has no `hrv` column (`minute,bo,hr,rr,motion,event`).
-  Deferred by design.
+* **HRV.** Resolved 2026-11-05: `publisher/publisher.py` reads per-reading HRV
+  from the committed dataset's `hrv` column (header `minute,spo2,hr,hrv,motion,event`).
+  The `row.get("hrv", 35)` fallback applies only to a CSV without an `hrv`
+  column — `publisher.load_csv` logs a loud warning when that happens
+  (`docs/PROJECT_OVERVIEW.md`, Issue 3). True RMSSD values arrive with the watch.
 * **`.env.development` is reused** as the compose env-file and the worker's
   dotenv source; a production setup should separate these.
 * **No automated tests.** Verified manually via the two scenarios above.

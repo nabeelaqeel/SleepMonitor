@@ -47,7 +47,7 @@ from paho.mqtt.properties import Properties
 
 BENCH_DIR = Path(__file__).resolve().parent
 ROOT = BENCH_DIR.parent
-sys.path.insert(0, str(ROOT / "python-publisher"))
+sys.path.insert(0, str(ROOT / "publisher"))
 
 from tier_rules import classify, TIER_QOS  # noqa: E402
 
@@ -70,10 +70,10 @@ TIER_TOPICS = {
 
 DATASET_PATH = ROOT / "data" / "sleep_data_realistic.csv"
 EXPECTED_DATASET_SHA256 = (
-    "10e9df7fc38087b8caad72aebdee3975f752da3dd4bd5d79f7aa7aa1b3de64de")
+    "b247f4b8953e46e4899d70ae94b22389b86e292ecd85e9c55143d78dfa555390")
 # Provenance hash target for the frozen methodology: the module holding the
 # tier rules every benchmark tier assignment is built from.
-CLASSIFIER_PATH = ROOT / "python-publisher" / "tier_rules.py"
+CLASSIFIER_PATH = ROOT / "publisher" / "tier_rules.py"
 ANALYSIS_PATH = BENCH_DIR / "analyze_benchmark.py"
 FULL_ROWS, QUICK_ROWS, SENS_ROWS = 526, 60, 100
 
@@ -131,14 +131,17 @@ class NetemClearError(RuntimeError):
 
 
 def log(msg):
+    """Print a time-prefixed progress line to stdout."""
     print(f"[{datetime.now().strftime('%H:%M:%S')}] {msg}", flush=True)
 
 
 def now_iso():
+    """Wall-clock timestamp string used in reading payloads and meta files."""
     return datetime.now(timezone.utc).strftime("%I:%M %p")
 
 
 def sha256_file(path):
+    """Return the SHA-256 of a file streamed in 1 MiB chunks."""
     h = hashlib.sha256()
     with open(path, "rb") as f:
         for chunk in iter(lambda: f.read(1 << 20), b""):
@@ -147,10 +150,12 @@ def sha256_file(path):
 
 
 def sha256_text(text):
+    """Return the SHA-256 of a UTF-8 string."""
     return hashlib.sha256(text.encode()).hexdigest()
 
 
 def paho_version():
+    """Best-effort paho-mqtt version string; 'unknown' when probing fails."""
     try:
         import paho.mqtt as paho_pkg
         return getattr(paho_pkg, "__version__", "unknown")
@@ -172,6 +177,7 @@ def install_socketpair(mode):
             "AF_UNIX patching is not supported")
 
     def af_unix_pair():
+        """Create a non-blocking AF_UNIX socketpair for paho's cross-thread wake-up."""
         reader, writer = socket.socketpair(socket.AF_UNIX, socket.SOCK_STREAM)
         reader.setblocking(False)
         writer.setblocking(False)
@@ -181,6 +187,7 @@ def install_socketpair(mode):
 
 
 def enable_tcp_nodelay(client):
+    """Set TCP_NODELAY on an open client socket (client-side only)."""
     sock = client.socket()
     if sock is None:
         raise RuntimeError("cannot set TCP_NODELAY: client socket is not open")
@@ -216,6 +223,7 @@ def sample_lo_idle(seconds, max_pps=None):
 
 
 def sleep_until(target_ns):
+    """Sleep until a monotonic-ns deadline, raising Aborted when a signal arrives."""
     while True:
         if _abort.is_set():
             raise Aborted()
@@ -226,6 +234,7 @@ def sleep_until(target_ns):
 
 
 def wait_until(cond, timeout, what, interval=0.02):
+    """Poll cond() until true or timeout, logging a warning on timeout; raises Aborted when signalled."""
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
         if _abort.is_set():
@@ -250,6 +259,7 @@ def read_lo_tx():
 
 
 def netem_apply(command):
+    """Apply the tc netem command on lo once per matrix, guarded by the netem lock."""
     global _netem_applied
     with _netem_lock:
         if _netem_applied:
@@ -271,6 +281,7 @@ def netem_present():
 
 
 def _netem_clear_once():
+    """Best-effort single netem teardown via sudo; never raises."""
     try:
         subprocess.run(NETEM_CLEAR_CMD, capture_output=True, text=True)
     except Exception as exc:
@@ -312,7 +323,9 @@ def check_no_netem_before_run(run_id, scenario):
 
 
 def install_signal_handlers():
+    """Route SIGINT/SIGTERM/SIGHUP to set the abort flag and tear netem down."""
     def handler(signum, frame):
+        """Set the abort flag and attempt a netem teardown on the signal."""
         log(f"signal {signum} received — aborting")
         _abort.set()
         try:
@@ -327,6 +340,7 @@ class Recorder:
     """In-memory logs; no file I/O inside MQTT callbacks."""
 
     def __init__(self):
+        """Seed the lock, in-memory logs and ack bookkeeping."""
         self.lock = threading.Lock()
         self.sent = []
         self.recv = []
@@ -335,6 +349,7 @@ class Recorder:
         self.invalid_payloads = 0
 
     def register_sent(self, rec, mid):
+        """Append a sent record; pair a pre-arrived (orphan) ack immediately."""
         with self.lock:
             self.sent.append(rec)
             ack = self.orphan_acks.pop(mid, None)
@@ -344,6 +359,7 @@ class Recorder:
                 self.mid_map[mid] = rec
 
     def on_ack(self, mid):
+        """Stamp ack_ns on the message-id's record, or park it as a future orphan ack."""
         ts = time.monotonic_ns()
         with self.lock:
             rec = self.mid_map.pop(mid, None)
@@ -353,6 +369,7 @@ class Recorder:
                 self.orphan_acks[mid] = ts
 
     def record_recv(self, seq, t1):
+        """Record a (seq, t1) receive; counts payloads lacking a numeric seq as invalid."""
         with self.lock:
             if seq is None:
                 self.invalid_payloads += 1
@@ -360,16 +377,19 @@ class Recorder:
                 self.recv.append((int(seq), t1))
 
     def pending_acks(self):
+        """Return the number of sent messages still awaiting acks."""
         with self.lock:
             return len(self.mid_map)
 
     def snapshot(self):
+        """Return (sent records, recv records, invalid payload count) under the lock."""
         with self.lock:
             return list(self.sent), list(self.recv), self.invalid_payloads
 
 
 class Publisher:
     def __init__(self, client_id, session_id, recorder, tcp_nodelay=False):
+        """Store the run context and expose connected/disconnected events with per-tier counters."""
         self.client_id = client_id
         self.session_id = session_id
         self.recorder = recorder
@@ -382,17 +402,21 @@ class Publisher:
                       "background": 0, "total": 0}
 
     def _on_connect(self, client, userdata, flags, reason_code, properties=None):
+        """Set the connected event; record the reason code on failure."""
         if reason_code.is_failure:
             self.error = str(reason_code)
         self.connected.set()
 
     def _on_disconnect(self, client, userdata, flags, reason_code, properties=None):
+        """Set the disconnected event."""
         self.disconnected.set()
 
     def _on_publish(self, client, userdata, mid, reason_code, properties=None):
+        """Forward the message-id to the recorder as an ack."""
         self.recorder.on_ack(mid)
 
     def connect(self):
+        """Connect with the benchmark MQTT settings, wait for CONNACK, optionally set TCP_NODELAY, and start the loop."""
         c = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2,
                         client_id=self.client_id, protocol=mqtt.MQTTv5)
         c.max_inflight_messages = MAX_INFLIGHT
@@ -413,6 +437,7 @@ class Publisher:
         self.client = c
 
     def _qos(self, tier, experiment):
+        """QoS per experiment: A is all QoS 0, C all QoS 2, B follows the tier map."""
         if experiment == "A":
             return 0
         if experiment == "C":
@@ -420,9 +445,11 @@ class Publisher:
         return TIER_QOS[tier]
 
     def _topic(self, tier, experiment):
+        """bench/uniform for the uniform experiments, per-tier topics for B."""
         return TOPIC_UNIFORM if experiment in ("A", "C") else TIER_TOPICS[tier]
 
     def _emit(self, seq, row, kind, tier, experiment, payload):
+        """Publish the payload at t0 with the experiment's QoS/topic and register the send with the recorder."""
         qos = self._qos(tier, experiment)
         topic = self._topic(tier, experiment)
         t0 = time.monotonic_ns()
@@ -435,6 +462,7 @@ class Publisher:
         return rec
 
     def publish_reading(self, row, seq, experiment, warmup=False):
+        """Serialize one classified row (including run stats) and emit it as a reading."""
         tier = row["tier"]
         self.stats[tier.lower()] += 1
         self.stats["total"] += 1
@@ -461,6 +489,7 @@ class Publisher:
         return rec
 
     def publish_background(self, seq, experiment):
+        """Emit the periodic session-statistics message with zeroed vitals."""
         tier = "Background"
         self.stats["background"] += 1
         qos = self._qos(tier, experiment)
@@ -481,6 +510,7 @@ class Publisher:
         return self._emit(seq, None, "background", tier, experiment, payload)
 
     def teardown(self):
+        """DISCONNECT with SessionExpiryInterval=0, stop the loop and drop the client."""
         if not self.client:
             return
         self.disconnected.clear()
@@ -500,6 +530,7 @@ class Publisher:
 
 class Subscriber:
     def __init__(self, client_id, recorder, tcp_nodelay=False):
+        """Store ids/recorder and expose connected/subscribed/disconnected/session_present state."""
         self.client_id = client_id
         self.recorder = recorder
         self.tcp_nodelay = tcp_nodelay
@@ -511,6 +542,7 @@ class Subscriber:
         self.error = None
 
     def _on_connect(self, client, userdata, flags, reason_code, properties=None):
+        """Set connected; on a fresh session subscribe bench/# at QoS 2."""
         if reason_code.is_failure:
             self.error = str(reason_code)
             self.connected.set()
@@ -521,12 +553,15 @@ class Subscriber:
             client.subscribe(TOPIC_FILTER, qos=2)
 
     def _on_subscribe(self, client, userdata, mid, reason_codes, properties=None):
+        """Record the SUBACK so connect() can wait for it."""
         self.subscribed.set()
 
     def _on_disconnect(self, client, userdata, flags, reason_code, properties=None):
+        """Set the disconnected event."""
         self.disconnected.set()
 
     def _on_message(self, client, userdata, msg):
+        """Timestamp arrival and record the payload's seq (None when unparsable)."""
         t1 = time.monotonic_ns()
         try:
             seq = json.loads(msg.payload.decode()).get("seq")
@@ -535,6 +570,7 @@ class Subscriber:
         self.recorder.record_recv(seq, t1)
 
     def connect(self, clean_start):
+        """Connect with clean_start per outage semantics, wait for CONNACK and SUBACK on a fresh session; return whether the session was present."""
         c = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2,
                         client_id=self.client_id, protocol=mqtt.MQTTv5)
         c.max_inflight_messages = MAX_INFLIGHT
@@ -590,6 +626,7 @@ class SysWatcher:
     """Reads $SYS broker counters; non-persistent (clean start, expiry 0)."""
 
     def __init__(self):
+        """Prepare the client slot, sample store, version and baseline counters."""
         self.client = None
         self.connected = threading.Event()
         self.lock = threading.Lock()
@@ -598,6 +635,7 @@ class SysWatcher:
         self.baseline = None
 
     def _on_connect(self, client, userdata, flags, reason_code, properties=None):
+        """Subscribe to inactive/connected client counts and the broker version on $SYS."""
         if reason_code.is_failure:
             return
         self.connected.set()
@@ -607,6 +645,7 @@ class SysWatcher:
             client.subscribe(topic, qos=0)
 
     def _on_message(self, client, userdata, msg):
+        """Record (ts, topic, value) samples and capture the running broker version."""
         ts = time.monotonic_ns()
         value = msg.payload.decode(errors="replace")
         with self.lock:
@@ -615,6 +654,7 @@ class SysWatcher:
                 self.version = value
 
     def start(self):
+        """Connect a clean-start $SYS client and wait for the CONNACK."""
         c = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2,
                         client_id=f"bench-sys-{uuid.uuid4().hex[:8]}",
                         protocol=mqtt.MQTTv5)
@@ -630,6 +670,7 @@ class SysWatcher:
             raise RuntimeError("$SYS watcher CONNACK timeout")
 
     def _latest(self, topic, after_ns=None):
+        """Return the latest sample for a topic, strictly newer than after_ns when given."""
         with self.lock:
             for ts, t, value in reversed(self.samples):
                 if t != topic:
@@ -640,6 +681,7 @@ class SysWatcher:
         return None
 
     def wait_baseline(self, timeout=12):
+        """Wait for the first inactive count and version sample, then lock in the baseline inactive count."""
         wait_until(lambda: self._latest("$SYS/broker/clients/inactive") is not None,
                    timeout, "first $SYS inactive sample")
         wait_until(lambda: self.version is not None, 2, "$SYS broker version")
@@ -679,6 +721,7 @@ class SysWatcher:
         return value, self.baseline, warned, fresh
 
     def stop(self):
+        """DISCONNECT with expiry 0 and stop the network loop."""
         if not self.client:
             return
         try:
@@ -698,10 +741,12 @@ class SudoKeepalive(threading.Thread):
     """Refresh the sudo timestamp during long matrices (default timeout 15 min)."""
 
     def __init__(self):
+        """Mark the thread daemon and arm the stop flag."""
         super().__init__(daemon=True)
         self.stop_flag = threading.Event()
 
     def run(self):
+        """Refresh the sudo timestamp every 4 minutes while a matrix is running."""
         while not self.stop_flag.wait(240):
             rc = subprocess.run(["sudo", "-n", "-v"],
                                 capture_output=True).returncode
@@ -710,12 +755,14 @@ class SudoKeepalive(threading.Thread):
                     "later netem runs may fail")
 
     def stop(self):
+        """Signal the keepalive thread to stop refreshing."""
         self.stop_flag.set()
 
 
 # ── Broker / git / config description ─────────────────────────
 
 def broker_config():
+    """Record mosquitto version plus effective config (defaults reconciled with active directives)."""
     cfg_dir = Path("/etc/mosquitto")
     pattern = "queue_qos0|max_queued|max_inflight|persistence|per_listener"
     raw = ""
@@ -765,7 +812,9 @@ def broker_config():
 
 
 def git_info():
+    """Record HEAD, branch and dirty state — informational only, excluded from config_hash."""
     def run(*args):
+        """Quiet git invocation against the repo root; empty string on failure."""
         try:
             return subprocess.run(["git", "-C", str(ROOT), *args],
                                   capture_output=True, text=True).stdout.strip()
@@ -780,6 +829,7 @@ def git_info():
 
 
 def env_info():
+    """Record host, kernel, platform and python/paho/pandas versions for the meta file."""
     import platform
     return {
         "hostname": socket.gethostname(),
@@ -792,6 +842,7 @@ def env_info():
 
 
 def build_config(args, rows, broker):
+    """Build the canonical provenance dictionary (file hashes, pacing, MQTT/broker settings) hashed into config_hash."""
     return {
         "method_version": METHOD_VERSION,
         "runner_sha256": sha256_file(Path(__file__)),
@@ -815,11 +866,13 @@ def build_config(args, rows, broker):
 
 
 def config_hash(config):
+    """SHA-256 over the canonical JSON dump of the study configuration."""
     canonical = json.dumps(config, sort_keys=True, separators=(",", ":"))
     return hashlib.sha256(canonical.encode()).hexdigest()
 
 
 def load_rows(limit):
+    """Verify the dataset hash, then read, classify and normalize the measured row list."""
     actual = sha256_file(DATASET_PATH)
     if actual != EXPECTED_DATASET_SHA256:
         raise SystemExit(
@@ -841,6 +894,7 @@ def load_rows(limit):
 
 
 def audit_windows(rows, interval, outage_seconds, fractions):
+    """Compute the deterministic outage-window tier counts for every configured fraction."""
     span = max(1, round(outage_seconds / interval))
     table = []
     for frac in fractions:
@@ -870,6 +924,7 @@ def audit_windows(rows, interval, outage_seconds, fractions):
 
 
 def print_audit(summary):
+    """Pretty-print the outage-window audit table and summary."""
     print("\nOutage-window audit (deterministic dataset)")
     print(f"  window = {summary['window_messages']} readings")
     for row in summary["table"]:
@@ -885,6 +940,7 @@ def print_audit(summary):
 # ── Preflight / atomic output ──────────────────────────────────
 
 def preflight(args):
+    """Check broker reachability, absence of containerised MQTT, tc/sudo availability and idle loopback traffic; return (problems, idle_sample)."""
     problems = []
     idle = None
     try:
@@ -938,12 +994,14 @@ def preflight(args):
 
 
 def atomic_write_text(path, text):
+    """Write text to a temp sibling file, then atomically rename it onto path."""
     tmp = path.with_name(path.name + ".tmp")
     tmp.write_text(text)
     os.replace(tmp, path)
 
 
 def write_csv(path, fields, rows):
+    """Write a CSV atomically, ignoring dict keys outside the field list."""
     buf = io.StringIO()
     writer = csv.DictWriter(buf, fieldnames=fields, extrasaction="ignore")
     writer.writeheader()
@@ -953,10 +1011,12 @@ def write_csv(path, fields, rows):
 
 
 def write_json(path, obj):
+    """Write pretty, key-sorted JSON atomically."""
     atomic_write_text(path, json.dumps(obj, indent=2, sort_keys=True))
 
 
 def run_paths(out_dir, run_id):
+    """Return the (sent, recv, meta) artifact paths for a run_id in out_dir."""
     return (out_dir / f"sent_{run_id}.csv",
             out_dir / f"recv_{run_id}.csv",
             out_dir / f"meta_{run_id}.json")
@@ -965,6 +1025,7 @@ def run_paths(out_dir, run_id):
 # ── One run ────────────────────────────────────────────────────
 
 def run_single(spec, rows, args, cfg_hash, config, broker, sysw, out_dir, idle):
+    """Run one scheduled condition: connect, warm-up, paced publish, optional outage and reconnect, drain, teardown and artifact write; return the run meta."""
     run_id = spec.run_id
     started = datetime.now(timezone.utc).isoformat()
     recorder = Recorder()
@@ -977,6 +1038,7 @@ def run_single(spec, rows, args, cfg_hash, config, broker, sysw, out_dir, idle):
     counter = {"n": 0}
 
     def next_seq():
+        """Return the next monotonic per-run sequence number."""
         value = counter["n"]
         counter["n"] += 1
         return value
@@ -1017,6 +1079,7 @@ def run_single(spec, rows, args, cfg_hash, config, broker, sysw, out_dir, idle):
             outage["trigger_row"] = trigger_row
 
             def outage_worker():
+                """On trigger, disconnect keeping the session, wait the outage, reconnect clean_start=False and record the window timings."""
                 trigger.wait()
                 outage["t_off_ns"] = time.monotonic_ns()
                 try:
@@ -1238,6 +1301,7 @@ class RunSpec:
 
 
 def parse_args(argv=None):
+    """Parse CLI arguments, apply per-study defaults (output dir, rows, reps, scenarios, interval) and validate combinations; returns the parsed args."""
     parser = argparse.ArgumentParser(
         description="Single-clock MQTT QoS benchmark (Expo publisher model).",
         formatter_class=argparse.ArgumentDefaultsHelpFormatter)
@@ -1267,7 +1331,7 @@ def parse_args(argv=None):
     parser.add_argument("--quick", action="store_true",
                         help="smoke test into benchmark/results_quick_v2 (refused by analysis)")
     parser.add_argument("--sensitivity", action="store_true",
-                        help="1 msg/s pacing study into benchmark/results_v2_sensitivity")
+                        help="1 msg/s pacing study into benchmark/results_v3_sensitivity")
     parser.add_argument("--calibration", action="store_true",
                         help="calibration mode: idle threshold may be omitted")
     parser.add_argument("--force", action="store_true",
@@ -1291,7 +1355,7 @@ def parse_args(argv=None):
                     "interval": DEFAULT_INTERVAL}
     elif args.sensitivity:
         args.study = "sensitivity"
-        default_out = BENCH_DIR / "results_v2_sensitivity"
+        default_out = BENCH_DIR / "results_v3_sensitivity"
         defaults = {"rows": SENS_ROWS, "reps": 2, "scenarios": "clean,netem",
                     "interval": SENS_INTERVAL}
     elif args.calibration:
@@ -1301,7 +1365,7 @@ def parse_args(argv=None):
                     "interval": DEFAULT_INTERVAL}
     else:
         args.study = "main"
-        default_out = BENCH_DIR / "results_v2"
+        default_out = BENCH_DIR / "results_v3"
         defaults = {"rows": FULL_ROWS, "reps": 5, "scenarios": "clean,netem,outage",
                     "interval": DEFAULT_INTERVAL}
     args.out_dir = Path(args.out_dir) if args.out_dir else default_out
@@ -1335,6 +1399,7 @@ def parse_args(argv=None):
 
 
 def build_plan(experiments, scenarios, fractions, reps):
+    """Build the run schedule, rotating experiment/condition order per repetition."""
     conditions = []
     if "clean" in scenarios:
         conditions.append(("clean", None))
@@ -1358,6 +1423,7 @@ def build_plan(experiments, scenarios, fractions, reps):
 
 
 def scan_existing(out_dir, cfg_hash):
+    """Scan out_dir for complete runs matching the config_hash; return (complete_by_id, mismatched_ids)."""
     complete, mismatched = {}, []
     for meta_path in sorted(out_dir.glob("meta_*.json")):
         try:
@@ -1379,6 +1445,7 @@ def scan_existing(out_dir, cfg_hash):
 
 
 def main(argv=None):
+    """Entry point: plan the matrix, resume matching complete runs, execute the remainder with per-run idle sampling, $SYS watching and netem lifecycle, then finalise matrix.json. Exit 0 clean, 1 with failures, 2 on config/preflight errors, 3 to refuse mixed methodologies, 130 when aborted."""
     args = parse_args(argv)
     if paho_version() == "unknown":
         log("FATAL: cannot determine paho-mqtt version; refusing v2 run")

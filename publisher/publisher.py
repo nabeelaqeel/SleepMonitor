@@ -17,6 +17,7 @@ import sys
 import time
 import uuid
 from datetime import datetime, timezone
+from pathlib import Path
 
 import pandas as pd
 import paho.mqtt.client as mqtt
@@ -24,7 +25,9 @@ from dotenv import load_dotenv
 
 from tier_rules import classify
 
-load_dotenv(".env.development")
+# Anchor the env file to the repo root (two levels above this file) so the
+# publisher loads the same configuration no matter where it is launched from.
+load_dotenv(Path(__file__).resolve().parents[1] / ".env.development")
 
 logging.basicConfig(
     level=logging.INFO,
@@ -38,7 +41,7 @@ MQTT_HOST        = os.getenv("MQTT_HOST", "mosquitto")
 MQTT_PORT        = int(os.getenv("MQTT_PORT", "1883"))
 MQTT_USER        = os.getenv("MQTT_USER", "admin")
 MQTT_PASSWORD    = os.getenv("MQTT_PASSWORD", "changeme")
-CSV_PATH         = os.getenv("CSV_PATH", "data/sleep_data.csv")
+CSV_PATH         = os.getenv("CSV_PATH", "data/sleep_data_realistic.csv")
 PUBLISH_INTERVAL = float(os.getenv("PUBLISH_INTERVAL", "1.0"))
 LOOP_CSV         = os.getenv("LOOP_CSV", "true").lower() == "true"
 PATIENT_ID       = os.getenv("PATIENT_ID", "patient-001")
@@ -62,6 +65,7 @@ _stats = {"critical": 0, "important": 0, "normal": 0, "background": 0, "total": 
 # ── MQTT callbacks ────────────────────────────────────────────
 
 def on_connect(client, userdata, connect_flags, reason_code, properties=None):
+    """Log a successful MQTT v5 broker connection or exit when the broker refuses it."""
     if reason_code.is_failure:
         log.error("Connection refused — reason code %s", reason_code)
         sys.exit(1)
@@ -69,6 +73,7 @@ def on_connect(client, userdata, connect_flags, reason_code, properties=None):
 
 
 def on_disconnect(client, userdata, disconnect_flags, reason_code, properties=None):
+    """Log an unexpected broker disconnection; the client loop retries."""
     if reason_code.is_failure:
         log.warning("Unexpected disconnection (reason=%s) — will retry", reason_code)
 
@@ -76,6 +81,7 @@ def on_disconnect(client, userdata, disconnect_flags, reason_code, properties=No
 # ── MQTT client setup ─────────────────────────────────────────
 
 def build_client() -> mqtt.Client:
+    """Build the MQTT v5 client, set optional credentials and install the session/end Last Will."""
     client = mqtt.Client(
         mqtt.CallbackAPIVersion.VERSION2,
         client_id=f"sleep-publisher-{PATIENT_ID}",
@@ -116,23 +122,52 @@ def build_client() -> mqtt.Client:
 
 # ── CSV loading ───────────────────────────────────────────────
 
-def load_csv(path: str) -> pd.DataFrame:
-    df = pd.read_csv(path)
-    log.info("Loaded %d rows from %s (columns: %s)", len(df), path, list(df.columns))
+def load_csv(path: str | Path) -> pd.DataFrame:
+    """Load the demo dataset, resolving the path and guarding the schema.
+
+    Args:
+        path: CSV path (relative paths try the CWD first, then the repo root
+            so the run-book always works from any launch directory).
+
+    Returns:
+        The parsed DataFrame; a missing `hrv` column logs a loud warning
+        because every reading would then publish the constant 35 ms fallback
+        and the "Important: HRV < 20 ms" tier could never trigger.
+    """
+    # A bare relative path is resolved against the CWD first; if it is not
+    # there (e.g. the publisher was launched from another directory), fall
+    # back to the repo root so the run-book always works.
+    csv_path = Path(path)
+    if not csv_path.is_file():
+        csv_path = Path(__file__).resolve().parents[1] / csv_path
+    df = pd.read_csv(csv_path)
+    # Loud, not silent: when this check was missing, a stale CSV whose HRV
+    # column was mislabeled made every published reading carry the constant
+    # 35 ms fallback for weeks (docs/PROJECT_OVERVIEW.md, "HRV is always 35").
+    if "hrv" not in df.columns:
+        log.warning(
+            "CSV %s has no 'hrv' column — every reading will publish the "
+            "constant HRV fallback (35 ms) and the 'Important: HRV < 20' "
+            "tier can never trigger", csv_path,
+        )
+    log.info("Loaded %d rows from %s (columns: %s)", len(df), csv_path, list(df.columns))
     return df
 
 
 # ── Publishing ────────────────────────────────────────────────
 
 def now_iso() -> str:
+    """Return the wall-clock time formatted 'HH:MM AM/PM' for payload timestamps."""
     return datetime.now(timezone.utc).strftime("%I:%M %p")
 
 
 def now_ms() -> int:
+    """Return the current time as Unix milliseconds for the payload's publishedAt field."""
     return int(time.time() * 1000)
 
 
 def publish_session_event(client: mqtt.Client, event: str, reason: str | None = None) -> None:
+    """Publish session/start or session/end (with totalReadings) for the ingest worker's session lifecycle."""
     topic   = f"session/{event}"
     payload = {
         "sessionId": SESSION_ID,
@@ -156,6 +191,7 @@ def publish_session_event(client: mqtt.Client, event: str, reason: str | None = 
 
 
 def publish_reading(client: mqtt.Client, row: pd.Series, row_idx: int) -> None:
+    """Classify one dataset row and publish it to sleep/<tier> at the tier's QoS."""
     global _seq
 
     # sleep_data.csv uses 'bo' for processed SpO2 and 'hr' for heart rate
@@ -196,6 +232,7 @@ def publish_reading(client: mqtt.Client, row: pd.Series, row_idx: int) -> None:
 
 
 def publish_background_stats(client: mqtt.Client) -> None:
+    """Periodically publish zeroed vitals with the running per-tier stats on sleep/background."""
     topic   = "sleep/background"
     payload = json.dumps({
         "sessionId": SESSION_ID,
@@ -220,9 +257,11 @@ def publish_background_stats(client: mqtt.Client) -> None:
 # ── Main loop ─────────────────────────────────────────────────
 
 def run() -> None:
+    """Load the CSV and replay it at PUBLISH_INTERVAL seconds, looping until signalled, then publish session/end."""
     global _shutdown
 
     def handle_signal(sig, frame):
+        """Set the shutdown flag on SIGINT/SIGTERM so the replay loop unwinds cleanly."""
         global _shutdown
         log.info("Shutdown signal received")
         _shutdown = True

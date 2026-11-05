@@ -1,6 +1,6 @@
 # SleepMonitor
 
-A QoS-aware real-time sleep monitoring system built as a Final Year Project (FYP). The mobile app receives live physiological data (SpO2, heart rate, HRV, motion) from a Python publisher (`python-publisher/`) via MQTT and displays it to patients and doctors with role-based dashboards.
+A QoS-aware real-time sleep monitoring system built as a Final Year Project (FYP). The mobile app receives live physiological data (SpO2, heart rate, HRV, motion) from a Python publisher (`publisher/`) via MQTT and displays it to patients and doctors with role-based dashboards.
 
 ---
 
@@ -43,7 +43,7 @@ The Python publisher reads `data/sleep_data_realistic.csv`, assigns a tier, and 
 data/sleep_data_realistic.csv
       │
       ▼
-Python Publisher  (python-publisher/)
+Python Publisher  (publisher/)
   Reads rows → applies tier rules → publishes JSON
       │
       │  TCP :1883
@@ -160,7 +160,7 @@ point at this host's LAN IP.
 ### Terminal 4 — Echo responder (optional, leave running)
 
 ```bash
-.venv-dev/bin/python python-publisher/echo.py
+.venv-dev/bin/python publisher/echo.py
 ```
 
 It answers the app's latency probes. Without it the Network screen shows `—` for
@@ -169,14 +169,14 @@ latency; everything else keeps working.
 ### Terminal 5 — Publisher (leave running)
 
 ```bash
-.venv-dev/bin/python python-publisher/publisher.py
+.venv-dev/bin/python publisher/publisher.py
 ```
 
 You should see `Loaded 526 rows from data/sleep_data_realistic.csv`, then one line
 per published reading. For a fast replay (handy for DB demos):
 
 ```bash
-PUBLISH_INTERVAL=0.05 .venv-dev/bin/python python-publisher/publisher.py
+PUBLISH_INTERVAL=0.05 .venv-dev/bin/python publisher/publisher.py
 ```
 
 ### Terminal 6 — Expo app
@@ -302,12 +302,12 @@ docker compose --env-file .env.development up -d
 
 # 3. Python deps in a host venv
 python3 -m venv .venv-dev
-.venv-dev/bin/pip install -r ingest/requirements.txt -r python-publisher/requirements.txt -r api/requirements.txt
+.venv-dev/bin/pip install -r ingest/requirements.txt -r publisher/requirements.txt -r api/requirements.txt
 
 # 4. Run the ingest worker and publisher — terminals 2 and 4 of
 #    "Run the Full Stack" in the README. For DB demos a fast replay is convenient:
 LOOP_CSV=false PUBLISH_INTERVAL=0.05 \
-  .venv-dev/bin/python python-publisher/publisher.py
+  .venv-dev/bin/python publisher/publisher.py
 
 # 5. Inspect the results
 docker exec sleep-postgres psql -U sleep_user -d sleep_monitor \
@@ -429,7 +429,7 @@ SleepMonitor/
 │   ├── sleep_data_realistic.csv      # Demo + DB ingestion set
 │   └── generate_data.py              # Writes sleep_data_realistic.csv
 │
-├── python-publisher/                 # MQTT publisher
+├── publisher/                 # MQTT publisher
 │   ├── publisher.py                  # Session lifecycle, seq/publishedAt, stats
 │   ├── tier_rules.py                 # Single source of truth: tier thresholds + QoS
 │   └── echo.py                       # qos/ping → qos/pong latency relay
@@ -495,7 +495,7 @@ Every message published to any `sleep/*` topic is a JSON object:
 | 1 | At least once (PUBACK) | measured live | Important — borderline readings; duplicates tolerable |
 | 0 | Best effort (fire and forget) | measured live | Normal + Background — high-frequency routine data |
 
-> **Latency** figures in the app are **estimated** from round-trip ping/echo (`RTT/2`) via `python-publisher/echo.py`; they are an on-device indicator, not the thesis measurement. The authoritative figures come from the single-clock benchmark (producer and consumer timestamps on one host clock).
+> **Latency** figures in the app are **estimated** from round-trip ping/echo (`RTT/2`) via `publisher/echo.py`; they are an on-device indicator, not the thesis measurement. The authoritative figures come from the single-clock benchmark (producer and consumer timestamps on one host clock).
 
 > **Note:** The app subscribes `sleep/#` at QoS 2 and connects with `cleanSession: false`, so the broker does not downgrade critical/important traffic and queues QoS 1/2 while the app is offline.
 

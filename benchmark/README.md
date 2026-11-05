@@ -62,7 +62,7 @@ and the ingest worker (which subscribe to `sleep/#` and `session/#`) never
 record benchmark traffic.
 
 Tier assignment is done with the shared rules module
-(`python-publisher/tier_rules.py`), evaluated in strict order — the
+(`publisher/tier_rules.py`), evaluated in strict order — the
 benchmark runner and the production publisher use the exact same code:
 
 - SpO2 < 90 OR HR < 40 OR HR > 100 → **Critical** (QoS 2 in B)
@@ -192,14 +192,49 @@ or order.
 | Rows used | first 100 | all 526 | first 100 |
 | Trigger | simulated | live MQTT | live MQTT |
 
-`data/sleep_data_realistic.csv`:
+`data/sleep_data_realistic.csv` — current file, used by any NEW runs:
 
-- 526 rows, sha256 `10e9df7fc38087b8caad72aebdee3975f752da3dd4bd5d79f7aa7aa1b3de64de`
-  (the driver refuses to start if this file changes)
-- 57 Critical / 191 Important / 278 Normal
+- 526 rows, sha256 `b247f4b8953e46e4899d70ae94b22389b86e292ecd85e9c55143d78dfa555390`
+  (the driver refuses to start if this file changes; the constant was rolled
+  deliberately when the dataset's third vital was renamed from the mislabeled
+  `rr` to its real name `hrv` and the file was regenerated — values unchanged,
+  header-only change, tier distribution identical; see
+  `docs/PROJECT_OVERVIEW.md` Issue 3)
+- 57 Critical / 191 Important / 278 Normal (unchanged by the rename)
+- HRV now carries real values (10.2–52.2 ms, 59 readings below 20 ms)
 - real payload size, same field names and value rounding as
-  `python-publisher/publisher.py` (session id, patient id, seq, timestamps,
+  `publisher/publisher.py` (session id, patient id, seq, timestamps,
   tier, SpO2, heart rate, HRV, motion, reason, QoS, topic, stats)
+
+**Archived results were measured on the original dataset revision.** Every
+completed study records the pre-regeneration hash in its matrix —
+`dataset_sha256: 10e9df7fc38087b8caad72aebdee3975f752da3dd4bd5d79f7aa7aa1b3de64de`
+
+| Completed study | Results directory | Reps | Dataset sha256 recorded |
+|---|---|---|---|
+| Main (75/75 gates) | `benchmark/results_v2/` | 5 per cell | `10e9df7f…` |
+| Sensitivity (12/12) | `benchmark/results_v2_sensitivity/` | 2 per cell | `10e9df7f…` |
+| Calibration stock + AF_UNIX | `benchmark/calibration_v2/bc_netem/{stock,af_unix}/` | 3 runs A/B/C at r01 in each directory | `10e9df7f…` |
+
+On that revision the `hrv` column was missing (the third vital was mislabeled
+`rr`), so the driver's `row.get("hrv", 35)` published the **constant HRV
+fallback 35 ms in every archived reading**; all archived numbers — tier
+counts, latencies, delivery — reflect a flat HRV signal. The current file's
+value stream is byte-identical apart from the header and the tier
+distribution stays 57/191/278 (HRV < 20 ms always coincides with the apnea
+SpO2 drop that already triggers Important), but the revisions are not
+metadata-equal: cross-revision comparisons must account for the dataset
+change, and no archived number may be silently carried over into a
+new-dataset run.
+
+**Output directories.** The archived directories above stay untouched:
+`results_v2/`, `results_v2_sensitivity/`, `calibration_v2/`. Default output
+for a full-study run is now `benchmark/results_v3/`, and `--sensitivity`
+runs default to `benchmark/results_v3_sensitivity/`. Calibration keeps its
+`benchmark/calibration_v2/` default (its matrices already pin the old hash —
+recalibrating against the new dataset revision is an explicit `--out-dir`
+decision); `--quick` keeps `benchmark/results_quick_v2/` (refused by
+analysis). All defaults can be overridden with `--out-dir`.
 
 **Reconciliation.** The thesis draft's numbers came from 100 simulated messages
 drawn from the 630-row legacy file using a stale classifier. The live system
@@ -524,16 +559,21 @@ excluded); the pooled median is a note only. `gate/gate.md` prints each stock
 and patched median as `value (n=messages)` with the exact limit.
 
 ```bash
-# v2 main study: 75 runs (~100-120 min), resumable, AF_UNIX by default
+# v3 main study: 75 runs (~100-120 min), resumable, AF_UNIX by default
 .venv-dev/bin/python benchmark/run_benchmark.py \
     --idle-max-pps <threshold pps>
 
-# v2 pacing study: 12 runs at 1 msg/s into results_v2_sensitivity/
+# v3 pacing study: 12 runs at 1 msg/s into results_v3_sensitivity/
 .venv-dev/bin/python benchmark/run_benchmark.py --sensitivity \
     --idle-max-pps <threshold pps>
 
-# analysis (main + sensitivity, if present)
-.venv-dev/bin/python benchmark/analyze_benchmark.py
+# analysis for the v3 study — the analyzer's defaults still target the
+# archived results_v2*, so pass the new directories explicitly (a missing
+# results_v3_sensitivity/ is skipped automatically; --no-sensitivity forces
+# main-only)
+.venv-dev/bin/python benchmark/analyze_benchmark.py \
+    --main-dir benchmark/results_v3 \
+    --sensitivity-dir benchmark/results_v3_sensitivity
 ```
 
 Optional B-clean TCP_NODELAY test (no sudo, client-side only):
