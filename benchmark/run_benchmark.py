@@ -70,7 +70,7 @@ TIER_TOPICS = {
 
 DATASET_PATH = ROOT / "data" / "sleep_data_realistic.csv"
 EXPECTED_DATASET_SHA256 = (
-    "10e9df7fc38087b8caad72aebdee3975f752da3dd4bd5d79f7aa7aa1b3de64de")
+    "b247f4b8953e46e4899d70ae94b22389b86e292ecd85e9c55143d78dfa555390")
 # Provenance hash target for the frozen methodology: the module holding the
 # tier rules every benchmark tier assignment is built from.
 CLASSIFIER_PATH = ROOT / "python-publisher" / "tier_rules.py"

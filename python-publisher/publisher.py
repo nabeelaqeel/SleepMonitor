@@ -17,6 +17,7 @@ import sys
 import time
 import uuid
 from datetime import datetime, timezone
+from pathlib import Path
 
 import pandas as pd
 import paho.mqtt.client as mqtt
@@ -24,7 +25,9 @@ from dotenv import load_dotenv
 
 from tier_rules import classify
 
-load_dotenv(".env.development")
+# Anchor the env file to the repo root (two levels above this file) so the
+# publisher loads the same configuration no matter where it is launched from.
+load_dotenv(Path(__file__).resolve().parents[1] / ".env.development")
 
 logging.basicConfig(
     level=logging.INFO,
@@ -38,7 +41,7 @@ MQTT_HOST        = os.getenv("MQTT_HOST", "mosquitto")
 MQTT_PORT        = int(os.getenv("MQTT_PORT", "1883"))
 MQTT_USER        = os.getenv("MQTT_USER", "admin")
 MQTT_PASSWORD    = os.getenv("MQTT_PASSWORD", "changeme")
-CSV_PATH         = os.getenv("CSV_PATH", "data/sleep_data.csv")
+CSV_PATH         = os.getenv("CSV_PATH", "data/sleep_data_realistic.csv")
 PUBLISH_INTERVAL = float(os.getenv("PUBLISH_INTERVAL", "1.0"))
 LOOP_CSV         = os.getenv("LOOP_CSV", "true").lower() == "true"
 PATIENT_ID       = os.getenv("PATIENT_ID", "patient-001")
@@ -116,9 +119,24 @@ def build_client() -> mqtt.Client:
 
 # ── CSV loading ───────────────────────────────────────────────
 
-def load_csv(path: str) -> pd.DataFrame:
-    df = pd.read_csv(path)
-    log.info("Loaded %d rows from %s (columns: %s)", len(df), path, list(df.columns))
+def load_csv(path: str | Path) -> pd.DataFrame:
+    # A bare relative path is resolved against the CWD first; if it is not
+    # there (e.g. the publisher was launched from another directory), fall
+    # back to the repo root so the run-book always works.
+    csv_path = Path(path)
+    if not csv_path.is_file():
+        csv_path = Path(__file__).resolve().parents[1] / csv_path
+    df = pd.read_csv(csv_path)
+    # Loud, not silent: when this check was missing, a stale CSV whose HRV
+    # column was mislabeled made every published reading carry the constant
+    # 35 ms fallback for weeks (docs/PROJECT_OVERVIEW.md, "HRV is always 35").
+    if "hrv" not in df.columns:
+        log.warning(
+            "CSV %s has no 'hrv' column — every reading will publish the "
+            "constant HRV fallback (35 ms) and the 'Important: HRV < 20' "
+            "tier can never trigger", csv_path,
+        )
+    log.info("Loaded %d rows from %s (columns: %s)", len(df), csv_path, list(df.columns))
     return df
 
 

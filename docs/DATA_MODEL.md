@@ -174,28 +174,29 @@ Use `bo` (column 5) as the primary SpO2 input for tier classification, as it rep
 The dataset used for live demos and DB ingestion. It is 526 rows (one session
 minute per row) and is simpler and self-consistent (no duplicate headers).
 
-> **Generator drift (reconcile during the ML phase):** the committed file's
-> column 4 is `rr` (respiratory rate, 12–22), but the current
-> `data/generate_data.py` emits `minute,spo2,hr,hrv,motion,event` — i.e. `spo2`
-> instead of `bo` and `hrv` (10–55 ms) instead of `rr`. The publisher handles
-> both spellings (`bo`→`spo2` fallback), so both files replay correctly, but a
-> regenerated CSV is **not** byte-identical to the committed one. Pick one
-> naming convention when building the ML pipeline.
+> **Generator drift — resolved:** previously the committed file used `bo` for
+> SpO2 and labeled its third vital `rr`, while `data/generate_data.py` emitted
+> `spo2` and `hrv`. The committed file was regenerated in place (values
+> unchanged — seed 42 — only the header renamed; see
+> `docs/PROJECT_OVERVIEW.md`, Issue 3), so generator and file now agree. The
+> publisher still accepts the legacy spellings (`bo` → SpO2, `lm` → motion
+> fallbacks), and `publisher.load_csv` warns loudly when a CSV has no `hrv`
+> column.
 
 ### Column Headers
 
 ```
-minute, bo, hr, rr, motion, event
+minute, spo2, hr, hrv, motion, event
 ```
 
 ### Column Definitions
 
 | Header | Meaning | Observed Range | Notes |
 |---|---|---|---|
-| `minute` | Session minute index | 1–526 | Row/time index; not published |
-| `bo` | Blood oxygen (SpO2 %) | 82–99 | Primary tier input via the publisher's `bo` → spo2 mapping |
-| `hr` | Heart rate (BPM) | 50–76 | Published as `heartRate` |
-| `rr` | Respiratory rate | 12–22 | Not currently published |
+| `minute` | Session minute index | 0–479 | Repeats where apnea episodes overlap the minute loop; not published |
+| `spo2` | Blood oxygen (SpO2 %) | 82.0–98.3 | Primary tier input |
+| `hr` | Heart rate (BPM) | 48.2–67.1 | Published as `heartRate` |
+| `hrv` | Heart rate variability — RMSSD (ms) | 10.2–52.2 | Apnea episodes 10.2–18.0; normal walk clamped 20–55 ms. Previously mislabeled `rr` |
 | `motion` | Movement index | 0.0–0.4 | Publisher reads `lm` first, falling back to `motion` |
 | `event` | Ground-truth label | `normal` / `apnea` | 467 normal, 59 apnea — available for ML training |
 
@@ -203,12 +204,15 @@ minute, bo, hr, rr, motion, event
 
 `python-publisher/publisher.py` maps this file with no column-renaming needed:
 
-* `spo2` ← `bo`
+* `spo2` ← `spo2` (the legacy `bo` spelling is still accepted via fallback)
 * `heartRate` ← `hr`
-* `motion` ← `row.get("lm", row.get("motion", 0))` → falls back to `motion`
-* `hrv` ← missing → the constant `35` (a known issue; the file has no HRV column)
+* `hrv` ← `hrv` — RMSSD ms; if the column is absent, `load_csv` logs a loud
+  warning and the constant `35` fallback applies
+* `motion` ← `row.get("lm", row.get("motion", 0))` → resolves to `motion`
 
-Tier distribution when replayed: 278 Normal, 191 Important, 57 Critical (526 rows).
+Tier distribution when replayed: 278 Normal, 191 Important, 57 Critical (526
+rows) — unchanged by the `hrv` restore, since HRV < 20 ms always coincides with
+the apnea SpO2 drop that already triggers the tier.
 
 ---
 

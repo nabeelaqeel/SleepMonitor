@@ -194,9 +194,14 @@ or order.
 
 `data/sleep_data_realistic.csv`:
 
-- 526 rows, sha256 `10e9df7fc38087b8caad72aebdee3975f752da3dd4bd5d79f7aa7aa1b3de64de`
-  (the driver refuses to start if this file changes)
-- 57 Critical / 191 Important / 278 Normal
+- 526 rows, sha256 `b247f4b8953e46e4899d70ae94b22389b86e292ecd85e9c55143d78dfa555390`
+  (the driver refuses to start if this file changes; the constant was rolled
+  deliberately when the dataset's third vital was renamed from the mislabeled
+  `rr` to its real name `hrv` and the file was regenerated — values unchanged,
+  header-only change, tier distribution identical; see
+  `docs/PROJECT_OVERVIEW.md` Issue 3. The completed calibration runs recorded
+  in `benchmark/calibration_v2/` keep the previous hash as a historical record)
+- 57 Critical / 191 Important / 278 Normal (unchanged by the rename)
 - real payload size, same field names and value rounding as
   `python-publisher/publisher.py` (session id, patient id, seq, timestamps,
   tier, SpO2, heart rate, HRV, motion, reason, QoS, topic, stats)
