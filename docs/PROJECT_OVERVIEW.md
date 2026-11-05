@@ -170,7 +170,7 @@ master (557e0d7)                            tested prototype — tagged fyp1 —
   └── project/phase2 (HEAD)                 active work branch (current)
 ```
 
-- Remote is named **`fyp-SleepMonitor`**, not `origin`.
+- Remote is named **`SleepMonitor`** — matching the GitHub repo name. There is no `origin`.
 - Tag `fyp1` → `557e0d7` (tested prototype; contains no Docker, CI, or AWS).
 - `project/phase2` branches from `master` and carries the project files forward from
   `fcd4fcc`: the Report timeline + PDF export, doctor screens, `sleepTimeline` state,
