@@ -1,23 +1,30 @@
 # =============================================================
-# Sleep Monitor — AWS Learner Lab stack (Mosquitto broker only)
+# Sleep Monitor — AWS stack (broker always; local Postgres = TEST mode)
 #
-# The database is AWS RDS (per-session lifecycle, docs/DEPLOYMENT.md §2.3):
-# master user sleep_user, database sleep_monitor, TLS via DATABASE_URL
-# ?sslmode=require in the server's .env.development. Host-only Postgres in
-# Docker would still be the laptop-dev path (docker-compose.yml).
-# The broker is the only container here: phone via WebSocket :9001,
-# publisher-side via TCP :1883. 5432 never appears in the EC2 SG — it lives
-# in the RDS security group, sourced from the EC2's sg (§2.3).
+# TWO DATABASE MODES — pick one line in .env.development (DEPLOYMENT.md §2.7):
 #
-# The broker starts LOCKED (allow_anonymous false): the passwd file must
-# exist BEFORE the first start (see docs/DEPLOYMENT.md §2.6):
+#   TEST (default for a non-demo session)
+#     docker compose -f docker-compose.aws.yml --profile local-db up -d
+#     → Postgres container on this host, reachable ONLY from localhost:5432
+#     → zero RDS cost; schema auto-applies on the fresh volume (postgres/init)
+#
+#   DEMO (evaluation days)
+#     AWS RDS created + deleted per session (§2.5/§5); the host Psql client
+#     connects over TLS (?sslmode=require); no container involved.
+#
+# Broker always starts; Postgres only with --profile local-db.
+#
+# Broker LOCKED mode: the passwd file must exist BEFORE first start (§2.9):
 #   MQPW="$(grep '^MQTT_PASSWORD=' .env.development | cut -d= -f2-)"
 #   docker run --rm -v "$PWD/mosquitto:/mosquitto/config" eclipse-mosquitto:2 \
 #     mosquitto_passwd -c -b /mosquitto/config/passwd sm "$MQPW"
 #   sudo chown 1883:1883 mosquitto/passwd && sudo chmod 600 mosquitto/passwd
 #
-# Usage (from the repo root, after repo + .env.development exist):
-#   docker compose -f docker-compose.aws.yml up -d
+# Usage:
+#   docker compose -f docker-compose.aws.yml --env-file .env.development up -d                     # broker only
+#   docker compose -f docker-compose.aws.yml --env-file .env.development --profile local-db up -d  # broker + test DB
+# (--env-file is required on EVERY compose call: even profile-gated services
+#  get interpolated, and compose only auto-loads `.env`, not our `.env.development`)
 # =============================================================
 
 services:
@@ -39,6 +46,39 @@ services:
         max-size: "10m"
         max-file: "3"
 
+  postgres:
+    profiles: [local-db]
+    image: postgres:16-alpine
+    container_name: sleep-postgres
+    restart: unless-stopped
+    ports:
+      # host-only bind: the venv services connect from the host itself —
+      # 5432 never appears in the security group, in either mode.
+      - "127.0.0.1:5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      # SQL files here run alphabetically on first container start only.
+      - ./postgres/init:/docker-entrypoint-initdb.d:ro
+    environment:
+      POSTGRES_DB:       ${POSTGRES_DB:-sleep_monitor}
+      POSTGRES_USER:     ${POSTGRES_USER:-sleep_user}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?TEST mode needs POSTGRES_PASSWORD in .env.development}
+    healthcheck:
+      test:
+        - "CMD-SHELL"
+        - "pg_isready -U ${POSTGRES_USER:-sleep_user} -d ${POSTGRES_DB:-sleep_monitor}"
+      interval: 10s
+      timeout: 5s
+      start_period: 20s
+      retries: 5
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
 volumes:
   mosquitto_data:
+    driver: local
+  postgres_data:
     driver: local

@@ -57,6 +57,7 @@ All of this **ships in the repo**; nothing here happens again per deployment.
 |---|---|
 | `docker-compose.aws.yml` | The laptop compose is Postgres-only by design — Mosquitto runs natively there, a second broker would port-clash. The server can't rely on a native broker (system state you'd reinstall every long break), so the broker stays containerized. **Postgres left the server compose**: the database is AWS RDS with storage encryption — see the RDS row below and §9. |
 | RDS (PostgreSQL, per-session) | Encrypted at rest, TLS connections (`sslmode=require`), private in the default VPC behind `sm-rds-sg` — inbound 5432 sourced from the EC2's security group only. **Same identifier on every recreation keeps the endpoint string constant**, so the app/env never re-points. Encrypted-at-rest is the *doctor-facing artifact* (§9 statement). The per-session cycle (create → demo → delete without final snapshot) keeps RDS off the idle bill list. |
+| **Dual-mode database (TEST / DEMO)** | TEST sessions run a **profile-gated local Postgres on the EC2** (`--profile local-db`, `127.0.0.1:5432`, zero RDS cost); DEMO days flip one `DATABASE_URL` line to RDS + restart two units (runbook §5). Same schema drives both modes. Switching is explicit config — the server never silently writes to the cloud DB. |
 | `./mosquitto:/mosquitto/config` (read-write dir mount) | `mosquitto_passwd` writes `mosquitto/passwd` from inside the container; a read-only file mount would block that, and a container-only path wouldn't survive recreates. |
 | `mosquitto/mosquitto.conf` (locked) | The broker is reachable from the whole internet on 1883/9001. With anonymous access, anyone scanning the IP can **inject fake patient vitals**. `allow_anonymous false` + `password_file` closes it. The passwd file itself is generated on the server (runbook §2.9) and **never committed** (gitignored). |
 | Passwd *before* first start | Mosquitto refuses to boot when its `password_file` is missing — that's why runbook step 2.7 exists before the compose `up`. |
@@ -186,6 +187,8 @@ Post-verification tightening (no TLS required): port 1883 exists mostly for the 
 ## 9. Encryption inventory — the doctor-facing answer
 
 Data in this system is synthetic (generated CSV readings) — **no real patient records exist in the deployment**. That remains true by policy: real PHI must never be loaded into the demo DB. Everything below is about protecting the data path anyway.
+
+> **Scope note (dual-mode database):** the encrypted-at-rest claim covers the **RDS deployment database** (demo mode, §3). The EC2-local TEST-mode Postgres is the developer sandbox — reachable only from the host itself (127.0.0.1 binding), carrying the same synthetic-data policy, and skipped by any real-PHI rule doubly.
 
 | Layer | Encryption status |
 |---|---|
