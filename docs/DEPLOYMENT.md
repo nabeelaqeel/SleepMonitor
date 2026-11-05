@@ -188,7 +188,9 @@ EOF
 sed -i -e "s/<FILL_JWT_SECRET>/$(python3 -c 'import secrets; print(secrets.token_hex(32))')" \
        -e "s/<FILL_MQTT_PASSWORD>/$(openssl rand -hex 12)/" .env.development
 
-grep -c '<FILL' .env.development    # expect: 0
+grep -c '^[^#]*<FILL' .env.development   # expect: 0 — ACTIVE-line placeholders only;
+                                         # the TEST path's commented DEMO line may
+                                         # legitimately carry <FILL_RDS_*> markers (§5 flip)
 grep '^DATABASE_URL' .env.development | sed 's/:.*@/@/';   # expect: localhost line ACTIVE (test default)
 ```
 
@@ -228,6 +230,12 @@ docker compose -f docker-compose.aws.yml --env-file .env.development up -d
 # TEST mode (localhost line active): ALSO bring the local DB — do this BEFORE
 # starting systemd services (publisher/ingest write at boot):
 docker compose -f docker-compose.aws.yml --env-file .env.development --profile local-db up -d
+# wait up to 60s for the healthcheck — don't let the first ingest boot race it:
+for i in $(seq 1 12); do
+  docker inspect --format '{{.State.Health.Status}}' sleep-postgres | grep -q healthy && break
+  sleep 5
+done
+docker inspect --format '{{.State.Health.Status}}' sleep-postgres   # expect: healthy
 docker ps --format 'table {{.Names}}\t{{.Status}}'
 # expect: sleep-broker Up (+ sleep-postgres Up & healthy in TEST mode)
 docker logs sleep-broker   # expect: "Opening ipv4 listen socket on port 9001."
@@ -550,13 +558,21 @@ docker exec sleep-postgres pg_dump -U sleep_user -d sleep_monitor > "$SQL" || { 
 [ -s "$SQL" ] || { echo "backup EMPTY — aborting"; exit 1; }
 docker compose -f docker-compose.aws.yml --env-file .env.development --profile local-db down -v
 docker compose -f docker-compose.aws.yml --env-file .env.development --profile local-db up -d
+# wait up to 60s for the healthcheck before the units restart (don't race ingest):
+for i in $(seq 1 12); do
+  docker inspect --format '{{.State.Health.Status}}' sleep-postgres | grep -q healthy && break
+  sleep 5
+done
+docker inspect --format '{{.State.Health.Status}}' sleep-postgres   # expect: healthy
 
 # ── DEMO branch (active DATABASE_URL = RDS):
 # atomic reset: DROP + re-apply in ONE transaction (ON_ERROR_STOP → rollback)
-PGPASSWORD='<master password>' \
+# one silent prompt for the master password — keeps it out of shell history:
+read -rsp 'RDS master password: ' RDS_PW < /dev/tty && echo
+PGPASSWORD="$RDS_PW" \
   pg_dump -h "<RDS_ENDPOINT>" -U sleep_user -d sleep_monitor > "$SQL" || { echo "pg_dump FAILED — aborting"; exit 1; }
 [ -s "$SQL" ] || { echo "backup EMPTY — aborting"; exit 1; }
-PGPASSWORD='<master password>' psql -v ON_ERROR_STOP=1 -1 \
+PGPASSWORD="$RDS_PW" psql -v ON_ERROR_STOP=1 -1 \
   -h "<RDS_ENDPOINT>" -U sleep_user -d sleep_monitor \
   -c "DROP SCHEMA public CASCADE; CREATE SCHEMA public;" \
   -f postgres/init/01_schema.sql
