@@ -4,7 +4,11 @@ Analysis for the single-clock MQTT QoS benchmark.
 
 Reads benchmark/results_v2/ (main study) and, if present,
 benchmark/results_v2_sensitivity/ (1 msg/s pacing study). It refuses any
-quick-smoke directory.
+quick-smoke directory. Both are archived results from the original dataset
+revision (flat-HRV fallback 35; their matrices record the pre-regeneration
+dataset hash — see benchmark/README.md §6 for the hashes). Runs against the
+regenerated dataset (real HRV) default to benchmark/results_v3* and must be
+passed here explicitly.
 
 Per run: join sent (t0, ack) with received (t1) on (run_id, seq),
 deduplicate received rows by seq (QoS 1 retransmissions), compute

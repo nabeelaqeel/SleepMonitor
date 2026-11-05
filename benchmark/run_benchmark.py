@@ -1267,7 +1267,7 @@ def parse_args(argv=None):
     parser.add_argument("--quick", action="store_true",
                         help="smoke test into benchmark/results_quick_v2 (refused by analysis)")
     parser.add_argument("--sensitivity", action="store_true",
-                        help="1 msg/s pacing study into benchmark/results_v2_sensitivity")
+                        help="1 msg/s pacing study into benchmark/results_v3_sensitivity")
     parser.add_argument("--calibration", action="store_true",
                         help="calibration mode: idle threshold may be omitted")
     parser.add_argument("--force", action="store_true",
@@ -1291,7 +1291,7 @@ def parse_args(argv=None):
                     "interval": DEFAULT_INTERVAL}
     elif args.sensitivity:
         args.study = "sensitivity"
-        default_out = BENCH_DIR / "results_v2_sensitivity"
+        default_out = BENCH_DIR / "results_v3_sensitivity"
         defaults = {"rows": SENS_ROWS, "reps": 2, "scenarios": "clean,netem",
                     "interval": SENS_INTERVAL}
     elif args.calibration:
@@ -1301,7 +1301,7 @@ def parse_args(argv=None):
                     "interval": DEFAULT_INTERVAL}
     else:
         args.study = "main"
-        default_out = BENCH_DIR / "results_v2"
+        default_out = BENCH_DIR / "results_v3"
         defaults = {"rows": FULL_ROWS, "reps": 5, "scenarios": "clean,netem,outage",
                     "interval": DEFAULT_INTERVAL}
     args.out_dir = Path(args.out_dir) if args.out_dir else default_out

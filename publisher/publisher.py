@@ -120,6 +120,17 @@ def build_client() -> mqtt.Client:
 # ── CSV loading ───────────────────────────────────────────────
 
 def load_csv(path: str | Path) -> pd.DataFrame:
+    """Load the demo dataset, resolving the path and guarding the schema.
+
+    Args:
+        path: CSV path (relative paths try the CWD first, then the repo root
+            so the run-book always works from any launch directory).
+
+    Returns:
+        The parsed DataFrame; a missing `hrv` column logs a loud warning
+        because every reading would then publish the constant 35 ms fallback
+        and the "Important: HRV < 20 ms" tier could never trigger.
+    """
     # A bare relative path is resolved against the CWD first; if it is not
     # there (e.g. the publisher was launched from another directory), fall
     # back to the repo root so the run-book always works.
