@@ -59,7 +59,7 @@ All of this **ships in the repo**; nothing here happens again per deployment.
 | `./mosquitto:/mosquitto/config` (read-write dir mount) | `mosquitto_passwd` writes `mosquitto/passwd` from inside the container; a read-only file mount would block that, and a container-only path wouldn't survive recreates. |
 | `mosquitto/mosquitto.conf` (locked) | The broker is reachable from the whole internet on 1883/9001. With anonymous access, anyone scanning the IP can **inject fake patient vitals**. `allow_anonymous false` + `password_file` closes it. The passwd file itself is generated on the server (runbook §2.7) and **never committed** (gitignored). |
 | Passwd *before* first start | Mosquitto refuses to boot when its `password_file` is missing — that's why runbook step 2.7 exists before the compose `up`. |
-| `app/eas.json` (gitignored) + `app/eas.example.json` (tracked) | `preview` profile builds an **installable APK** (`buildType: apk`), not a Play-Store AAB, and carries the five `EXPO_PUBLIC_*` values the app bakes. **`eas.json` is gitignored** — the tracked `eas.example.json` template carries placeholders; real endpoints + broker password are filled locally at runbook §4.2, so the repo never holds them. EAS cloud builds read profile env from the working tree, not from git. **Production profile diverges deliberately**: it drops `EXPO_PUBLIC_ALLOW_PLAIN_HTTP` and its `API_URL` placeholder is an HTTPS endpoint — any non-demo (store) build fails closed without TLS instead of shipping the demo relaxations. |
+| `app/eas.json` (gitignored) + `app/eas.example.json` (tracked) | `preview` profile builds an **installable APK** (`buildType: apk`), not a Play-Store AAB, and carries the five `EXPO_PUBLIC_*` values the app bakes. **`eas.json` is gitignored** — the tracked `eas.example.json` template carries placeholders; real endpoints + broker password are filled locally at runbook §4.2, so the repo never holds them. EAS cloud builds read profile env from the working tree, not from git. **Production profile diverges deliberately**: it drops `EXPO_PUBLIC_ALLOW_PLAIN_HTTP` (HTTPS `API_URL` placeholder stays) and carries **no MQTT credentials at all** — any non-demo (store) build fails closed without TLS instead of shipping demo relaxations or broker secrets. |
 | `app/app.config.js` | Fail-guard: EAS cloud builds **throw** while `EXPO_PUBLIC_BROKER_IP`/`EXPO_PUBLIC_API_URL` are unset or still `SET_ME…` — an unfilled `eas.json` can no longer silently produce an APK with dead endpoints (the app would fall back to legacy hardcoded IPs). Local `npx expo start` is unaffected (no `EAS_BUILD` env set there). |
 | MQTT creds & endpoints inside `eas.json` (local + gitignored; template `eas.example.json` tracks placeholders) | The APK embeds these strings anyway (phone-side credential), so they live beside the endpoints in one local file, filled at runbook §4.2 and rotated via §6. Repo-visible upgrade path: move them to EAS environment variables (`npx eas-cli env:create`) once supporting that is worth it. |
 | `app.json` package fix (`com.aqeel.sleepmonitor`) | The Android package name is the app's identity — changing it after the first installed APK makes every future build a *different app* on the phone. Fixed before any build could run. |
@@ -135,9 +135,15 @@ systemctl is-active sm-api sm-ingest sm-pub sm-echo        # 4× active
 #    (SDK 54 `eas update` reads local .env, NOT the eas.json profile env)
 cd app
 sed -i 's/^EXPO_PUBLIC_MQTT_PASSWORD.*/EXPO_PUBLIC_MQTT_PASSWORD=<new password>/' eas.json
-sed -i 's/^EXPO_PUBLIC_MQTT_PASSWORD.*/EXPO_PUBLIC_MQTT_PASSWORD=<new password>/' .env.local 2>/dev/null \
+# .env.local presence-aware edit: replace when present, append when the key
+# or even the file itself is missing (bare `sed || echo` silently succeeds
+# when the file exists without the key)
+grep -q '^EXPO_PUBLIC_MQTT_PASSWORD=' .env.local 2>/dev/null \
+  && sed -i 's/^EXPO_PUBLIC_MQTT_PASSWORD=.*/EXPO_PUBLIC_MQTT_PASSWORD=<new password>/' .env.local \
   || echo 'EXPO_PUBLIC_MQTT_PASSWORD=<new password>' >> .env.local
 npx eas-cli update --branch preview --message "rotate MQTT credential"
+# scope: preview installs ONLY — production (store) builds carry no broker
+# credentials by design (§3), so this procedure deliberately doesn't target them
 
 # 5. laptop copies (4) — at leisure, they are local-only
 ```
@@ -153,7 +159,7 @@ With `expo-updates` wired (it is — Phase 0) and the `preview` channel APK inst
 | Change | OTA-able? | Notes |
 |---|---|---|
 | App JS code (screens, logic) | ✅ | The main use: `npx eas-cli update --branch preview` (runbook §6.3) |
-| `EXPO_PUBLIC_*` **values** | ✅ | `eas update` re-inlines the new values into a fresh JS bundle — so yes, **even an IP change can ship as an OTA** after the base APK. Rebuild only if the instance is unreachable long enough that phones can't fetch. EIP still preferred: APK works offline of EAS, no dependency. |
+| `EXPO_PUBLIC_*` **values** | ✅ for preview installs | Source rule (SDK 54): `eas update` publishes read envs from **local `.env` files** (`app/.env.local` — §4.2 seeds it) — NOT the `eas.json` profile `env` block (that only feeds `eas build`). An IP/credential change ships via OTA only if `.env.local` rotates with it. On SDK 55+ the route is EAS env vars + `eas update --environment <name>`. **Rotation publishes to preview installs only** — production (store) builds are credential-free by design (§3), so production OTA rotation is a TLS-era §8 concern. EIP still preferred: the APK works offline of EAS, no dependency. |
 | `app.json` (package name, plugins), icons/splash | ❌ | Native — full `eas build` |
 | New native dependency | ❌ | Full `eas build` |
 | Python/backend | n/a | Never goes through the APK — §6.1 |
@@ -166,7 +172,7 @@ With `expo-updates` wired (it is — Phase 0) and the `preview` channel APK inst
 
 ## 8. Transport security — where the demo sits
 
-The review's HTTPS finding is half-mitigated already: `assertSecureEndpoint()` in `app/auth/apiAuth.js` is **default-deny** — it refuses plain-HTTP credentials to any public host — and only relaxes when the deployment explicitly sets `EXPO_PUBLIC_ALLOW_PLAIN_HTTP=true` (baked into both EAS profiles at §4.2). That flag is the documented demo tradeoff: README's Known Limitations already lists "rotate demo password + TLS before a real deployment."
+The review's HTTPS finding is half-mitigated already: `assertSecureEndpoint()` in `app/auth/apiAuth.js` is **default-deny** — it refuses plain-HTTP credentials to any public host — and only relaxes when the deployment explicitly sets `EXPO_PUBLIC_ALLOW_PLAIN_HTTP=true` (baked into the **preview profile only** at §4.2 — production dropped the flag, so store-profile builds fail closed at config/login time). That flag is the documented demo tradeoff: README's Known Limitations already lists "rotate demo password + TLS before a real deployment."
 
 MQTT stays plain on 1883/9001 with broker credentials. TLS on 9001 (WSS, `useSSL: true`) needs a cert the phone trusts — a self-signed cert breaks React Native's WebSocket trust handling, a real cert needs DNS + ports 80/443; both out of scope for the lab demo, tracked as Known Limitations.
 

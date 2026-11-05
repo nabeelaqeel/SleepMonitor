@@ -323,9 +323,23 @@ WHERE: 💻 laptop, app/
 # machine-local and never reach the repo. <BROKER_PASSWORD> is the §2.5 value
 # again (grep it on the server).
 cd app
+# scope: builds run on the PREVIEW profile (§4.3) — its two placeholders are
+# filled here. Production deliberately keeps SET_ME_HTTPS_ENDPOINT (fail-closed:
+# no build, no login until a real https endpoint + TLS exist — NOTES §8), so the
+# check below expects exactly ONE remaining SET_ME line.
 sed -i -e 's/SET_ME_EC2_PUBLIC_IP/<EC2_IP>/g' \
        -e 's/SET_ME_MQTT_PASSWORD/<BROKER_PASSWORD>/g' eas.json
-grep SET_ME eas.json                        # expect: no output
+# mirror the same values into app/.env.local — SDK 54 `eas update` (§6.3)
+# reads envs from local .env files, NOT from the eas.json profile env block
+cat > .env.local <<'EOF'
+EXPO_PUBLIC_BROKER_IP=<EC2_IP>
+EXPO_PUBLIC_API_URL=http://<EC2_IP>:8000
+EXPO_PUBLIC_MQTT_USER=sm
+EXPO_PUBLIC_MQTT_PASSWORD=<BROKER_PASSWORD>
+EXPO_PUBLIC_ALLOW_PLAIN_HTTP=true
+EOF
+grep SET_ME eas.json                        # expect ONLY: "SET_ME_HTTPS_ENDPOINT" (production, see above)
+grep -c "^EXPO_PUBLIC" .env.local           # expect: 5
 ```
 
 ```bash
@@ -396,14 +410,19 @@ systemctl is-active sm-api                # expect: active
 # 6.2a — broker config change (non-destructive restart)
 WHERE: 🖥 EC2
 cd /opt/SleepMonitor
-docker compose -f docker-compose.aws.yml restart broker
+# --env-file required: the compose file interpolates POSTGRES_PASSWORD with a
+# mandatory `:?` — any compose subcommand without it errors out.
+docker compose -f docker-compose.aws.yml --env-file .env.development restart broker
 docker logs sleep-broker --tail 20    # expect: "Opening ... port 9001" again
 
-# 6.2b — schema change (DESTRUCTIVE: wipe + re-up; backup first)
+# 6.2b — schema change (DESTRUCTIVE: wipe + re-up; guarded backup first)
 WHERE: 🖥 EC2
 cd /opt/SleepMonitor
-docker exec sleep-postgres pg_dump -U sleep_user sleep_monitor > backup-$(date +%F).sql
-docker compose -f docker-compose.aws.yml down -v          # ⚠ confirm: deletes ALL stored data
+SQL="backup-$(date +%F-%H%M).sql"
+docker exec sleep-postgres pg_dump -U sleep_user sleep_monitor > "$SQL" || { echo "pg_dump FAILED — aborting"; exit 1; }
+[ -s "$SQL" ] || { echo "backup EMPTY — aborting"; exit 1; }
+echo "$SQL ready — review it, then rerun the down to confirm the destructive step"
+docker compose -f docker-compose.aws.yml --env-file .env.development down -v     # ⚠ delete stored data
 docker compose -f docker-compose.aws.yml --env-file .env.development up -d
 ```
 
