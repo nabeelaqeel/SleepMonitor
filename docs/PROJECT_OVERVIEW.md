@@ -9,7 +9,7 @@ A QoS-aware real-time sleep monitoring system built as a Final Year Project (FYP
 ## What It Is
 
 A Python publisher reads a dataset (`data/sleep_data_realistic.csv` for demos),
-uses `python-publisher/tier_rules.py` to assign each reading to one of four
+uses `publisher/tier_rules.py` to assign each reading to one of four
 clinical tiers, and publishes it over MQTT at a Quality-of-Service level matching
 that tier's urgency. An Expo React Native app (`app/`) subscribes to the broker
 over WebSocket and renders patient and doctor dashboards.
@@ -33,7 +33,7 @@ transmission.
 data/sleep_data_realistic.csv
       │
       ▼  classifies tier → selects QoS
-python-publisher/ (publisher.py + tier_rules.py)
+publisher/ (publisher.py + tier_rules.py)
       │
       │  TCP :1883
       ▼
@@ -100,7 +100,7 @@ data/                       datasets + generator
   sleep_data_realistic.csv  demo + DB-ingestion dataset (no stage labels)
   generate_data.py          writes sleep_data_realistic.csv
 
-python-publisher/           THE REAL PIPELINE
+publisher/           THE REAL PIPELINE
   publisher.py              reads CSV, owns session lifecycle, publishes MQTT
   tier_rules.py             single source of truth: tier thresholds + QoS
   echo.py                   qos/ping → qos/pong relay for the app latency probe
@@ -147,7 +147,7 @@ docs/                       ARCHITECTURE, DATA_MODEL, DATABASE, AUTH_API, MQTT_S
 | Doctor dashboards | Partial | Seeded roster with a live overlay, plus an Alerts tab and session PDF export for the live patient; one patient streams at a time (true multi-patient needs per-patient topics) |
 | MQTT client | Working | Per-install persisted client ID, `cleanSession: false`, `sleep/#` + `qos/pong` at QoS 2, exponential-backoff reconnect |
 | Python publisher | Working | Runs; owns session lifecycle + `seq`/`publishedAt`. HRV restored — the demo dataset's third vital was mislabeled `rr` and every reading fell back to 35 ms (Issue 3, resolved) |
-| Classifier | Working | The real pipeline uses `python-publisher/tier_rules.py` — SpO2 + HR + HRV thresholds in one shared module; the legacy simulation classifier is retired (removed) |
+| Classifier | Working | The real pipeline uses `publisher/tier_rules.py` — SpO2 + HR + HRV thresholds in one shared module; the legacy simulation classifier is retired (removed) |
 | Mosquitto broker | Working | System install on `:1883` / `:9001` (anonymous, localhost) |
 | PostgreSQL schema | Working | Extended with `seq`, `published_at`, unique keys, delivery columns |
 | Ingest worker | Working | `ingest/worker.py` — MQTT → Postgres, verified end-to-end (see `docs/DATABASE.md`) |
@@ -174,7 +174,7 @@ master (557e0d7)                            tested prototype — tagged fyp1 —
 - Tag `fyp1` → `557e0d7` (tested prototype; contains no Docker, CI, or AWS).
 - `project/phase2` branches from `master` and carries the project files forward from
   `fcd4fcc`: the Report timeline + PDF export, doctor screens, `sleepTimeline` state,
-  the `python-publisher/` pipeline, and project docs. Infra files (Docker, compose,
+  the `publisher/` pipeline, and project docs. Infra files (Docker, compose,
   CI, AWS docs) are left parked on `feature/docker-cicd-infra`.
 - Cleanup done: `.venv/` is untracked and gitignored (files kept locally),
   `CLAUDE.md` is untracked (like `.claude/`), and the legacy root files
@@ -197,7 +197,7 @@ Previously `app/context/SleepContext.js:117` hardcoded `12 / 28 / 45 ms` (and in
 vs real MQTT behaviour), with the same figures in `NetworkScreen.js` and `README.md`.
 
 **Fix:** the app now samples round-trip time via a ping/echo probe. It publishes a
-`qos/ping` every second (cycling QoS 2 → 1 → 0), `python-publisher/echo.py` republishes
+`qos/ping` every second (cycling QoS 2 → 1 → 0), `publisher/echo.py` republishes
 it to `qos/pong`, and the context times the trip with the monotonic `performance.now()`
 clock and stores the window **median** of `RTT/2`. Both timestamps are on the phone, so
 clock skew cancels. Delivery is likewise measured from distinct `seq` vs the publisher's
@@ -208,10 +208,10 @@ from the single-clock benchmark.
 The retired simulation (`evaluation.py` — line refs preserved at the
 `benchmark-v1-frozen` tag; history in `docs/BENCHMARK_V1_HISTORY.md`)
 classified using SpO2 **and** heart rate **and**
-HRV. `python-publisher/tier_rules.py` now implements the same three signals
+HRV. `publisher/tier_rules.py` now implements the same three signals
 in one shared module, so the shipped rules and the simulated evaluation agree.
 The simulated evaluation is retired;
-the single-clock benchmark imports `python-publisher/tier_rules.py`, so its
+the single-clock benchmark imports `publisher/tier_rules.py`, so its
 tiers describe the pipeline that actually runs.
 
 **Impact:** none on v1 benchmark results; no shared-classifier extraction is
@@ -219,7 +219,7 @@ needed for the thesis measurement. The stale classifier remains only in the
 historical simulation.
 
 ### 3. HRV is always 35 — ✅ Resolved
-`python-publisher/publisher.py` extracts
+`publisher/publisher.py` extracts
 
 ```python
 hrv = float(row.get("hrv", 35))
@@ -281,7 +281,7 @@ separately on-device.
 deliberately isolated.
 
 ### 7. Payload timestamp cannot be used for timing — ✅ Resolved
-`python-publisher/publisher.py` now emits an epoch-millisecond `publishedAt` field
+`publisher/publisher.py` now emits an epoch-millisecond `publishedAt` field
 alongside the human-readable `timestamp`. The app's live latency uses the ping/echo
 probe rather than `publishedAt`, because the phone and laptop clocks are not
 synchronised and one-way deltas would be dominated by skew.

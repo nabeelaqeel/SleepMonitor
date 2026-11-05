@@ -47,7 +47,7 @@ from paho.mqtt.properties import Properties
 
 BENCH_DIR = Path(__file__).resolve().parent
 ROOT = BENCH_DIR.parent
-sys.path.insert(0, str(ROOT / "python-publisher"))
+sys.path.insert(0, str(ROOT / "publisher"))
 
 from tier_rules import classify, TIER_QOS  # noqa: E402
 
@@ -73,7 +73,7 @@ EXPECTED_DATASET_SHA256 = (
     "b247f4b8953e46e4899d70ae94b22389b86e292ecd85e9c55143d78dfa555390")
 # Provenance hash target for the frozen methodology: the module holding the
 # tier rules every benchmark tier assignment is built from.
-CLASSIFIER_PATH = ROOT / "python-publisher" / "tier_rules.py"
+CLASSIFIER_PATH = ROOT / "publisher" / "tier_rules.py"
 ANALYSIS_PATH = BENCH_DIR / "analyze_benchmark.py"
 FULL_ROWS, QUICK_ROWS, SENS_ROWS = 526, 60, 100
 

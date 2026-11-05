@@ -29,7 +29,7 @@ import pandas as pd
 BENCH_DIR = Path(__file__).resolve().parent
 TIERS = ["Critical", "Important", "Normal", "Background"]
 
-sys.path.insert(0, str(BENCH_DIR.parent / "python-publisher"))
+sys.path.insert(0, str(BENCH_DIR.parent / "publisher"))
 
 from tier_rules import TIER_QOS  # noqa: E402
 

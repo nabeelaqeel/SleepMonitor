@@ -62,7 +62,7 @@ and the ingest worker (which subscribe to `sleep/#` and `session/#`) never
 record benchmark traffic.
 
 Tier assignment is done with the shared rules module
-(`python-publisher/tier_rules.py`), evaluated in strict order — the
+(`publisher/tier_rules.py`), evaluated in strict order — the
 benchmark runner and the production publisher use the exact same code:
 
 - SpO2 < 90 OR HR < 40 OR HR > 100 → **Critical** (QoS 2 in B)
@@ -203,7 +203,7 @@ or order.
   in `benchmark/calibration_v2/` keep the previous hash as a historical record)
 - 57 Critical / 191 Important / 278 Normal (unchanged by the rename)
 - real payload size, same field names and value rounding as
-  `python-publisher/publisher.py` (session id, patient id, seq, timestamps,
+  `publisher/publisher.py` (session id, patient id, seq, timestamps,
   tier, SpO2, heart rate, HRV, motion, reason, QoS, topic, stats)
 
 **Reconciliation.** The thesis draft's numbers came from 100 simulated messages

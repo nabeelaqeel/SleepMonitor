@@ -88,7 +88,7 @@ The publisher is the authoritative counter. It embeds cumulative totals in every
 
 ## Tier Classification
 
-The shared rules live in **`python-publisher/tier_rules.py`** — the single source
+The shared rules live in **`publisher/tier_rules.py`** — the single source
 of truth imported by the publisher, the benchmark runner and the benchmark
 analysis. Edit the thresholds there and every consumer picks the change up.
 
@@ -202,7 +202,7 @@ minute, spo2, hr, hrv, motion, event
 
 ### Publisher Compatibility
 
-`python-publisher/publisher.py` maps this file with no column-renaming needed:
+`publisher/publisher.py` maps this file with no column-renaming needed:
 
 * `spo2` ← `spo2` (the legacy `bo` spelling is still accepted via fallback)
 * `heartRate` ← `hr`
