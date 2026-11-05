@@ -22,7 +22,7 @@ git remote -v                               # URL shown? → commit + push (next
 git add -A && git commit -m "Phase 0: AWS deploy prep" && git push
 ```
 
-No remote? Use Option B in step 2.2. Phase 0 files (`docker-compose.aws.yml`, `mosquitto/mosquitto.conf`, `app/eas.example.json`) already exist in the repo — nothing else to prepare.
+No remote? Use Option B in step 2.2. Phase 0 files (`docker-compose.aws.yml`, `mosquitto/mosquitto.conf`, `app/eas.example.json`) already exist in the repo — nothing else to prepare. (Fresh checkout? `cd app && cp eas.example.json eas.json` before §4.2 — your local `eas.json` stays gitignored.)
 
 ---
 
@@ -135,6 +135,13 @@ PGPASSWORD="$RDS_PW" psql -h "$RDS_ENDPOINT" -U sleep_user -d sleep_monitor -c "
 WHERE: 🖥 EC2 (same ssh session as §2.6 if RDS was created — it reuses $RDS_ENDPOINT / $RDS_PW)
 cd /opt/SleepMonitor
 LOCAL_PW="$(openssl rand -hex 12)"     # local TEST-mode DB password (mode §6.2b uses it too)
+# DEMO line: bake the §2.5/§2.6 values when RDS was created this session;
+# skip-RDS sessions must NOT embed empty strings — keep literal markers instead
+if [ -n "${RDS_ENDPOINT:-}" ] && [ -n "${RDS_PW:-}" ]; then
+  RDS_LINE="DATABASE_URL=postgresql://sleep_user:$RDS_PW@$RDS_ENDPOINT:5432/sleep_monitor?sslmode=require"
+else
+  RDS_LINE="# DATABASE_URL=postgresql://sleep_user:<FILL_RDS_PW>@<FILL_RDS_ENDPOINT>:5432/sleep_monitor?sslmode=require"
+fi
 cat > .env.development <<EOF
 COMPOSE_PROJECT_NAME=sleep-monitor
 
@@ -142,7 +149,7 @@ COMPOSE_PROJECT_NAME=sleep-monitor
 # TEST mode (default): EC2-local Docker Postgres (--profile local-db, §5)
 DATABASE_URL=postgresql://sleep_user:$LOCAL_PW@localhost:5432/sleep_monitor
 # DEMO mode: AWS RDS (requires the §2.5 instance; created + deleted with the session)
-# DATABASE_URL=postgresql://sleep_user:$RDS_PW@$RDS_ENDPOINT:5432/sleep_monitor?sslmode=require
+$RDS_LINE
 
 # TEST-mode local database credentials (compose interpolation, --profile local-db)
 POSTGRES_DB=sleep_monitor
@@ -216,10 +223,13 @@ WHERE: 🖥 EC2
 cd /opt/SleepMonitor
 # --env-file is REQUIRED on every compose call — even profile-gated services
 # are interpolated, and compose only auto-loads `.env`, not .env.development:
+# DEMO mode (RDS line active): broker only
 docker compose -f docker-compose.aws.yml --env-file .env.development up -d
+# TEST mode (localhost line active): ALSO bring the local DB — do this BEFORE
+# starting systemd services (publisher/ingest write at boot):
+docker compose -f docker-compose.aws.yml --env-file .env.development --profile local-db up -d
 docker ps --format 'table {{.Names}}\t{{.Status}}'
-# expect: sleep-broker Up (TEST sessions that want the local DB use
-#         the --profile local-db variant instead — §2.7/§6.2b)
+# expect: sleep-broker Up (+ sleep-postgres Up & healthy in TEST mode)
 docker logs sleep-broker   # expect: "Opening ipv4 listen socket on port 9001."
 ```
 
@@ -371,6 +381,9 @@ WHERE: 💻 laptop, app/
 # machine-local and never reach the repo. <BROKER_PASSWORD> is the §2.9 value
 # again (grep it on the server).
 cd app
+# scope: builds run on the PREVIEW profile (§4.3) — its two placeholders are
+# filled here; the production profile keeps its own SET_ME_HTTPS_ENDPOINT
+# placeholder (deliberately unfilled — fail-closed, see DEPLOYMENT_NOTES §3).
 sed -i -e 's/SET_ME_EC2_PUBLIC_IP/<EC2_IP>/g' \
        -e 's/SET_ME_MQTT_PASSWORD/<BROKER_PASSWORD>/g' eas.json
 # mirror the same values into app/.env.local — SDK 54 `eas update` (§6.3)
@@ -382,7 +395,9 @@ EXPO_PUBLIC_MQTT_USER=sm
 EXPO_PUBLIC_MQTT_PASSWORD=<BROKER_PASSWORD>
 EXPO_PUBLIC_ALLOW_PLAIN_HTTP=true
 EOF
-grep SET_ME eas.json                        # expect ONLY: "SET_ME_HTTPS_ENDPOINT" (production, see §3 row of NOTES)
+grep SET_ME eas.json                        # expect EXACTLY 2 lines — the consciously
+                                            # unfilled production placeholders
+                                            # (SET_ME_EC2_PUBLIC_IP, SET_ME_HTTPS_ENDPOINT, NOTES §3)
 grep -c "^EXPO_PUBLIC" .env.local           # expect: 5
 ```
 
@@ -425,13 +440,21 @@ PGPASSWORD='<master password>' psql -h "<RDS_ENDPOINT>" -U sleep_user -d sleep_m
 ```bash
 # 🖥 EC2 — SWITCH TO DEMO MODE (before an evaluation; flip back afterwards):
 #  1. RDS instance up (§2.5/§2.6 — skip if it's already running from this session)
-#  2. flip the two DATABASE_URL lines in .env.development (nano):
+#  2. STOP the publisher BEFORE flipping — it owns the session lifecycle
+#     (an abrupt swap leaves an open session: no session/end in the old DB):
+sudo systemctl stop sm-pub
+sleep 2                                  # let the ingest flush the session/end
+#  3. flip the two DATABASE_URL lines in .env.development (nano):
 #     → '#' the TEST localhost line
 #     → uncomment the RDS line (keeps ?sslmode=require)
-#  3. restart the two DB-reading units — publisher/echo don't touch the DB:
+#  4. restart the two DB-reading units (publisher/echo idle during the swap):
 sudo systemctl restart sm-api sm-ingest
 systemctl is-active sm-api sm-ingest     # 2× active
-# back to TEST after the demo: reverse the comment swap, restart again.
+#  5. only NOW resume streaming into the new DB — session/start lands there:
+sudo systemctl start sm-pub
+sudo systemctl is-active sm-pub          # active
+# back to TEST after the demo: stop sm-pub → reverse the comment swap →
+# restart sm-api sm-ingest → start sm-pub again.
 # phone impact: none — the app never talks to the database.
 ```
 
@@ -441,8 +464,9 @@ curl -sS -X POST http://<IP>:8000/auth/login -H 'Content-Type: application/json'
   -d '{"email":"patient@sleep.com","password":"1234"}'
 # -P <BROKER_PASSWORD>: the §2.9 value again (grep it on the server)
 mosquitto_sub -h <IP> -p 1883 -t 'sleep/#' -u sm -P '<BROKER_PASSWORD>' -v
-PGPASSWORD='<master password>' psql -h "<RDS_ENDPOINT>" -U sleep_user -d sleep_monitor \
-  -c "SELECT count(*) FROM readings;"
+# DB count check runs ON THE EC2 — the RDS security group admits only the EC2:
+ssh -i sm-key.pem ubuntu@<IP> "PGPASSWORD='<master password>' psql -h \"\$RDS_ENDPOINT\" -U sleep_user -d sleep_monitor -c 'SELECT count(*) FROM readings;'"
+# (TEST mode: `docker exec sleep-postgres psql ...` on the EC2 per §3.3)
 ```
 
 **Session end (⚠ order matters — delete RDS FIRST, then End Lab):**
@@ -514,16 +538,24 @@ docker compose -f docker-compose.aws.yml --env-file .env.development --profile l
 docker compose -f docker-compose.aws.yml --env-file .env.development --profile local-db up -d
 
 # ── DEMO mode (RDS): backup over TLS, wipe schema, re-apply
+# one psql session: --single-transaction (-1) wraps DROP+apply atomically;
+# ON_ERROR_STOP aborts on the first error and the transaction rolls back
+# (a failure can never leave a half-applied schema behind)
 WHERE: 🖥 EC2
 cd /opt/SleepMonitor
 SQL="backup-$(date +%F-%H%M).sql"
 PGPASSWORD='<master password>' \
   pg_dump -h "<RDS_ENDPOINT>" -U sleep_user -d sleep_monitor > "$SQL" || { echo "pg_dump FAILED — aborting"; exit 1; }
 [ -s "$SQL" ] || { echo "backup EMPTY — aborting"; exit 1; }
-export PGPASSWORD='<master password>'
-psql -h "<RDS_ENDPOINT>" -U sleep_user -d sleep_monitor \
-  -c "DROP SCHEMA public CASCADE; CREATE SCHEMA public;"
-psql -h "<RDS_ENDPOINT>" -U sleep_user -d sleep_monitor -f postgres/init/01_schema.sql
+PGPASSWORD='<master password>' psql -v ON_ERROR_STOP=1 -1 \
+  -h "<RDS_ENDPOINT>" -U sleep_user -d sleep_monitor \
+  -c "DROP SCHEMA public CASCADE; CREATE SCHEMA public;" \
+  -f postgres/init/01_schema.sql
+# schema is fresh — restart the API unit so no stale prepared statements remain:
+sudo systemctl restart sm-api && systemctl is-active sm-api   # active
+
+# ── TEST mode restart follows the up -d above:
+sudo systemctl restart sm-api && systemctl is-active sm-api   # active
 ```
 
 ```bash

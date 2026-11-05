@@ -4,7 +4,7 @@
 # TWO DATABASE MODES — pick one line in .env.development (DEPLOYMENT.md §2.7):
 #
 #   TEST (default for a non-demo session)
-#     docker compose -f docker-compose.aws.yml --profile local-db up -d
+#     docker compose -f docker-compose.aws.yml --env-file .env.development --profile local-db up -d
 #     → Postgres container on this host, reachable ONLY from localhost:5432
 #     → zero RDS cost; schema auto-applies on the fresh volume (postgres/init)
 #
