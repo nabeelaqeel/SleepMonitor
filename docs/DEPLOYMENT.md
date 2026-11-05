@@ -428,7 +428,7 @@ npx eas-cli build -p android --profile preview --non-interactive
 | Publisher logs "connection refused" | `docker ps` | broker container not up — §2.8 again |
 | `eas build` fails immediately | `npx eas-cli whoami` | not logged in, or `eas.json` missing in `app/` (copy `eas.example.json` → `eas.json`, §0) |
 | login throws "Refusing to send credentials over plain HTTP" | read the host in the error | `assertSecureEndpoint` blocks public plain-HTTP unless `EXPO_PUBLIC_ALLOW_PLAIN_HTTP=true` is baked — `app/.env.development` for the rehearsal, `app/eas.json` for APKs (then OTA/rebuild §6.3/6.4); rationale in NOTES §8 |
-| Budget exhausted / lab locked | 🖱 console cost page | the Elastic IP is the only budget drain while you're not demoing — see NOTES §2 |
+| Budget exhausted / lab locked | 🖱 console cost page | the Elastic IP is an additional drain (besides persistent EBS) — see NOTES §2 |
 
 ---
 
