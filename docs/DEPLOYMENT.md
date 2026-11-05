@@ -1,287 +1,198 @@
-# Deployment & Update Guide (AWS Learner Lab)
+# Deployment Runbook (AWS Learner Lab)
 
-This guide covers putting the full SleepMonitor stack on an **AWS Academy Learner Lab** EC2 instance, exporting the React Native app as an **APK** (EAS cloud build), and — after the first deploy — how to ship fixes and changes without rebuilding the world every time.
+Instructions only — execute top to bottom. Every step shows **where** you type it, the command, and the expected result. All rationale, constraints, costs, and tradeoffs live in [`DEPLOYMENT_NOTES.md`](DEPLOYMENT_NOTES.md).
 
-> **Quick runbook:** the README's [Run the Full Stack](../README.md#run-the-full-stack) section is the laptop-local version; this document is the server + release version.
+```
+You type here:     💻 laptop    — your machine, repo root unless stated
+                   🖥  EC2       — in the ssh session on the server
+                   🖱 console    — AWS Academy web console (clicks, no terminal)
+```
 
 ---
 
-## Deploy Order at a Glance
-
-There are **two separate artifacts**, and only one of them is rebuilt freely:
-
-| Artifact | Where it runs | Built from | Update cost |
-|---|---|---|---|
-| Backend stack | EC2 (Learner Lab) | repo, runs directly | `git pull` + restart — **minutes** |
-| App APK | phones (sideloaded) | repo via EAS — `EXPO_PUBLIC_*` **baked in at build time** | full EAS build — **~15–25 min** |
-
-Because the app bundles its endpoints at build time, the deploy order is fixed:
-
-```
-Phase 0  one-time repo prep (laptop)
-        │
-Phase 1  EC2 backend on Learner Lab ──► verify with curl + mosquitto_sub
-        │                              (dress rehearsal via Expo Go)
-        ▼
-Phase 2  EAS APK build ──► endpoints now final ──► sideload
-        │
-Phase 3  operating loop (Section 5) + edit/update loop (Section 6)
-```
-
-**Export the app first and it points at your laptop's LAN IP — useless. AWS first, build last.**
-
----
-
-## 1. AWS Learner Lab Constraints
-
-| Constraint | Impact | Handling |
-|---|---|---|
-| Starter budget (≈ $50, no top-ups) | Everything bills against it | t3.micro ≈ $0.02/hr; a lab month is single-digit dollars. The only recurring cost is an Elastic IP left attached (~$3.6/mo, only billed while the instance is stopped) — release it if you'll be idle for months |
-| Region fixed at lab start (usually `us-east-1`) | No choice, must create everything there | Just be consistent |
-| EC2 instance **stops when the session ends**; storage persists | Docker images, volumes, code survive | `systemd` units auto-start the services on next boot (Section 3.7); verify + fix IP after each restart (Section 5) |
-| Public IPv4 changes on restart | The baked app endpoints break | Attach an **Elastic IP** once — it survives stop/start. This is the single highest-value 2 minutes in Phase 1 |
-| IAM locked to `LabRole`, no load balancers | No ALB/NLB, no custom roles | Unneeded — everything lives on one instance behind a security group |
-| Services usable: EC2, S3, RDS, … (subset) | Docker-on-EC2 is the simplest of the supported paths | Postgres + broker both run in containers; Python services run in a host venv |
-
----
-
-## 2. Phase 0 — One-Time Repo Prep (laptop)
-
-Do this once, before touching AWS. Everything here ships with the repo.
-
-### 2.1 Broker + server compose files
-
-`docker-compose.yml` is laptop-only (Postgres, Mosquitto runs natively there — running a second broker would port-clash). For the server, add two small files to the repo:
-
-**`mosquitto/mosquitto.conf`** — the broker config the app needs:
-
-```
-# TCP listener — Python publisher / ingest / echo on localhost
-listener 1883
-allow_anonymous true
-
-# WebSocket listener — the phone app (Paho JS)
-listener 9001
-protocol websockets
-allow_anonymous true
-
-# reap abandoned persistent sessions but keep queued QoS 1/2 alive (README guidance)
-persistent_client_expiration 2h
-
-log_dest stdout
-```
-
-**`docker-compose.aws.yml`** — Postgres + broker, both calling it a service:
-
-```yaml
-# Sleep Monitor — AWS Learner Lab stack (Postgres + Mosquitto broker)
-# The Python services (api, ingest, publisher, echo) run in a host venv,
-# so Postgres is exposed on localhost:5432 and the broker on :1883 only.
-# The phone reaches the broker over WebSocket :9001 via the SG.
-
-services:
-  postgres:
-    image: postgres:16-alpine
-    container_name: sleep-postgres
-    restart: unless-stopped
-    ports:
-      - "127.0.0.1:5432:5432"   # host-only — never open 5432 in the SG
-    volumes:
-      - postgres_data:/var/lib/postgresql/data
-      - ./postgres/init:/docker-entrypoint-initdb.d:ro
-    environment:
-      POSTGRES_DB:       ${POSTGRES_DB:-sleep_monitor}
-      POSTGRES_USER:     ${POSTGRES_USER:-sleep_user}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env.development}
-    healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-sleep_user} -d ${POSTGRES_DB:-sleep_monitor}"]
-      interval: 10s
-      timeout: 5s
-      start_period: 20s
-      retries: 5
-    logging:
-      driver: "json-file"
-      options: { max-size: "10m", max-file: "3" }
-
-  broker:
-    image: eclipse-mosquitto:2
-    container_name: sleep-broker
-    restart: unless-stopped
-    ports:
-      - "1883:1883"
-      - "9001:9001"
-    volumes:
-      - mosquitto_data:/mosquitto/data
-      - ./mosquitto/mosquitto.conf:/mosquitto/config/mosquitto.conf:ro
-    logging:
-      driver: "json-file"
-      options: { max-size: "10m", max-file: "3" }
-
-volumes:
-  postgres_data:
-  mosquitto_data:
-```
-
-Note `restart: unless-stopped` on both — after every lab-session restart, containers come back on their own.
-
-### 2.2 Fix the Android package name
-
-`app/app.json` currently has `"package": "com.anonymous.SleepMonitor"`. Change it to something owned by you — lowercase, dotted:
-
-```json
-"android": {
-  "adaptiveIcon": { ... },
-  "edgeToEdgeEnabled": true,
-  "package": "com.aqeel.sleepmonitor"
-}
-```
-
-This must happen **before the first APK build** — the package name is the app's identity; changing it later makes every future build a "different app" on the phone.
-
-### 2.3 EAS setup
+## 0. PRE-CHECK
 
 ```bash
-npm i -g eas-cli          # or use npx eas-cli@latest throughout
+# 💻 laptop — EAS logged in?
+npx eas-cli whoami                          # expect: meowplayer
 
-cd app
-eas login                 # free account — sign up at expo.dev first if needed
+# 💻 laptop — is the repo on a remote?
+git remote -v                               # URL shown? → commit + push (next line)
+# if a remote exists:
+git add -A && git commit -m "Phase 0: AWS deploy prep" && git push
 ```
 
-Then create **`app/eas.json`** — the `preview` profile produces an installable APK, not a Play-Store bundle, and carries the AWS endpoints:
-
-```json
-{
-  "build": {
-    "preview": {
-      "android": { "buildType": "apk" },
-      "env": {
-        "EXPO_PUBLIC_BROKER_IP": "SET_ME",
-        "EXPO_PUBLIC_API_URL": "http://SET_ME:8000"
-      }
-    },
-    "production": {
-      "android": { "buildType": "app-bundle" }
-    }
-  }
-}
-```
-
-> Profile-level `env` is the documented way to bake `EXPO_PUBLIC_*` into EAS cloud builds — `.env.development` is only used by the local `npx expo start` loop. Fill the `SET_ME` values in Phase 2, once the EC2 IP is known.
+No remote? Use Option B in step 2.2. Phase 0 files (`docker-compose.aws.yml`, `mosquitto/mosquitto.conf`, `app/eas.example.json`) already exist in the repo — nothing else to prepare. (Fresh checkout? `cd app && cp eas.example.json eas.json` — your local `eas.json` is gitignored.)
 
 ---
 
-## 3. Phase 1 — EC2 Backend (per deployment)
+## 1. CREATE THE EC2 INSTANCE
 
-### 3.1 Launch + Security Group
+Step 1.1 — 🖱 console: **Start Lab** → AWS Console (region is fixed for you) → EC2 → Launch instance
 
-In the lab console (correct region — you have no choice), launch:
+| Setting | Value |
+|---|---|
+| AMI | Ubuntu 24.04 LTS |
+| Instance type | t3.micro |
+| Key pair | create `sm-key.pem`, then on laptop: `chmod 400 sm-key.pem` |
+| Instance name | `sleepmonitor` |
 
-- **AMI:** Ubuntu 24.04 LTS
-- **Instance type:** `t3.micro` (1 GiB RAM — add swap, step 3.5)
-- **Key pair:** create `sm-key.pem`, `chmod 400` it
-- **Security group `sm-sg`**, inbound:
+`sm-sg` security group — inbound rules:
 
-| Port | Source | Why |
+| Port | Source | Purpose |
 |---|---|---|
-| 22 | your IP, or `0.0.0.0/0` while demoing | SSH |
-| 1883 | `0.0.0.0/0` | MQTT TCP (publisher-side sanity checks) |
-| 9001 | `0.0.0.0/0` | MQTT WebSocket — **the app's only path to the broker** |
+| 22 | `0.0.0.0/0` | ssh |
+| 1883 | your IP (operator MQTT checks) | MQTT TCP — the phone only ever uses 9001; tighten this rule's source after §3.2 (NOTES §8) |
+| 9001 | `0.0.0.0/0` | MQTT WebSocket — the app's only broker path |
 | 8000 | `0.0.0.0/0` | Auth API — login |
-| *5432* | — | **Do NOT open.** Postgres is host-only (see 2.1) |
 
-### 3.2 Install Docker + Compose
+Do **not** add 5432. Launch, then copy **Public IPv4** from the instance page → `<EC2_IP>` for every step below.
+
+---
+
+## 2. SERVER SETUP
 
 ```bash
+# Step 2.1 — first ssh + Docker + Compose
+WHERE: 💻 laptop
 ssh -i sm-key.pem ubuntu@<EC2_IP>
 
-# one-time, ~2 min
+# Step 2.2 — now inside: 🖥 EC2
 sudo apt update
 sudo apt install -y docker.io docker-compose-v2
-sudo usermod -aG docker ubuntu    # log out/in once for this to apply
-docker version && docker compose version   # sanity
+sudo usermod -aG docker ubuntu
+exit
 ```
 
-### 3.3 Get the repo onto the server
+```bash
+# Step 2.3 — re-ssh so the docker group applies
+WHERE: 💻 laptop
+ssh -i sm-key.pem ubuntu@<EC2_IP>        # 🖥 EC2 from here until §3
 
-Easiest: a private GitHub repo (add the lab's default key or clone over HTTPS with a token):
+docker version && docker compose version   # both print versions — Docker ✔
+```
+
+**Step 2.4 — get the repo** — pick ONE (both need the target dir ready first):
 
 ```bash
 sudo mkdir -p /opt/SleepMonitor && sudo chown ubuntu:ubuntu /opt/SleepMonitor
+```
+
+```bash
+# Option A — git (you have a remote + pushed, see §0)
 git clone https://github.com/<you>/SleepMonitor.git /opt/SleepMonitor
 ```
 
-No repo? `scp` a tarball instead (exclude junk):
-
 ```bash
-
-# laptop:
+# Option B — scp tarball (no remote)
+# 💻 laptop first:
 tar --exclude='node_modules' --exclude='.venv*' --exclude='.git' \
     --exclude='benchmark' --exclude='graphify-out' \
     -czf sm.tar.gz .
-scp -i sm-key.pem sm.tar.gz ubuntu@<EC2_IP>:/opt/SleepMonitor/
+scp -i sm-key.pem sm.tar.gz ubuntu@<EC2_IP>:/tmp/
 
-# server:
-tar -xzf /opt/SleepMonitor/sm.tar.gz -C /opt/SleepMonitor/
+# then 🖥 EC2:
+tar -xzf /tmp/sm.tar.gz -C /opt/SleepMonitor/
 ```
 
-### 3.4 Environment file
-
-> **Naming gotcha:** every Python service does `load_dotenv(".env.development")` — that exact filename is hardcoded (`api/config.py`, `ingest/worker.py`, `publisher/*`). Production values go into a file *named* `.env.development` at the repo root. It stays gitignored.
-
 ```bash
-cp .env.example .env.development   # on the server, from the template
+# Step 2.5 — write .env.development (gitignored, two filler slots)
+WHERE: 🖥 EC2
+sudo apt install -y openssl python3           # already present on Ubuntu 24.04, harmless
+cd /opt/SleepMonitor
+cat > .env.development <<'EOF'
+COMPOSE_PROJECT_NAME=sleep-monitor
 
-# then edit .env.development:
-# - POSTGRES_PASSWORD=<strong password>
-# - DATABASE_URL=postgresql://sleep_user:<password>@localhost:5432/sleep_monitor
-# - JWT_SECRET=<fresh secret — see below>
-# - MQTT_HOST=localhost            (broker container, same host)
-# - MQTT_USER/MQTT_PASSWORD=       (empty = anonymous; see Appendix A if you lock the broker)
+POSTGRES_DB=sleep_monitor
+POSTGRES_USER=sleep_user
+POSTGRES_PASSWORD=<FILL_PG_PASSWORD>
+DATABASE_URL=postgresql://sleep_user:<FILL_PG_PASSWORD>@localhost:5432/sleep_monitor
+
+JWT_SECRET=<FILL_JWT_SECRET>
+# demo accounts are seeded (patient@sleep.com / 1234) — they are what the
+# evaluation logs in with; flip to false and provision your own users
+# (api.security.hash_password) for anything beyond the demo.
+SEED_DEMO_USERS=true
+
+MQTT_HOST=localhost
+MQTT_PORT=1883
+MQTT_USER=sm
+MQTT_PASSWORD=<FILL_MQTT_PASSWORD>
+
+INGEST_CLIENT_ID=sleep-ingest-001
+SESSION_EXPIRY=3600
+FLUSH_INTERVAL=1.0
+FLUSH_MAX=50
+
+PATIENT_ID=patient-001
+PATIENT_UUID=00000000-0000-0000-0000-000000000002
+DEVICE_ID=sleepband-001
+
+CSV_PATH=data/sleep_data_realistic.csv
+PUBLISH_INTERVAL=1.0
+LOOP_CSV=true
+EOF
+
+# replace the placeholders with real values, same file — all three secrets are
+# generated at deploy time and never carried by the repo:
+sed -i -e "s/<FILL_PG_PASSWORD>/$(openssl rand -hex 12)/g" \
+       -e "s/<FILL_JWT_SECRET>/$(python3 -c 'import secrets; print(secrets.token_hex(32))')/g" \
+       -e "s/<FILL_MQTT_PASSWORD>/$(openssl rand -hex 12)/g" .env.development
+
+grep -c "FILL_" .env.development          # expect: 0
 ```
 
-Generate the signing secret on the server itself:
-
 ```bash
-python3 -c 'import secrets; print("JWT_SECRET=" + secrets.token_hex(32))'
-```
-
-> `api/config.py` **refuses to start** on placeholder secrets (`change_me...`) or values under 32 chars — by design, so a copied template can never go live. Use a different secret than your laptop's.
-
-All publisher knobs (`CSV_PATH`, `PUBLISH_INTERVAL`, `LOOP_CSV`, `PATIENT_ID`, …) have sane defaults — only touch them if the demo needs different behavior.
-
-### 3.5 Swap (1 GiB RAM reality check)
-
-Postgres + broker + uvicorn + 2 Python workers fit, but give it headroom:
-
-```bash
+# Step 2.6 — swap (1 GiB RAM headroom)
+WHERE: 🖥 EC2
 sudo fallocate -l 2G /swapfile && sudo chmod 600 /swapfile
 sudo mkswap /swapfile && sudo swapon /swapfile
 echo '/swapfile none swap sw 0 0' | sudo tee -a /etc/fstab
+free -h    # expect: Swap row shows 2.0Gi
 ```
 
-### 3.6 Start Postgres + broker
+```bash
+# Step 2.7 — broker passwd (BEFORE first broker start — it refuses without it)
+WHERE: 🖥 EC2, still in /opt/SleepMonitor
+cd /opt/SleepMonitor
+# the broker password is the one §2.5 generated into .env.development —
+# read it from there so the command and the file can never disagree:
+MQPW="$(grep '^MQTT_PASSWORD=' .env.development | cut -d= -f2-)"
+docker run --rm -v "$PWD/mosquitto:/mosquitto/config" eclipse-mosquitto:2 \
+  mosquitto_passwd -c -b /mosquitto/config/passwd sm "$MQPW"
+# the broker drops to its internal non-root user (uid 1883), and mosquitto
+# 2.1+ WARNs (future: refuses) files with other ownership — validated recipe:
+sudo chown 1883:1883 mosquitto/passwd
+sudo chmod 600 mosquitto/passwd
+
+ls -l mosquitto/passwd                    # expect: exists, owner = 1883, mode 600
+```
 
 ```bash
+# Step 2.8 — start Postgres + broker
+WHERE: 🖥 EC2
 cd /opt/SleepMonitor
 docker compose -f docker-compose.aws.yml --env-file .env.development up -d
+sleep 20
 docker ps --format 'table {{.Names}}\t{{.Status}}'
-# wait until sleep-postgres shows "healthy"
-docker logs sleep-broker          # expect "Opening ipv4 listen socket on port 9001."
+# expect:
+#   sleep-broker        Up ...          (any Up)
+#   sleep-postgres      Up ... (healthy)
 ```
 
-The schema (`postgres/init/01_schema.sql`) is applied **on first boot only**.
-
-### 3.7 Host venv + systemd services
-
 ```bash
+# Step 2.9 — venv + the four Python services
+WHERE: 🖥 EC2
 cd /opt/SleepMonitor
 python3 -m venv .venv
 .venv/bin/pip install -r api/requirements.txt -r ingest/requirements.txt -r publisher/requirements.txt
+# expect: "Successfully installed ..." (a few minutes first time)
 ```
 
-Four units, run as root services starting from the repo root. Create `/etc/systemd/system/sm-api.service`:
-
-```ini
+```bash
+# Step 2.10 — systemd units (all four, once, paste as-is)
+WHERE: 🖥 EC2
+sudo tee /etc/systemd/system/sm-api.service > /dev/null <<'EOF'
 [Unit]
 Description=SleepMonitor auth API
 After=network-online.target docker.service
@@ -295,257 +206,263 @@ RestartSec=3
 
 [Install]
 WantedBy=multi-user.target
+EOF
+
+sudo tee /etc/systemd/system/sm-ingest.service > /dev/null <<'EOF'
+[Unit]
+Description=SleepMonitor MQTT ingest worker
+After=network-online.target docker.service
+Requires=docker.service
+
+[Service]
+WorkingDirectory=/opt/SleepMonitor
+ExecStart=/opt/SleepMonitor/.venv/bin/python ingest/worker.py
+Restart=always
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+sudo tee /etc/systemd/system/sm-pub.service > /dev/null <<'EOF'
+[Unit]
+Description=SleepMonitor fake-device publisher
+After=network-online.target docker.service
+Requires=docker.service
+
+[Service]
+WorkingDirectory=/opt/SleepMonitor
+ExecStart=/opt/SleepMonitor/.venv/bin/python publisher/publisher.py
+Restart=always
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+sudo tee /etc/systemd/system/sm-echo.service > /dev/null <<'EOF'
+[Unit]
+Description=SleepMonitor MQTT echo responder
+After=network-online.target docker.service
+Requires=docker.service
+
+[Service]
+WorkingDirectory=/opt/SleepMonitor
+ExecStart=/opt/SleepMonitor/.venv/bin/python publisher/echo.py
+Restart=always
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+sudo systemctl daemon-reload
 ```
 
-Reuse the same skeleton for the other three, changing only `Description` and `ExecStart`:
-
-| Unit | ExecStart |
-|---|---|
-| `sm-ingest.service` | `.venv/bin/python ingest/worker.py` |
-| `sm-pub.service` | `.venv/bin/python publisher/publisher.py` |
-| `sm-echo.service` | `.venv/bin/python publisher/echo.py` |
-
-Then enable and start everything:
-
 ```bash
+# Step 2.11 — enable + start everything
+WHERE: 🖥 EC2
 sudo systemctl enable --now sm-api sm-ingest sm-pub sm-echo
-systemctl status sm-api --no-pager
+systemctl is-active sm-api sm-ingest sm-pub sm-echo
+# expect:
+#   active
+#   active
+#   active
+#   active
+
+# anything not "active"? look at the logs:
+journalctl -u sm-api -n 30 --no-pager      # (or -u sm-ingest / sm-pub / sm-echo)
 ```
 
-`enable` + `Restart=always` means: session ends → EC2 stops → next session starts → broker/postgres (compose restart policy) and app (systemd) all come back automatically.
+---
 
-### 3.8 Verify from the laptop
+## 3. VERIFY FROM THE LAPTOP
 
 ```bash
-# login round-trip (real bcrypt check against Postgres)
+# Step 3.1 — auth API round-trip
+WHERE: 💻 laptop
 curl -sS -X POST http://<EC2_IP>:8000/auth/login \
   -H 'Content-Type: application/json' \
   -d '{"email":"patient@sleep.com","password":"1234"}'
-# expect a JSON with "token":"..."
-
-# live MQTT tap — should print a reading every PUBLISH_INTERVAL
-mosquitto_sub -h <EC2_IP> -p 1883 -t 'sleep/#' -v
-
-# DB is receiving
-ssh ... 'docker exec sleep-postgres psql -U sleep_user -d sleep_monitor -c "SELECT count(*) FROM readings;"'
+# expect: JSON containing "token"
 ```
 
-All three green = backend done.
+```bash
+# Step 3.2 — live MQTT tap (broker is LOCKED: -u/-P required)
+WHERE: 💻 laptop (needs mosquitto-clients installed — README prerequisite)
+# <BROKER_PASSWORD> = the §2.5 value: grep '^MQTT_PASSWORD=' .env.development (on the server)
+mosquitto_sub -h <EC2_IP> -p 1883 -t 'sleep/#' -u sm -P '<BROKER_PASSWORD>' -v
+# expect: one JSON reading per PUBLISH_INTERVAL (default 1s), e.g.:
+#   sleep/normal {"patientId":"patient-001","tier":"Normal",...}
+```
+
+Both green → backend live. Continue to the app section.
 
 ---
 
-## 4. Phase 2 — Export the APK
-
-### 4.1 Dress rehearsal via Expo Go (before any build)
-
-Point the **dev** env at the server and run the real app in Expo Go — catches broken endpoints *before* they get baked into a 25-minute build:
+## 4. THE APP
 
 ```bash
-# app/.env.development (local repo)
+# Step 4.1 — dress rehearsal in Expo Go (finds broken config BEFORE the build)
+WHERE: 💻 laptop, repo root, then app/
+cd app
+sed -i -e 's/^EXPO_PUBLIC_BROKER_IP=.*/EXPO_PUBLIC_BROKER_IP=<EC2_IP>/' \
+       -e 's|^EXPO_PUBLIC_API_URL=.*|EXPO_PUBLIC_API_URL=http://<EC2_IP>:8000|' .env.development
+# login against a PUBLIC IP needs the demo transport flag — it is already in
+# app/.env.development (EXPO_PUBLIC_ALLOW_PLAIN_HTTP=true); runbook context: NOTES §8
+npx expo start
+# scan the QR with Expo Go on your phone
+```
+
+Expected: login as `patient@sleep.com` / `1234` → Home shows live vitals, badge on Alert screen fires, Network screen shows broker CONNECTED. (Your old laptop IPs are `192.168.0.29` if you want to revert later.)
+
+```bash
+# Step 4.2 — bake IP + broker password into the release config
+WHERE: 💻 laptop, app/
+# eas.json is GITIGNORED (template: eas.example.json) — values stay
+# machine-local and never reach the repo. <BROKER_PASSWORD> is the §2.5 value
+# again (grep it on the server).
+cd app
+# scope: builds run on the PREVIEW profile (§4.3) — its two placeholders are
+# filled here. Production deliberately keeps SET_ME_HTTPS_ENDPOINT (fail-closed:
+# no build, no login until a real https endpoint + TLS exist — NOTES §8), so the
+# check below expects exactly ONE remaining SET_ME line.
+sed -i -e 's/SET_ME_EC2_PUBLIC_IP/<EC2_IP>/g' \
+       -e 's/SET_ME_MQTT_PASSWORD/<BROKER_PASSWORD>/g' eas.json
+# mirror the same values into app/.env.local — SDK 54 `eas update` (§6.3)
+# reads envs from local .env files, NOT from the eas.json profile env block
+cat > .env.local <<'EOF'
 EXPO_PUBLIC_BROKER_IP=<EC2_IP>
 EXPO_PUBLIC_API_URL=http://<EC2_IP>:8000
-
-npx expo start    # scan the QR with Expo Go
+EXPO_PUBLIC_MQTT_USER=sm
+EXPO_PUBLIC_MQTT_PASSWORD=<BROKER_PASSWORD>
+EXPO_PUBLIC_ALLOW_PLAIN_HTTP=true
+EOF
+grep SET_ME eas.json                        # expect ONLY: "SET_ME_HTTPS_ENDPOINT" (production, see above)
+grep -c "^EXPO_PUBLIC" .env.local           # expect: 5
 ```
-
-Walk through: login on both test accounts → Home shows live vitals → Alert screen fires on critical readings. If this works, the APK will too.
-
-### 4.2 Build
 
 ```bash
-# 1. Finalize the endpoints in app/eas.json "build.preview.env" (replace SET_ME)
-# 2. Build
-cd app
-eas build -p android --profile preview
+# Step 4.3 — build the APK
+WHERE: 💻 laptop, app/
+npx eas-cli build -p android --profile preview --non-interactive
+# expect: "Waiting for build..." + a URL — takes ~15–25 min
+# (safety net: the build aborts if a SET_ME placeholder remains in eas.json —
+#  app/app.config.js fails the config evaluation; fix §4.2 and re-run)
 ```
 
-Android uses EAS-managed keystores — accept the defaults on first run. When the build finishes (~15–25 min), the dashboard gives a download link.
-
-```bash
-# 3. Sideload: download the .apk → transfer to phone → allow "install unknown apps" → install
-# 4. Log in as usual: patient@sleep.com / 1234
-```
-
-> Since the endpoints are baked, this APK works **forever** — but only against the IP baked in. That's what the Elastic IP buys you (Section 1).
+Step 4.4 — install: open the build URL → download `SleepMonitor.apk` → move to phone → allow install from unknown sources → install → log in with the test credentials. **From now on, this APK performs with zero maintenance as long as `<EC2_IP>` settles (Elastic IP).**
 
 ---
 
-## 5. Operations Runbook (every session)
+## 5. EVERY LAB SESSION
 
-```
-1. AWS Academy portal ── Start Lab ── console (region is fixed)
-2. EC2 ── your instance ── Start
-3. Copy the new public IPv4         ── no EIP? → this CHANGED, remember it
-4. ssh -i sm-key.pem ubuntu@<IP>
-5. docker ps --format ...           # sleep-postgres healthy? sleep-broker up?
-6. systemctl status sm-api sm-ingest sm-pub sm-echo --no-pager
-7. mosquitto_sub / curl login from the laptop — if green, the demo is live
+```bash
+# 🖱 console: Start Lab → EC2 → Start instance → COPY THE NEW PUBLIC IPv4
+# If it differs from what the APK has — you're on a lab without an Elastic IP:
+# see DEPLOYMENT_NOTES §5 for the two options (EIP is the fix).
 ```
 
-| Activity | Cost |
+```bash
+# 🖥 EC2 — check everything came back:
+docker ps --format 'table {{.Names}}\t{{.Status}}'     # broker + postgres (healthy)
+systemctl is-active sm-api sm-ingest sm-pub sm-echo    # 4× active
+```
+
+```bash
+# 💻 laptop — confirm the demo is live before an evaluation:
+curl -sS -X POST http://<IP>:8000/auth/login -H 'Content-Type: application/json' \
+  -d '{"email":"patient@sleep.com","password":"1234"}'
+# -P <BROKER_PASSWORD>: the §2.5 value again (grep it on the server)
+mosquitto_sub -h <IP> -p 1883 -t 'sleep/#' -u sm -P '<BROKER_PASSWORD>' -v
+```
+
+Happy: green everywhere vs APK matching the IP → hand over the phone.
+
+---
+
+## 6. SHIP CHANGES AFTER THE FIRST DEPLOY
+
+First, classify the change:
+
+| You changed… | Go to |
 |---|---|
-| t3.micro running ~8h/day, 20 days | ≈ $3–4 |
-| EBS 30 GB gp3 persistent | ≈ $2–3/mo |
-| Elastic IP attached (even when stopped) | ≈ $3.6/mo — the only thing that drains budget while you're not demoing |
-
-Leaving for a long break? Release the Elastic IP (accepting a rebuild next session) or let it ride if the academic deadline is near.
-
----
-
-## 6. Editing & Updating After the First Deploy
-
-### 6.1 Decision table — what changed vs what it costs
-
-| Change | What to do | Phone impact |
-|---|---|---|
-| Backend Python (`api/`, `ingest/`, `publisher/`) | `git pull` + restart unit | **None** |
-| MQTT broker config (`mosquitto/mosquitto.conf`) | edit file + `docker compose -f docker-compose.aws.yml restart broker`; **requires app rebuild if credentials added** | Rebuild only for creds change |
-| Database schema (`postgres/init/01_schema.sql`) | **Data-wipes:** `down -v` + re-up (§6.3) | None |
-| App **JS** (screens, logic, components) | full rebuild — *or* shortcut, Appendix B | New APK → reinstall |
-| App **config/native** (`app.json`, plugins, icons, native deps) | full rebuild, always | New APK → reinstall |
-| AWS endpoints (session restart without EIP) | values in `eas.json`/`.env.*`, then rebuild | New APK → reinstall |
-
-### 6.2 Backend fixes — the cheap loop
+| Backend Python (`api/`, `ingest/`, `publisher/`) | 6.1 |
+| Broker config (`mosquitto/mosquitto.conf`) | 6.2a — non-destructive restart only |
+| Database schema (`postgres/init/01_schema.sql`) | 6.2b — wipe + re-up (**data loss**; backup first) |
+| App JS code (screens, logic) | 6.3 — cheap OTA |
+| `app.json`, plugins, icons, native deps | 6.4 — only path |
+| `EXPO_PUBLIC_*` values in `app/eas.json` (via `eas build`) | 6.4 rebuild — `eas update` does NOT read the `eas.json` env block (NOTES §7) |
+| `EXPO_PUBLIC_*` values in `app/.env.local` (via OTA updates) | 6.3 OTA |
 
 ```bash
-# laptop: edit, test against the LOCAL stack (README "Run the Full Stack"), commit, push
-
-# server (only what's affected):
-cd /opt/SleepMonitor && git pull
-.venv/bin/pip install -r api/requirements.txt   # only if that file changed
-sudo systemctl restart sm-api                   # sm-ingest / sm-pub / sm-echo as needed
-journalctl -u sm-api -n 50 -f                   # watch it come up
+# 6.1 — backend fix
+WHERE: 💻 laptop   (commit, push)
+git add . && git commit -m "..." && git push
+# Then 🖥 EC2:
+cd /opt/SleepMonitor && git pull          # Option B deployments: scp a new tarball
+.venv/bin/pip install -r api/requirements.txt -r ingest/requirements.txt -r publisher/requirements.txt   # only if requirements changed
+sudo systemctl restart sm-api             # + the unit(s) you touched
+systemctl is-active sm-api                # expect: active
 ```
 
-No app rebuild, no EAS, nothing to reinstall.
-
-### 6.3 Database schema changes — data loss warning
-
-`postgres/init/01_schema.sql` only runs on **first boot of a fresh volume**. To apply schema changes you must wipe:
-
 ```bash
+# 6.2a — broker config change (non-destructive restart)
+WHERE: 🖥 EC2
 cd /opt/SleepMonitor
-docker compose -f docker-compose.aws.yml down -v    # ⚠ deletes ALL data
-docker compose -f docker-compose.aws.yml up -d    # re-applies init scripts
+# --env-file required: the compose file interpolates POSTGRES_PASSWORD with a
+# mandatory `:?` — any compose subcommand without it errors out.
+docker compose -f docker-compose.aws.yml --env-file .env.development restart broker
+docker logs sleep-broker --tail 20    # expect: "Opening ... port 9001" again
+
+# 6.2b — schema change (DESTRUCTIVE: wipe + re-up; guarded backup first)
+WHERE: 🖥 EC2
+cd /opt/SleepMonitor
+SQL="backup-$(date +%F-%H%M).sql"
+docker exec sleep-postgres pg_dump -U sleep_user sleep_monitor > "$SQL" || { echo "pg_dump FAILED — aborting"; exit 1; }
+[ -s "$SQL" ] || { echo "backup EMPTY — aborting"; exit 1; }
+echo "$SQL ready — review it, then rerun the down to confirm the destructive step"
+docker compose -f docker-compose.aws.yml --env-file .env.development down -v     # ⚠ delete stored data
+docker compose -f docker-compose.aws.yml --env-file .env.development up -d
 ```
-
-Sessions/alerts counts reset to zero — that's the point of a schema migration here. Do it mid-session, not mid-demo.
-
-### 6.4 App changes — two separate loops
-
-**Dev loop (free, seconds):** all fixing happens here — `npx expo start` + Expo Go, env pointed at whichever backend you're testing against. Every JS edit hot-reloads. Never build to test an idea.
-
-**Release loop (build, 15–25 min):** once a demo version is *frozen*, bake it:
 
 ```bash
+# 6.3 — app JS code: OTA (2 min, no rebuild, no reinstall)
+WHERE: 💻 laptop, app/
 cd app
-eas build -p android --profile preview
+npx eas-cli update --branch preview --message "what and why in plain words"
+# expect: "Update published" + an update ID
+
+# EXPO_PUBLIC_* value changes ride 6.3 ONLY through app/.env.local:
+# on SDK 54 `eas update` reads local .env files — NOT the eas.json profile
+# env block (that feeds eas build only). Keep both sources in sync, publish,
+# and rebuild via 6.4 whenever phones can't reach EAS (NOTES §7 trade-offs).
 ```
 
-Same endpoints unless the IP changed — in which case update `eas.json` first.
-
-Practical rhythm: **build only when freezing**, not per fix. Between freezes, demos run from Expo Go.
-
-### 6.5 What always forces a rebuild
-
-No shortcuts for: new/explicit dependency with native code, `app.json` changes (icons, splash, package name, plugins), or `EXPO_PUBLIC_*` value changes. Everything else is Appendix B-eligible.
+```bash
+# 6.4 — app config/native change, or EXPO_PUBLIC_* values — full rebuild:
+WHERE: 💻 laptop, app/
+cd app
+npx eas-cli build -p android --profile preview --non-interactive
+# → download → sideload again (as in §4.4)
+```
 
 ---
 
-## 7. Troubleshooting
+## 7. TROUBLESHOOTING
 
-| Symptom | Likely cause | Fix |
+| Symptom | Run | Likely fix |
 |---|---|---|
-| `RuntimeError: JWT_SECRET is missing, too weak…` at API start | Copied placeholder or < 32 chars — `api/config.py` rejects it by design | Generate with `secrets.token_hex(32)` |
-| `docker logs sleep-broker` silent / app can't reach WS | `mosquitto.conf` not mounted, or config has a syntax error | Check the `-v ./mosquitto/mosquitto.conf:/mosquitto/config/mosquitto.conf` line |
-| Login works once then 401s | `JWT_SECRET` changed → old JWTs invalid | Log out/in in the app (or clear app storage) |
-| `sleep-postgres` restart-loop / unhealthy | Password mismatch between `.env.development` and existing volume | Match the values, or `down -v` (wipes) |
-| App shows "Broker: disconnected" after a session restart | Public IP changed; the APK still bakes the old one | EIP, or a rebuild from the correct IP |
-| Publisher logs "connection refused" | Broker container not up yet | `docker compose -f docker-compose.aws.yml up -d` |
-| EAS build fails immediately | No/eas account login, or `eas.json` not in `app/` | `eas login`; verify the JSON path is `app/eas.json` |
-| Budget exhausted / lab locked | EIP or instance left running too long | Release the EIP (main suspect — see Section 5 cost table) |
+| API "RuntimeError: JWT_SECRET …" on start | `journalctl -u sm-api -n 20` | regenerate: it rejects `.env.example` placeholder values (`change_me…`) by design |
+| broker refuses to start / no "Opening port 9001" in logs | `docker logs sleep-broker --tail 20` | passwd file missing — repeat §2.7 |
+| mosquitto_sub says "not authorised" | re-run §3.2 | `-u sm -P '<BROKER_PASSWORD>'` (the §2.5-generated value) is mandatory — the broker is locked |
+| `sleep-postgres` restart-loop / unhealthy | `docker logs sleep-postgres --tail 20` | password mismatch: §2.5 vs the old volume → match values, or wipe (§6.2b) |
+| App "Broker: disconnected" after lab restart | §5 commands | IP changed without an EIP — §6.4 rebuild with new IP, or set up the EIP (NOTES §5) |
+| Publisher logs "connection refused" | `docker ps` | broker container not up — §2.8 again |
+| `eas build` fails immediately | `npx eas-cli whoami` | not logged in, or `eas.json` missing in `app/` (copy `eas.example.json` → `eas.json`, §0) |
+| login throws "Refusing to send credentials over plain HTTP" | read the host in the error | `assertSecureEndpoint` blocks public plain-HTTP unless `EXPO_PUBLIC_ALLOW_PLAIN_HTTP=true` is baked — `app/.env.development` for the rehearsal, `app/eas.json` for APKs (then OTA/rebuild §6.3/6.4); rationale in NOTES §8 |
+| Budget exhausted / lab locked | 🖱 console cost page | the Elastic IP is an additional drain (besides persistent EBS) — see NOTES §2 |
 
 ---
 
-## Appendix A — Optional: Broker Credentials
-
-By default the broker is anonymous and open to the internet on 1883/9001 — safe-ish behind the SG, but anyone scanning the IP can inject fake readings. To lock it:
-
-1. **Generate the password** — with a config dir mounted read-write (`./mosquitto/:/mosquitto/config/`, not `:ro`):
-
-```bash
-sudo apt install mosquitto-clients            # host, for mosquitto_passwd binary — or:
-docker run --rm eclipse-mosquitto:2 mosquitto_passwd -c -b /tmp/pw sm '<password>'
-# → append to mosquitto/passwd (host), ensure container can read it
-```
-
-2. **Close the broker** — in `mosquitto/mosquitto.conf`:
-
-```
-listener 1883
-allow_anonymous false
-password_file /mosquitto/config/passwd
-
-listener 9001
-protocol websockets
-allow_anonymous false
-password_file /mosquitto/config/passwd
-```
-
-3. **Every service gets the creds** — Python side already supports it via env (`.env.development`):
-
-```
-MQTT_USER=sm
-MQTT_PASSWORD=<password>
-```
-
-> Note: `publisher.py` defaults to `admin`/`changeme` — set these explicitly or it won't connect to the locked broker.
-
-4. **App change** (`app/services/mqttService.js`, in `doConnect`):
-
-```js
-c.connect({
-  cleanSession: false,
-  keepAliveInterval: 30,
-  useSSL: false,
-  userName: process.env.EXPO_PUBLIC_MQTT_USER,
-  password: process.env.EXPO_PUBLIC_MQTT_PASSWORD,
-  ...
-});
-```
-
-5. Add the vars to `eas.json` → rebuild (forced: they're `EXPO_PUBLIC_*`).
-
-Do this **before freezing an APK** if you plan to, so you only eat one rebuild.
-
----
-
-## Appendix B — Optional: OTA Updates (expo-updates / EAS Update)
-
-Every JS-only fix currently costs a full APK rebuild. With EAS Update installed, those changes go over the air to already-installed APKs in ~2 minutes:
-
-```bash
-cd app
-npx expo install expo-updates   # adds the package
-eas init                        # sets "extra.eas.projectId" in app.json
-eas update:configure            # writes "updates" + runtimeVersion config
-eas build -p android --profile preview   # LAST full rebuild — this APK gains OTA
-```
-
-After that one-time setup:
-
-```bash
-# ship a JS-only fix without a rebuild:
-eas update --branch preview --message "fix alert filter"
-```
-
-Limits to remember:
-
-- Covers **JS code only**. Anything in Section 6.5's "always rebuild" list still means `eas build`.
-- Covers `EXPO_PUBLIC_*` values too — **an IP change cannot be OTA'd usefully** unless the new value is the same as what the bundle already has, so the EIP recommendation stands.
-
-If you expect to iterate on app code much before the deadline, fold this into Phase 0 instead of retrofitting later — it saves one rebuild cycle that the retrofit itself costs.
-
----
-
-*Owner note: this document assumes the Phase 0 files (`docker-compose.aws.yml`, `mosquitto/mosquitto.conf`, `app/eas.json`) exist in the repo — create them first (Section 2) if they don't.*
+*Everything below step headings is mandatory order. Reading order — this file is opinionated; the why for each step is one short chapter away: [`DEPLOYMENT_NOTES.md`](DEPLOYMENT_NOTES.md).*
