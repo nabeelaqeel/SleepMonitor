@@ -37,13 +37,16 @@ yarn-error.*
 .env.production
 
 # AWS broker credential file — generated on the server, never committed
-# (mosquitto_passwd -c /config/passwd, docs/DEPLOYMENT.md §3.6)
+# (mosquitto_passwd -c /config/passwd — see the author-side deployment runbook)
 mosquitto/passwd
 
 # EAS release config — real values are filled locally from eas.example.json
-# at deploy time (docs/DEPLOYMENT.md §4.2); the repo never carries the real
-# broker password or endpoints.
+# at deploy time (see the author-side deployment runbook); the repo never
+# carries the real broker password or endpoints.
 app/eas.json
+
+# personal working notes — author-local, not for the repo
+notes/
 
 # Python virtualenvs (never track these — .venv/ was committed by accident once)
 .venv/
@@ -55,9 +58,6 @@ __pycache__/
 
 # Generated benchmark output
 evaluation_results.json
-
-# Docker credentials — never commit
-mosquitto/passwd
 
 # typescript
 *.tsbuildinfo

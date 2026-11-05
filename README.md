@@ -15,8 +15,6 @@ A QoS-aware real-time sleep monitoring system built as a Final Year Project (FYP
 - [Database & Ingest (PostgreSQL)](#database--ingest-postgresql)
 - [Authentication (HTTP Login)](#authentication-http-login)
 - [Running the App](#running-the-app)
-- [Deployment (AWS Learner Lab)](docs/DEPLOYMENT.md)
-- [Deployment Notes — the why](docs/DEPLOYMENT_NOTES.md)
 - [Test Credentials](#test-credentials)
 - [Project Structure](#project-structure)
 - [MQTT Topics and QoS](#mqtt-topics-and-qos)
@@ -442,7 +440,7 @@ SleepMonitor/
 ├── benchmark/                        # Latency benchmark harness (single-clock)
 ├── docker-compose.yml                # PostgreSQL service (Docker)
 ├── .env.example                      # Python env template (copy to .env.development)
-└── docs/                             # ARCHITECTURE, DATA_MODEL, DATABASE, AUTH_API, MQTT_SETUP, DEPLOYMENT, DEPLOYMENT_NOTES
+└── docs/                             # ARCHITECTURE, DATA_MODEL, DATABASE, AUTH_API, MQTT_SETUP
 ```
 
 ---

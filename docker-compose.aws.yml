@@ -1,52 +1,51 @@
 # =============================================================
-# Sleep Monitor — AWS Learner Lab stack (Postgres + Mosquitto)
+# Sleep Monitor — AWS stack: broker + TEST Postgres + ALL services
+# (one compose, one command deploys/updates:
+#   docker compose -f docker-compose.aws.yml --env-file .env.development up -d --build
 #
-# The Python services (api, ingest, publisher, echo) run in a host
-# venv, so Postgres is exposed on 127.0.0.1:5432 only and the broker
-# on :1883. The phone reaches the broker over WebSocket :9001 via the
-# security group — open 1883 + 9001, never 5432.
+# TWO DATABASE MODES — one active DATABASE_URL line in .env.development:
+#   TEST (dev): the `postgres` service on the compose network — reached at
+#               host name `postgres` (NOT localhost: containers have their
+#               own network). Zero RDS cost. Schema auto-applies on a fresh
+#               volume (postgres/init).
+#   DEMO (eval): AWS RDS created+deleted per session (DEPLOYMENT_NOTES §3);
+#               same compose, DATABASE_URL points at the RDS endpoint over TLS.
 #
-# The broker starts LOCKED (allow_anonymous false): the passwd file
-# must exist BEFORE the first start (see docs/DEPLOYMENT.md §3.6):
-#   docker run --rm -v "$PWD/mosquitto:/config" eclipse-mosquitto:2 \
-#     mosquitto_passwd -c -b /config/passwd sm '<password>'
-# The password lives in app/eas.json (EXPO_PUBLIC_MQTT_*) and this
-# repo's .env.development (MQTT_*).
+# Broker always starts; Postgres only with --profile local-db.
+# api/ingest/publisher/echo subscribe to MQTT — placed after broker so the
+# broker starts first; the broker restart policy covers late re-attempts.
+
+# Broker LOCKED mode: passwd file must exist BEFORE first start (§2.9):
+#   MQPW="$(grep '^MQTT_PASSWORD=' .env.development | cut -d= -f2-)"
+#   docker run --rm -v "$PWD/mosquitto:/mosquitto/config" eclipse-mosquitto:2 \
+#     mosquitto_passwd -c -b /mosquitto/config/passwd sm "$MQPW"
+#   sudo chown 1883:1883 mosquitto/passwd && sudo chmod 600 mosquitto/passwd
 #
-# Usage (from the repo root, after repo + .env.development exist):
-#   docker compose -f docker-compose.aws.yml --env-file .env.development up -d
+# Usage (--env-file REQUIRED on every compose call — profile-gated services
+#        still get interpolated, and compose only auto-loads `.env`):
+#   docker compose -f docker-compose.aws.yml --env-file .env.development --profile local-db up -d --build  # TEST: everything
+#   docker compose -f docker-compose.aws.yml --env-file .env.development up -d --build                    # DEMO: broker + services (DB = RDS)
+#
+# Mode flip TEST → DEMO (and back): edit the ACTIVE DATABASE_URL line in
+# .env.development, then `up -d` again — compose recreates only the
+# containers whose env changed (api + ingest).
 # =============================================================
 
-services:
-  postgres:
-    image: postgres:16-alpine
-    container_name: sleep-postgres
-    restart: unless-stopped
-    ports:
-      # Host venv services connect over localhost — never open in SG
-      - "127.0.0.1:5432:5432"
-    volumes:
-      - postgres_data:/var/lib/postgresql/data
-      # SQL files here run alphabetically on first container start only.
-      - ./postgres/init:/docker-entrypoint-initdb.d:ro
-    environment:
-      POSTGRES_DB:       ${POSTGRES_DB:-sleep_monitor}
-      POSTGRES_USER:     ${POSTGRES_USER:-sleep_user}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env.development}
-    healthcheck:
-      test:
-        - "CMD-SHELL"
-        - "pg_isready -U ${POSTGRES_USER:-sleep_user} -d ${POSTGRES_DB:-sleep_monitor}"
-      interval: 10s
-      timeout: 5s
-      start_period: 20s
-      retries: 5
-    logging:
-      driver: "json-file"
-      options:
-        max-size: "10m"
-        max-file: "3"
+x-python-common: &python-common
+  build:
+    context: .
+    dockerfile: Dockerfile
+  restart: unless-stopped
+  env_file: .env.development
+  depends_on:
+    - broker
+  logging:
+    driver: "json-file"
+    options:
+      max-size: "10m"
+      max-file: "3"
 
+services:
   broker:
     image: eclipse-mosquitto:2
     container_name: sleep-broker
@@ -65,8 +64,62 @@ services:
         max-size: "10m"
         max-file: "3"
 
+  postgres:
+    profiles: [local-db]
+    image: postgres:16-alpine
+    container_name: sleep-postgres
+    restart: unless-stopped
+    # host-only bind: python services reach it over the compose network as
+    # host name `postgres` — 5432 never appears in the security group.
+    # psql on the host connects via the published 127.0.0.1:5432 (§3.3/§6.2b).
+    ports:
+      - "127.0.0.1:5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      # SQL files here run alphabetically on first container start only.
+      - ./postgres/init:/docker-entrypoint-initdb.d:ro
+    environment:
+      POSTGRES_DB:       ${POSTGRES_DB:-sleep_monitor}
+      POSTGRES_USER:     ${POSTGRES_USER:-sleep_user}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?TEST mode needs POSTGRES_PASSWORD in .env.development}
+    healthcheck:
+      test:
+        - "CMD-SHELL"
+        - "pg_isready -U ${POSTGRES_USER:-sleep_user} -d ${POSTGRES_DB:-sleep_monitor}"
+      interval: 10s
+      timeout: 5s
+      start_period: 20s
+      retries: 5
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  api:
+    <<: *python-common
+    container_name: sleep-api
+    ports:
+      - "8000:8000"
+    command: ["uvicorn", "api.main:app", "--host", "0.0.0.0", "--port", "8000"]
+
+  ingest:
+    <<: *python-common
+    container_name: sleep-ingest
+    command: ["python", "ingest/worker.py"]
+
+  publisher:
+    <<: *python-common
+    container_name: sleep-publisher
+    command: ["python", "publisher/publisher.py"]
+
+  echo:
+    <<: *python-common
+    container_name: sleep-echo
+    command: ["python", "publisher/echo.py"]
+
 volumes:
-  postgres_data:
-    driver: local
   mosquitto_data:
+    driver: local
+  postgres_data:
     driver: local
