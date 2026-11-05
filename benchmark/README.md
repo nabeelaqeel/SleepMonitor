@@ -567,8 +567,13 @@ and patched median as `value (n=messages)` with the exact limit.
 .venv-dev/bin/python benchmark/run_benchmark.py --sensitivity \
     --idle-max-pps <threshold pps>
 
-# analysis (main + sensitivity, if present)
-.venv-dev/bin/python benchmark/analyze_benchmark.py
+# analysis for the v3 study — the analyzer's defaults still target the
+# archived results_v2*, so pass the new directories explicitly (a missing
+# results_v3_sensitivity/ is skipped automatically; --no-sensitivity forces
+# main-only)
+.venv-dev/bin/python benchmark/analyze_benchmark.py \
+    --main-dir benchmark/results_v3 \
+    --sensitivity-dir benchmark/results_v3_sensitivity
 ```
 
 Optional B-clean TCP_NODELAY test (no sudo, client-side only):
