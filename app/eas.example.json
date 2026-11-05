@@ -1,26 +1,24 @@
 {
   "build": {
     "preview": {
-      "android": {
-        "buildType": "apk"
-      },
+      "android": { "buildType": "apk" },
       "env": {
         "EXPO_PUBLIC_BROKER_IP": "SET_ME_EC2_PUBLIC_IP",
         "EXPO_PUBLIC_API_URL": "http://SET_ME_EC2_PUBLIC_IP:8000",
         "EXPO_PUBLIC_MQTT_USER": "sm",
-        "EXPO_PUBLIC_MQTT_PASSWORD": "76b396609bbf277e47469b3f"
+        "EXPO_PUBLIC_MQTT_PASSWORD": "SET_ME_MQTT_PASSWORD",
+        "EXPO_PUBLIC_ALLOW_PLAIN_HTTP": "true"
       },
       "channel": "preview"
     },
     "production": {
-      "android": {
-        "buildType": "app-bundle"
-      },
+      "android": { "buildType": "app-bundle" },
       "env": {
         "EXPO_PUBLIC_BROKER_IP": "SET_ME_EC2_PUBLIC_IP",
         "EXPO_PUBLIC_API_URL": "http://SET_ME_EC2_PUBLIC_IP:8000",
         "EXPO_PUBLIC_MQTT_USER": "sm",
-        "EXPO_PUBLIC_MQTT_PASSWORD": "76b396609bbf277e47469b3f"
+        "EXPO_PUBLIC_MQTT_PASSWORD": "SET_ME_MQTT_PASSWORD",
+        "EXPO_PUBLIC_ALLOW_PLAIN_HTTP": "true"
       },
       "channel": "production"
     }

@@ -44,7 +44,7 @@ Cost sketch (runbook §5 repeats the checklist):
 |---|---|
 | t3.micro running 8h/day × 20 days | $3–4 |
 | EBS 30 GB gp3 (persistent) | $2–3/mo |
-| **Elastic IP attached** (bills even while instance is stopped) | **≈ $3.6/mo — the only drain while you're not demoing** |
+| **Elastic IP attached** (bills even while instance is stopped) | **≈ $3.6/mo — an additional drain on top of the EBS row, which also keeps billing while stopped** |
 
 ---
 
@@ -59,7 +59,7 @@ All of this **ships in the repo**; nothing here happens again per deployment.
 | `./mosquitto:/mosquitto/config` (read-write dir mount) | `mosquitto_passwd` writes `mosquitto/passwd` from inside the container; a read-only file mount would block that, and a container-only path wouldn't survive recreates. |
 | `mosquitto/mosquitto.conf` (locked) | The broker is reachable from the whole internet on 1883/9001. With anonymous access, anyone scanning the IP can **inject fake patient vitals**. `allow_anonymous false` + `password_file` closes it. The passwd file itself is generated on the server (runbook §2.7) and **never committed** (gitignored). |
 | Passwd *before* first start | Mosquitto refuses to boot when its `password_file` is missing — that's why runbook step 2.7 exists before the compose `up`. |
-| `app/eas.json` | `preview` profile builds an **installable APK** (`buildType: apk`), not a Play-Store AAB, and carries the four `EXPO_PUBLIC_*` values the app bakes — both `preview` and `production` profiles carry the same env, so an accidental production build can't silently fall back to legacy hardcoded IPs. Profile-level `env` is the documented way to supply them to EAS cloud builds (local `.env.development` doesn't reach the build server). |
+| `app/eas.json` (gitignored) + `app/eas.example.json` (tracked) | `preview` profile builds an **installable APK** (`buildType: apk`), not a Play-Store AAB, and carries the five `EXPO_PUBLIC_*` values the app bakes. Both `preview` and `production` carry the same env, so an accidental production build can't silently fall back to legacy hardcoded IPs. **`eas.json` is gitignored** — the tracked `eas.example.json` template carries placeholders; real endpoints + broker password are filled locally at runbook §4.2, so the repo never holds them. EAS cloud builds read profile env from the working tree, not from git. |
 | `app/app.config.js` | Fail-guard: EAS cloud builds **throw** while `EXPO_PUBLIC_BROKER_IP`/`EXPO_PUBLIC_API_URL` are unset or still `SET_ME…` — an unfilled `eas.json` can no longer silently produce an APK with dead endpoints (the app would fall back to legacy hardcoded IPs). Local `npx expo start` is unaffected (no `EAS_BUILD` env set there). |
 | MQTT creds inside `eas.json` (committed) | Deliberate: the APK embeds these strings anyway (phone-side credential), so keeping them next to the endpoints in the same file is one source of truth. If you later want them repo-hidden, switch to EAS env vars (`npx eas-cli env:create`). |
 | `app.json` package fix (`com.aqeel.sleepmonitor`) | The Android package name is the app's identity — changing it after the first installed APK makes every future build a *different app* on the phone. Fixed before any build could run. |
@@ -97,21 +97,48 @@ Options for step 3:
 
 | Option | Effort | Effect |
 |---|---|---|
-| **Elastic IP (recommended)** | 2 min: EC2 → Elastic IPs → Allocate → Associate | Address survives stop/start. The APK stays valid forever. Bills ≈ $3.6/mo while the instance is stopped — the only recurring cost you control. Release it if you'll be inactive for a long stretch and accept one rebuild later. |
+| **Elastic IP (recommended)** | 2 min: EC2 → Elastic IPs → Allocate → Associate | Address survives stop/start. The APK stays valid forever. Bills ≈ $3.6/mo while stopped — an additional drain on top of EBS storage. Release it if you'll be inactive for a long stretch and accept one rebuild later. |
 | No EIP | zero | Every session you must re-bake `<EC2_IP>` and rebuild (`npx eas-cli build`, ~20 min) — or wait for an OTA push (§7). Workable, painful. |
 
 ---
 
 ## 6. Rotating credentials
 
-The broker credential currently lives in exactly four places:
+The broker credential lives in exactly four places:
 
-1. `mosquitto/passwd` — generated on the server (runbook §2.7)
-2. server `.env.development` — `MQTT_USER`/`MQTT_PASSWORD` (§2.5)
-3. `app/eas.json` — `EXPO_PUBLIC_MQTT_*` (committed)
-4. local `app/.env.development` (gitignored) + root `.env.development`
+1. `mosquitto/passwd` — generated on the server (runbook §2.7); **read by the broker at startup only**
+2. server `.env.development` — `MQTT_USER`/`MQTT_PASSWORD` (§2.5, generated there, never committed)
+3. laptop `app/eas.json` — `EXPO_PUBLIC_MQTT_*` (gitignored; template `eas.example.json`; baked into the APK at build time)
+4. laptop copies — root `.env.development` + `app/.env.development` (local development only)
 
-To rotate: regenerate (1) with a new password via the same `mosquitto_passwd` one-liner, then update (3) and rebuild — **one full rebuild**; OTA can carry (3)'s new value too (§7), so a rebuild is only needed last-resort. The Python side (2) applies on restart — update the laptop copies (4) at leisure.
+Rotation is an ordered sequence — **restarts are required, a rebuild usually is not**:
+
+```bash
+# 1. server: new password → passwd file, env file stays consistent with it
+#    (run value through BOTH so nothing can mix credentials)
+#    in /opt/SleepMonitor:
+NEWPW=$(openssl rand -hex 12)
+docker run --rm -v "$PWD/mosquitto:/config" eclipse-mosquitto:2 \
+  mosquitto_passwd -c -b /config/passwd sm "$NEWPW"
+sed -i "s/^MQTT_PASSWORD=.*/MQTT_PASSWORD=$NEWPW/" .env.development
+
+# 2. server: broker reload — password_file is only read at startup
+docker compose -f docker-compose.aws.yml restart broker
+
+# 3. server: the four Python units hold long-lived paho connections with the
+#    OLD password — they must be restarted to re-read .env.development:
+sudo systemctl restart sm-api sm-ingest sm-pub sm-echo
+systemctl is-active sm-api sm-ingest sm-pub sm-echo        # 4× active
+
+# 4. laptop: app/eas.json gets the new value, then OTA carries it (§7) —
+#    a full rebuild only if that installed APK predates the OTA wiring
+sed -i 's/^EXPO_PUBLIC_MQTT_PASSWORD.*/EXPO_PUBLIC_MQTT_PASSWORD=<new password>/' eas.json
+npx eas-cli update --branch preview --message "rotate MQTT credential"
+
+# 5. laptop copies (4) — at leisure, they are local-only
+```
+
+If the password was ever deployed AND the repo is public, treat it as burned and run this sequence once immediately (the pre-deploy value inevitably leaked into the source history otherwise).
 
 ---
 
@@ -130,3 +157,15 @@ With `expo-updates` wired (it is — Phase 0) and the `preview` channel APK inst
 **Version rule:** `runtimeVersion: { policy: "appVersion" }` is configured — OTA pushes land on every install whose `app.json` **version string is unchanged** (currently `1.0.0`). Bump the version and old installs stop receiving updates until they're rebuilt/reinstalled — which is the right moment for a build anyway.
 
 **Branch rule:** `eas update --branch preview` ↔ `"channel": "preview"` on the `preview` profile (`eas update:configure` set this in Phase 0). Publishing to the wrong branch silently reaches no one.
+
+---
+
+## 8. Transport security — where the demo sits
+
+The review's HTTPS finding is half-mitigated already: `assertSecureEndpoint()` in `app/auth/apiAuth.js` is **default-deny** — it refuses plain-HTTP credentials to any public host — and only relaxes when the deployment explicitly sets `EXPO_PUBLIC_ALLOW_PLAIN_HTTP=true` (baked into both EAS profiles at §4.2). That flag is the documented demo tradeoff: README's Known Limitations already lists "rotate demo password + TLS before a real deployment."
+
+MQTT stays plain on 1883/9001 with broker credentials. TLS on 9001 (WSS, `useSSL: true`) needs a cert the phone trusts — a self-signed cert breaks React Native's WebSocket trust handling, a real cert needs DNS + ports 80/443; both out of scope for the lab demo, tracked as Known Limitations.
+
+Upgrade path once a cert exists: nginx/Let's Encrypt → `EXPO_PUBLIC_API_URL` becomes `https://…` (the guard accepts it as-is, the flag becomes unnecessary), broker listeners gain `certfile`/`keyfile`, app flips `useSSL: true`. Small code deltas then.
+
+Post-verification tightening (no TLS required): port 1883 exists mostly for the §3.2 laptop check — narrow that SG rule's source to your IP after verification is done; the phone only ever uses 9001.

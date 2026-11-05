@@ -64,6 +64,14 @@ function isPrivateIpv4(host) {
   return a === 10 || (a === 192 && b === 168) || (a === 172 && b >= 16 && b <= 31);
 }
 
+/**
+ * Transport guard, called before login and before each verify. Default-deny:
+ * refuses to send credentials over plain HTTP to anything that is not
+ * loopback or a dev LAN address. Two accepted escapes: HTTPS or private/
+ * loopback targets as-is, and — for the demo deployment with no TLS
+ * termination (README Known Limitations) — `EXPO_PUBLIC_ALLOW_PLAIN_HTTP=true`
+ * flags the tradeoff explicitly instead of silently bagging it.
+ */
 function assertSecureEndpoint() {
   let url;
   try {
@@ -75,10 +83,14 @@ function assertSecureEndpoint() {
   const loopbackOrLan =
     host === 'localhost' || host === '127.0.0.1' || host.endsWith('.local') ||
     isPrivateIpv4(host);
-  if (url.protocol === 'http:' && !loopbackOrLan) {
+  const plainHttpAllowedByFlag =
+    process.env.EXPO_PUBLIC_ALLOW_PLAIN_HTTP === 'true';
+  if (url.protocol === 'http:' && !loopbackOrLan && !plainHttpAllowedByFlag) {
     throw new Error(
       `Refusing to send credentials over plain HTTP to '${host}'. ` +
-      'Use an HTTPS endpoint, or point EXPO_PUBLIC_API_URL at a private LAN address.'
+      'Use an HTTPS endpoint, point EXPO_PUBLIC_API_URL at a private LAN ' +
+      'address, or set EXPO_PUBLIC_ALLOW_PLAIN_HTTP=true to accept the ' +
+      'demo tradeoff explicitly.'
     );
   }
 }

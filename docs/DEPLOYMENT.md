@@ -22,7 +22,7 @@ git remote -v                               # URL shown? → commit + push (next
 git add -A && git commit -m "Phase 0: AWS deploy prep" && git push
 ```
 
-No remote? Use Option B in step 2.2. Phase 0 files (`docker-compose.aws.yml`, `mosquitto/mosquitto.conf`, `app/eas.json`) already exist in the repo — nothing else to prepare.
+No remote? Use Option B in step 2.2. Phase 0 files (`docker-compose.aws.yml`, `mosquitto/mosquitto.conf`, `app/eas.example.json`) already exist in the repo — nothing else to prepare. (Fresh checkout? `cd app && cp eas.example.json eas.json` — your local `eas.json` is gitignored.)
 
 ---
 
@@ -111,7 +111,7 @@ SEED_DEMO_USERS=true
 MQTT_HOST=localhost
 MQTT_PORT=1883
 MQTT_USER=sm
-MQTT_PASSWORD=76b396609bbf277e47469b3f
+MQTT_PASSWORD=<FILL_MQTT_PASSWORD>
 
 INGEST_CLIENT_ID=sleep-ingest-001
 SESSION_EXPIRY=3600
@@ -127,9 +127,11 @@ PUBLISH_INTERVAL=1.0
 LOOP_CSV=true
 EOF
 
-# replace the placeholders with real values, same file:
-sed -i "s/<FILL_PG_PASSWORD>/$(openssl rand -hex 12)/g;
-        s/<FILL_JWT_SECRET>/$(python3 -c 'import secrets; print(secrets.token_hex(32))')/g" .env.development
+# replace the placeholders with real values, same file — all three secrets are
+# generated at deploy time and never carried by the repo:
+sed -i -e "s/<FILL_PG_PASSWORD>/$(openssl rand -hex 12)/g" \
+       -e "s/<FILL_JWT_SECRET>/$(python3 -c 'import secrets; print(secrets.token_hex(32))')/g" \
+       -e "s/<FILL_MQTT_PASSWORD>/$(openssl rand -hex 12)/g" .env.development
 
 grep -c "FILL_" .env.development          # expect: 0
 ```
@@ -147,10 +149,13 @@ free -h    # expect: Swap row shows 2.0Gi
 # Step 2.7 — broker passwd (BEFORE first broker start — it refuses without it)
 WHERE: 🖥 EC2, still in /opt/SleepMonitor
 cd /opt/SleepMonitor
+# the broker password is the one §2.5 generated into .env.development —
+# read it from there so the command and the file can never disagree:
+MQPW="$(grep '^MQTT_PASSWORD=' .env.development | cut -d= -f2-)"
 docker run --rm -v "$PWD/mosquitto:/config" eclipse-mosquitto:2 \
-  mosquitto_passwd -c -b /config/passwd sm '76b396609bbf277e47469b3f'
+  mosquitto_passwd -c -b /config/passwd sm "$MQPW"
 
-ls -l mosquitto/passwd                    # expect: the file exists (~70 bytes)
+ls -l mosquitto/passwd                    # expect: file exists (~70 bytes)
 ```
 
 ```bash
@@ -275,7 +280,8 @@ curl -sS -X POST http://<EC2_IP>:8000/auth/login \
 ```bash
 # Step 3.2 — live MQTT tap (broker is LOCKED: -u/-P required)
 WHERE: 💻 laptop (needs mosquitto-clients installed — README prerequisite)
-mosquitto_sub -h <EC2_IP> -p 1883 -t 'sleep/#' -u sm -P '76b396609bbf277e47469b3f' -v
+# <BROKER_PASSWORD> = the §2.5 value: grep '^MQTT_PASSWORD=' .env.development (on the server)
+mosquitto_sub -h <EC2_IP> -p 1883 -t 'sleep/#' -u sm -P '<BROKER_PASSWORD>' -v
 # expect: one JSON reading per PUBLISH_INTERVAL (default 1s), e.g.:
 #   sleep/normal {"patientId":"patient-001","tier":"Normal",...}
 ```
@@ -292,6 +298,8 @@ WHERE: 💻 laptop, repo root, then app/
 cd app
 sed -i -e 's/^EXPO_PUBLIC_BROKER_IP=.*/EXPO_PUBLIC_BROKER_IP=<EC2_IP>/' \
        -e 's|^EXPO_PUBLIC_API_URL=.*|EXPO_PUBLIC_API_URL=http://<EC2_IP>:8000|' .env.development
+# login against a PUBLIC IP needs the demo transport flag — it is already in
+# app/.env.development (EXPO_PUBLIC_ALLOW_PLAIN_HTTP=true); runbook context: NOTES §8
 npx expo start
 # scan the QR with Expo Go on your phone
 ```
@@ -299,10 +307,14 @@ npx expo start
 Expected: login as `patient@sleep.com` / `1234` → Home shows live vitals, badge on Alert screen fires, Network screen shows broker CONNECTED. (Your old laptop IPs are `192.168.0.29` if you want to revert later.)
 
 ```bash
-# Step 4.2 — bake the IP into the release config
+# Step 4.2 — bake IP + broker password into the release config
 WHERE: 💻 laptop, app/
+# eas.json is GITIGNORED (template: eas.example.json) — values stay
+# machine-local and never reach the repo. <BROKER_PASSWORD> is the §2.5 value
+# again (grep it on the server).
 cd app
-sed -i 's/SET_ME_EC2_PUBLIC_IP/<EC2_IP>/g' eas.json
+sed -i -e 's/SET_ME_EC2_PUBLIC_IP/<EC2_IP>/g' \
+       -e 's/SET_ME_MQTT_PASSWORD/<BROKER_PASSWORD>/g' eas.json
 grep SET_ME eas.json                        # expect: no output
 ```
 
@@ -337,7 +349,8 @@ systemctl is-active sm-api sm-ingest sm-pub sm-echo    # 4× active
 # 💻 laptop — confirm the demo is live before an evaluation:
 curl -sS -X POST http://<IP>:8000/auth/login -H 'Content-Type: application/json' \
   -d '{"email":"patient@sleep.com","password":"1234"}'
-mosquitto_sub -h <IP> -p 1883 -t 'sleep/#' -u sm -P '76b396609bbf277e47469b3f' -v
+# -P <BROKER_PASSWORD>: the §2.5 value again (grep it on the server)
+mosquitto_sub -h <IP> -p 1883 -t 'sleep/#' -u sm -P '<BROKER_PASSWORD>' -v
 ```
 
 Happy: green everywhere vs APK matching the IP → hand over the phone.
@@ -405,11 +418,12 @@ npx eas-cli build -p android --profile preview --non-interactive
 |---|---|---|
 | API "RuntimeError: JWT_SECRET …" on start | `journalctl -u sm-api -n 20` | regenerate: it rejects `.env.example` placeholder values (`change_me…`) by design |
 | broker refuses to start / no "Opening port 9001" in logs | `docker logs sleep-broker --tail 20` | passwd file missing — repeat §2.7 |
-| mosquitto_sub says "not authorised" | re-run §3.2 | `-u sm -P '<password>'` is mandatory in §3.2 / §5 — these were added at that lock since the broker is locked |
+| mosquitto_sub says "not authorised" | re-run §3.2 | `-u sm -P '<BROKER_PASSWORD>'` (the §2.5-generated value) is mandatory — the broker is locked |
 | `sleep-postgres` restart-loop / unhealthy | `docker logs sleep-postgres --tail 20` | password mismatch: §2.5 vs the old volume → match values, or wipe (§6.2) |
 | App "Broker: disconnected" after lab restart | §5 commands | IP changed without an EIP — §6.4 rebuild with new IP, or set up the EIP (NOTES §5) |
 | Publisher logs "connection refused" | `docker ps` | broker container not up — §2.8 again |
-| `eas build` fails immediately | `npx eas-cli whoami` | not logged in, or `eas.json` missing in `app/` |
+| `eas build` fails immediately | `npx eas-cli whoami` | not logged in, or `eas.json` missing in `app/` (copy `eas.example.json` → `eas.json`, §0) |
+| login throws "Refusing to send credentials over plain HTTP" | read the host in the error | `assertSecureEndpoint` blocks public plain-HTTP unless `EXPO_PUBLIC_ALLOW_PLAIN_HTTP=true` is baked — `app/.env.development` for the rehearsal, `app/eas.json` for APKs (then OTA/rebuild §6.3/6.4); rationale in NOTES §8 |
 | Budget exhausted / lab locked | 🖱 console cost page | the Elastic IP is the only budget drain while you're not demoing — see NOTES §2 |
 
 ---
