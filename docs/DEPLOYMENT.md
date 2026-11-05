@@ -650,4 +650,4 @@ npx eas-cli build -p android --profile preview --non-interactive
 
 ---
 
-*Everything below step headings is mandatory order. Reading order — this file is opinionated; the why for each step is one short chapter away: [`DEPLOYMENT_NOTES.md`](DEPLOYMENT_NOTES.md).*
+*Everything below step headings is mandatory order. Reading order — this file is opinionated; the rationale/trade-offs/encryption inventory live in your **personal** notes copy: `notes/DEPLOYMENT_NOTES.md` (author-local, deliberately NOT tracked by git — see `.gitignore`).*
