@@ -36,6 +36,10 @@ yarn-error.*
 .env.staging
 .env.production
 
+# AWS broker credential file — generated on the server, never committed
+# (mosquitto_passwd -c /config/passwd, docs/DEPLOYMENT.md §3.6)
+mosquitto/passwd
+
 # Python virtualenvs (never track these — .venv/ was committed by accident once)
 .venv/
 .venv-dev/
