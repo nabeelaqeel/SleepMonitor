@@ -33,10 +33,10 @@ phase 3 operate (runbook §5) + ship changes (runbook §6)
 |---|---|---|
 | Starter budget ≈ $50, no top-ups | Everything bills against it | t3.micro ≈ $0.02/hr; a demo month costs single-digit dollars when you stop after sessions |
 | Region fixed at lab start (usually `us-east-1`) | No choice; one region for everything | — |
-| EC2 **stops at session end**; storage persists | Images, volumes, code survive; services don't auto-start unless configured | `restart: unless-stopped` on containers + `systemctl enable` on units **is the persistence mechanism** (runbook §2.8/2.11) |
+| EC2 **stops at session end**; storage persists | Images, volumes, code survive; services don't auto-start unless configured | `restart: unless-stopped` on containers + `systemctl enable` on units **is the persistence mechanism** (runbook §2.10/2.12) |
 | Public IPv4 changes on restart | Baked APK endpoints break | Elastic IP — see §5 |
 | IAM locked to `LabRole`, no load balancers | No ALB/NLB/custom roles | Unneeded: one EC2, everything behind the SG |
-| Supported: EC2, S3, RDS, … (subset) | Docker-on-EC2 is the simplest supported layout | Postgres + broker in containers; Python services in a host venv |
+| Supported: EC2, S3, RDS, … (subset) | Both needed services fit: RDS (db.t3.micro-class, single-AZ) for Postgres, Docker-on-EC2 for the broker. Core caveat: an RDS instance **cannot be stopped** — it bills continuously while alive, which is why the lifecycle is create-per-session/delete-per-session (see §5 and the runbook §5) |
 
 Cost sketch (runbook §5 repeats the checklist):
 
@@ -44,6 +44,7 @@ Cost sketch (runbook §5 repeats the checklist):
 |---|---|
 | t3.micro running 8h/day × 20 days | $3–4 |
 | EBS 30 GB gp3 (persistent) | $2–3/mo |
+| RDS db.t3.micro — created + deleted per session | ≈ $0.10–0.20/session; **"delete without final snapshot" is what keeps this true** — a retained snapshot is a separate bill |
 | **Elastic IP attached** (bills even while instance is stopped) | **≈ $3.6/mo — an additional drain on top of the EBS row, which also keeps billing while stopped** |
 
 ---
@@ -54,12 +55,12 @@ All of this **ships in the repo**; nothing here happens again per deployment.
 
 | File | Why |
 |---|---|
-| `docker-compose.aws.yml` | The laptop compose is Postgres-only by design — Mosquitto runs natively there, a second broker would port-clash. The server can't rely on a native broker (system state you'd reinstall every long break), so the broker is containerized alongside Postgres. |
-| `127.0.0.1:5432` binding | The Python services run in a **host venv**, so they connect from the host itself. Exposing Postgres publicly would add an unnecessary attack surface — it stays off the security group entirely. |
+| `docker-compose.aws.yml` | The laptop compose is Postgres-only by design — Mosquitto runs natively there, a second broker would port-clash. The server can't rely on a native broker (system state you'd reinstall every long break), so the broker stays containerized. **Postgres left the server compose**: the database is AWS RDS with storage encryption — see the RDS row below and §9. |
+| RDS (PostgreSQL, per-session) | Encrypted at rest, TLS connections (`sslmode=require`), private in the default VPC behind `sm-rds-sg` — inbound 5432 sourced from the EC2's security group only. **Same identifier on every recreation keeps the endpoint string constant**, so the app/env never re-points. Encrypted-at-rest is the *doctor-facing artifact* (§9 statement). The per-session cycle (create → demo → delete without final snapshot) keeps RDS off the idle bill list. |
 | `./mosquitto:/mosquitto/config` (read-write dir mount) | `mosquitto_passwd` writes `mosquitto/passwd` from inside the container; a read-only file mount would block that, and a container-only path wouldn't survive recreates. |
-| `mosquitto/mosquitto.conf` (locked) | The broker is reachable from the whole internet on 1883/9001. With anonymous access, anyone scanning the IP can **inject fake patient vitals**. `allow_anonymous false` + `password_file` closes it. The passwd file itself is generated on the server (runbook §2.7) and **never committed** (gitignored). |
+| `mosquitto/mosquitto.conf` (locked) | The broker is reachable from the whole internet on 1883/9001. With anonymous access, anyone scanning the IP can **inject fake patient vitals**. `allow_anonymous false` + `password_file` closes it. The passwd file itself is generated on the server (runbook §2.9) and **never committed** (gitignored). |
 | Passwd *before* first start | Mosquitto refuses to boot when its `password_file` is missing — that's why runbook step 2.7 exists before the compose `up`. |
-| `app/eas.json` (gitignored) + `app/eas.example.json` (tracked) | `preview` profile builds an **installable APK** (`buildType: apk`), not a Play-Store AAB, and carries the five `EXPO_PUBLIC_*` values the app bakes. **`eas.json` is gitignored** — the tracked `eas.example.json` template carries placeholders; real endpoints + broker password are filled locally at runbook §4.2, so the repo never holds them. EAS cloud builds read profile env from the working tree, not from git. **Production profile diverges deliberately**: it drops `EXPO_PUBLIC_ALLOW_PLAIN_HTTP` (HTTPS `API_URL` placeholder stays) and carries **no MQTT credentials at all** — any non-demo (store) build fails closed without TLS instead of shipping demo relaxations or broker secrets. |
+| `app/eas.json` (gitignored) + `app/eas.example.json` (tracked) | `preview` profile builds an **installable APK** (`buildType: apk`), not a Play-Store AAB, and carries the five `EXPO_PUBLIC_*` values the app bakes. **`eas.json` is gitignored** — the tracked `eas.example.json` template carries placeholders; real endpoints + broker password are filled locally at runbook §4.2, so the repo never holds them. EAS cloud builds read profile env from the working tree, not from git. **Production profile diverges deliberately**: it drops `EXPO_PUBLIC_ALLOW_PLAIN_HTTP` (HTTPS `API_URL` placeholder stays) and carries **no MQTT credentials at all** — any non-demo (store) build fails closed without TLS instead of shipping demo relaxations or broker secrets. The database is **AWS RDS** with **storage encryption at rest** and TLS connections (`sslmode=require`) — see §9 for the encryption inventory and the doctor-facing statement. |
 | `app/app.config.js` | Fail-guard: EAS cloud builds **throw** while `EXPO_PUBLIC_BROKER_IP`/`EXPO_PUBLIC_API_URL` are unset or still `SET_ME…` — an unfilled `eas.json` can no longer silently produce an APK with dead endpoints (the app would fall back to legacy hardcoded IPs). Local `npx expo start` is unaffected (no `EAS_BUILD` env set there). |
 | MQTT creds & endpoints inside `eas.json` (local + gitignored; template `eas.example.json` tracks placeholders) | The APK embeds these strings anyway (phone-side credential), so they live beside the endpoints in one local file, filled at runbook §4.2 and rotated via §6. Repo-visible upgrade path: move them to EAS environment variables (`npx eas-cli env:create`) once supporting that is worth it. |
 | `app.json` package fix (`com.aqeel.sleepmonitor`) | The Android package name is the app's identity — changing it after the first installed APK makes every future build a *different app* on the phone. Fixed before any build could run. |
@@ -77,9 +78,9 @@ Every Python service loads `.env.development` **by literal name**:
 - `ingest/worker.py` — same
 - `publisher/*` — same
 
-That filename is hardcoded, so the server's "production" values also live in a file *called* `.env.development` (runbook §2.5). It stays gitignored both places — the name is just the runtime's convention, not a claim about environment.
+That filename is hardcoded, so the server's "production" values also live in a file *called* `.env.development` (runbook §2.7). It stays gitignored both places — the name is just the runtime's convention, not a claim about environment.
 
-Two values the API actively guards: `JWT_SECRET` is **rejected at startup** if it's under 32 chars or still a `.env.example` placeholder (`change_me…`) — so a copied template can never become a live signing key. That's why runbook §2.5 generates one with `secrets.token_hex(32)`.
+Two values the API actively guards: `JWT_SECRET` is **rejected at startup** if it's under 32 chars or still a `.env.example` placeholder (`change_me…`) — so a copied template can never become a live signing key. That's why runbook §2.7 generates one with `secrets.token_hex(32)`.
 
 App values are separate by design — `app/.env.development` (Expo only reads env files in its own project root) holds the `EXPO_PUBLIC_*` copies used by the *local* `expo start` loop.
 
@@ -89,8 +90,8 @@ App values are separate by design — `app/.env.development` (Expo only reads en
 
 What happens at each lab end/start, mechanically:
 
-1. **Lab ends** → EC2 stops (EBS keeps: Docker images, `postgres_data`, `mosquitto_data`, the venv, your code, the systemd units).
-2. **Next lab starts** → you *Start* the instance; containers come back (`restart: unless-stopped`), systemd services come back (`enable --now` set in runbook §2.11). SSH in and confirm per runbook §5.
+1. **Lab ends** → EC2 stops (EBS keeps: Docker images, the venv, your code, the systemd units, mosquitto data). **RDS is deleted by you first** (runbook §5) — that's the lifecycle: endpoint stays constant on the next recreation (same identifier) and no snapshot carries a bill.
+2. **Next lab starts** → you create the RDS instance (runbook §2.5/§5, ~5–10 min) *and* start the EC2 — both finish around the same minute. Containers come back (`restart: unless-stopped`), systemd services come back (`enable --now` set in runbook §2.12); the fresh DB gets `01_schema.sql` the once (`psql -f`). SSH in and confirm per runbook §5.
 3. **The IP**: a public IPv4 is reassigned *randomly* per boot.
 
 Options for step 3:
@@ -106,8 +107,8 @@ Options for step 3:
 
 The broker credential lives in exactly four places:
 
-1. `mosquitto/passwd` — generated on the server (runbook §2.7); **read by the broker at startup only**
-2. server `.env.development` — `MQTT_USER`/`MQTT_PASSWORD` (§2.5, generated there, never committed)
+1. `mosquitto/passwd` — generated on the server (runbook §2.9); **read by the broker at startup only**
+2. server `.env.development` — `MQTT_USER`/`MQTT_PASSWORD` (§2.7, generated there, never committed)
 3. laptop `app/eas.json` — `EXPO_PUBLIC_MQTT_*` (gitignored; template `eas.example.json`; baked into the APK at build time)
 4. laptop copies — root `.env.development` + `app/.env.development` (local development only)
 
@@ -179,3 +180,25 @@ MQTT stays plain on 1883/9001 with broker credentials. TLS on 9001 (WSS, `useSSL
 Upgrade path once a cert exists: nginx/Let's Encrypt → `EXPO_PUBLIC_API_URL` becomes `https://…` (the guard accepts it as-is, the flag becomes unnecessary), broker listeners gain `certfile`/`keyfile`, app flips `useSSL: true`. Small code deltas then.
 
 Post-verification tightening (no TLS required): port 1883 exists mostly for the §3.2 laptop check — narrow that SG rule's source to your IP after verification is done; the phone only ever uses 9001.
+
+---
+
+## 9. Encryption inventory — the doctor-facing answer
+
+Data in this system is synthetic (generated CSV readings) — **no real patient records exist in the deployment**. That remains true by policy: real PHI must never be loaded into the demo DB. Everything below is about protecting the data path anyway.
+
+| Layer | Encryption status |
+|---|---|
+| **At rest — database** | ✅ **AWS RDS storage encryption, enabled at instance creation** (§2.5); keys are AWS-managed KMS. Volumes/backups inside RDS inherit it. |
+| **In transit — app/EC2 ↔ database** | ✅ `DATABASE_URL` carries `?sslmode=require` (§2.7) — every DB connection is TLS. |
+| **At rest — app passwords** | ✅ bcrypt (cost 12) hashes only — no plaintext password is ever stored or shipped. |
+| **In transit — phone ↔ broker** | ⚠ planned: plain WebSocket (`ws://`) today; WSS/TLS is the documented upgrade path (README Known Limitations + §8). Demo mitigations while it is not yet in place: source-restricted security groups, broker credentials, synthetic data. |
+| **In transit — app/admin login** | ⚠ demo escape documented (§8): `EXPO_PUBLIC_ALLOW_PLAIN_HTTP=true` on the preview profile only; production profile fails closed and requires an HTTPS endpoint. |
+| **Backups** | Host-side only when needed (`pg_dump` before destructive schema ops, §6.2b); deleted with the session or gated by the operator — no plaintext dumps are left on disk by default. |
+| **App password storage on device** | JWT in the nativeKeychain/Keystore via `expo-secure-store`; AsyncStorage only as web fallback. |
+
+**Doctor-facing statement (verbatim, defensible):**
+
+> *Stored health data is encrypted at rest — the deployment database is AWS RDS with storage encryption, and the application connects to it over TLS (`sslmode=require`). User passwords are stored only as bcrypt hashes. All medical data in this deployment is synthetic; production rollout additionally includes WSS (TLS) for phone→server streaming, listed on the documented production checklist. Database access is private-network only: the DB endpoint has no public access and admits only the application's security group.*
+
+**To keep those claims true:** never load real patient data into the demo DB, keep the RDS per-session lifecycle (delete without final snapshot, §5), and don't repoint `DATABASE_URL` without the `?sslmode=require` suffix (§7 has the troubleshooting row if you do).

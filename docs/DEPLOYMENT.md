@@ -22,7 +22,7 @@ git remote -v                               # URL shown? → commit + push (next
 git add -A && git commit -m "Phase 0: AWS deploy prep" && git push
 ```
 
-No remote? Use Option B in step 2.2. Phase 0 files (`docker-compose.aws.yml`, `mosquitto/mosquitto.conf`, `app/eas.example.json`) already exist in the repo — nothing else to prepare. (Fresh checkout? `cd app && cp eas.example.json eas.json` — your local `eas.json` is gitignored.)
+No remote? Use Option B in step 2.2. Phase 0 files (`docker-compose.aws.yml`, `mosquitto/mosquitto.conf`, `app/eas.example.json`) already exist in the repo — nothing else to prepare.
 
 ---
 
@@ -41,25 +41,27 @@ Step 1.1 — 🖱 console: **Start Lab** → AWS Console (region is fixed for yo
 
 | Port | Source | Purpose |
 |---|---|---|
-| 22 | `0.0.0.0/0` | ssh |
+| 22 | your IP, or `0.0.0.0/0` while demoing | ssh |
 | 1883 | your IP (operator MQTT checks) | MQTT TCP — the phone only ever uses 9001; tighten this rule's source after §3.2 (NOTES §8) |
 | 9001 | `0.0.0.0/0` | MQTT WebSocket — the app's only broker path |
 | 8000 | `0.0.0.0/0` | Auth API — login |
 
-Do **not** add 5432. Launch, then copy **Public IPv4** from the instance page → `<EC2_IP>` for every step below.
+**5432 must NOT appear in `sm-sg`.** The database is AWS RDS and gets its own security group in §2.3 (source = this instance's `sg` only).
+
+Launch, then copy **Public IPv4** from the instance page → `<EC2_IP>` for every step below.
 
 ---
 
 ## 2. SERVER SETUP
 
 ```bash
-# Step 2.1 — first ssh + Docker + Compose
+# Step 2.1 — first ssh + Docker + Compose + psql client
 WHERE: 💻 laptop
 ssh -i sm-key.pem ubuntu@<EC2_IP>
 
 # Step 2.2 — now inside: 🖥 EC2
 sudo apt update
-sudo apt install -y docker.io docker-compose-v2
+sudo apt install -y docker.io docker-compose-v2 postgresql-client
 sudo usermod -aG docker ubuntu
 exit
 ```
@@ -95,27 +97,58 @@ scp -i sm-key.pem sm.tar.gz ubuntu@<EC2_IP>:/tmp/
 tar -xzf /tmp/sm.tar.gz -C /opt/SleepMonitor/
 ```
 
+Step 2.5 — 🖱 console: create the **RDS database** (encrypted at rest — this is the doctor-facing artifact)
+
+| Setting | Value |
+|---|---|
+| Engine | PostgreSQL (16.x) |
+| Templates | Free tier if offered, else db class manually |
+| DB instance identifier | `sleep-monitor-pg` (same identifier on every future recreation → same endpoint) |
+| Instance config | db.t3.micro, 20 GB, autoscaling OFF |
+| Master username | `sleep_user` |
+| Master password | generate first: 💻 `openssl rand -hex 12` → paste it into the console AND keep it for §2.6–§2.7 |
+| Connectivity | default VPC (the lab one), **Public access: No**, create **new VPC security group `sm-rds-sg`**, port 5432 |
+| Database authentication | Password authentication |
+| Additional config | **Initial database name: `sleep_monitor`** — Backup retention: **0 days** — Encryption at rest: keep **enabled** (already the default) |
+
+Still 🖱 console — after creation finishes (~5–10 min), wire the security group: **EC2 → Security Groups → `sm-rds-sg` → Inbound rules → Add rule**: PostgreSQL `5432`, source = **type Security group** → `sm-sg`. Only your EC2 may ever reach the DB.
+
 ```bash
-# Step 2.5 — write .env.development (gitignored, two filler slots)
+# Step 2.6 — collect the RDS values once, apply the schema
 WHERE: 🖥 EC2
-sudo apt install -y openssl python3           # already present on Ubuntu 24.04, harmless
 cd /opt/SleepMonitor
-cat > .env.development <<'EOF'
+read -rp  'RDS endpoint (from §2.5 console): ' RDS_ENDPOINT
+read -rsp 'RDS master password (§2.5): ' RDS_PW && echo
+export PGPASSWORD="$RDS_PW"
+
+PGPASSWORD="$RDS_PW" psql -h "$RDS_ENDPOINT" -U sleep_user -d sleep_monitor \
+  -f postgres/init/01_schema.sql        # expect: CREATE TABLE / CREATE INDEX lines
+PGPASSWORD="$RDS_PW" psql -h "$RDS_ENDPOINT" -U sleep_user -d sleep_monitor -c "SELECT 1;"
+# expect: 1 row, "1"
+```
+
+> **Why psql, not compose:** `postgres/init/01_schema.sql` only auto-applies on a *fresh local Docker volume* — there is no such volume for RDS, so every fresh RDS gets the schema applied exactly once with `-f`.
+
+```bash
+# Step 2.7 — write .env.development (the runtime env file — the naming is
+# hardcoded in the Python services, see DEPLOYMENT_NOTES §4)
+WHERE: 🖥 EC2 (same ssh session as §2.6 — it reuses $RDS_ENDPOINT / $RDS_PW)
+cd /opt/SleepMonitor
+cat > .env.development <<EOF
 COMPOSE_PROJECT_NAME=sleep-monitor
 
-POSTGRES_DB=sleep_monitor
-POSTGRES_USER=sleep_user
-POSTGRES_PASSWORD=<FILL_PG_PASSWORD>
-DATABASE_URL=postgresql://sleep_user:<FILL_PG_PASSWORD>@localhost:5432/sleep_monitor
+# RDS endpoint + master credentials (TLS required)
+DATABASE_URL=postgresql://sleep_user:$RDS_PW@$RDS_ENDPOINT:5432/sleep_monitor?sslmode=require
 
 JWT_SECRET=<FILL_JWT_SECRET>
+SEED_DEMO_USERS=true
 # demo accounts are seeded (patient@sleep.com / 1234) — they are what the
 # evaluation logs in with; flip to false and provision your own users
 # (api.security.hash_password) for anything beyond the demo.
-SEED_DEMO_USERS=true
 
 MQTT_HOST=localhost
 MQTT_PORT=1883
+# Broker credentials — parity with the AWS deployment:
 MQTT_USER=sm
 MQTT_PASSWORD=<FILL_MQTT_PASSWORD>
 
@@ -133,17 +166,19 @@ PUBLISH_INTERVAL=1.0
 LOOP_CSV=true
 EOF
 
-# replace the placeholders with real values, same file — all three secrets are
-# generated at deploy time and never carried by the repo:
-sed -i -e "s/<FILL_PG_PASSWORD>/$(openssl rand -hex 12)/g" \
-       -e "s/<FILL_JWT_SECRET>/$(python3 -c 'import secrets; print(secrets.token_hex(32))')/g" \
-       -e "s/<FILL_MQTT_PASSWORD>/$(openssl rand -hex 12)/g" .env.development
+# replace the remaining two placeholder secrets — generated here, never committed;
+# the RDS values were written directly by the heredoc above:
+sed -i -e "s/<FILL_JWT_SECRET>/$(python3 -c 'import secrets; print(secrets.token_hex(32))')" \
+       -e "s/<FILL_MQTT_PASSWORD>/$(openssl rand -hex 12)/" .env.development
 
-grep -c "FILL_" .env.development          # expect: 0
+grep -c '<FILL' .env.development    # expect: 0
+grep -m1 DATABASE_URL .env.development | sed 's/:.*@/@/';   # expect: postgresql://sleep_user:...@<endpoint>:5432/... (did the vars expand? if <FILL_RDS> remains, rerun §2.6's reads)
 ```
 
+> **DATABASE_URL cheat sheet:** the endpoint and master password come straight from §2.5 via the variables; `?sslmode=require` is what makes every DB connection TLS-encrypted — do not drop it. No `POSTGRES_*` keys anymore: the broker-only compose (§2.10) has nothing to interpolate.
+
 ```bash
-# Step 2.6 — swap (1 GiB RAM headroom)
+# Step 2.8 — swap (1 GiB RAM headroom)
 WHERE: 🖥 EC2
 sudo fallocate -l 2G /swapfile && sudo chmod 600 /swapfile
 sudo mkswap /swapfile && sudo swapon /swapfile
@@ -152,11 +187,8 @@ free -h    # expect: Swap row shows 2.0Gi
 ```
 
 ```bash
-# Step 2.7 — broker passwd (BEFORE first broker start — it refuses without it)
+# Step 2.9 — broker passwd (BEFORE first broker start — it refuses without it)
 WHERE: 🖥 EC2, still in /opt/SleepMonitor
-cd /opt/SleepMonitor
-# the broker password is the one §2.5 generated into .env.development —
-# read it from there so the command and the file can never disagree:
 MQPW="$(grep '^MQTT_PASSWORD=' .env.development | cut -d= -f2-)"
 docker run --rm -v "$PWD/mosquitto:/mosquitto/config" eclipse-mosquitto:2 \
   mosquitto_passwd -c -b /mosquitto/config/passwd sm "$MQPW"
@@ -169,19 +201,18 @@ ls -l mosquitto/passwd                    # expect: exists, owner = 1883, mode 6
 ```
 
 ```bash
-# Step 2.8 — start Postgres + broker
+# Step 2.10 — start the broker (database is RDS, not a container)
 WHERE: 🖥 EC2
 cd /opt/SleepMonitor
-docker compose -f docker-compose.aws.yml --env-file .env.development up -d
-sleep 20
+docker compose -f docker-compose.aws.yml up -d
 docker ps --format 'table {{.Names}}\t{{.Status}}'
 # expect:
-#   sleep-broker        Up ...          (any Up)
-#   sleep-postgres      Up ... (healthy)
+#   sleep-broker      Up ...      (broker ONLY now — no sleep-postgres)
+docker logs sleep-broker   # expect: "Opening ipv4 listen socket on port 9001."
 ```
 
 ```bash
-# Step 2.9 — venv + the four Python services
+# Step 2.11 — host venv + the four Python services
 WHERE: 🖥 EC2
 cd /opt/SleepMonitor
 python3 -m venv .venv
@@ -190,7 +221,7 @@ python3 -m venv .venv
 ```
 
 ```bash
-# Step 2.10 — systemd units (all four, once, paste as-is)
+# Step 2.12 — systemd units (all four, once, paste as-is)
 WHERE: 🖥 EC2
 sudo tee /etc/systemd/system/sm-api.service > /dev/null <<'EOF'
 [Unit]
@@ -257,11 +288,6 @@ WantedBy=multi-user.target
 EOF
 
 sudo systemctl daemon-reload
-```
-
-```bash
-# Step 2.11 — enable + start everything
-WHERE: 🖥 EC2
 sudo systemctl enable --now sm-api sm-ingest sm-pub sm-echo
 systemctl is-active sm-api sm-ingest sm-pub sm-echo
 # expect:
@@ -279,7 +305,7 @@ journalctl -u sm-api -n 30 --no-pager      # (or -u sm-ingest / sm-pub / sm-echo
 ## 3. VERIFY FROM THE LAPTOP
 
 ```bash
-# Step 3.1 — auth API round-trip
+# Step 3.1 — auth API round-trip (real bcrypt checks against RDS now)
 WHERE: 💻 laptop
 curl -sS -X POST http://<EC2_IP>:8000/auth/login \
   -H 'Content-Type: application/json' \
@@ -290,13 +316,21 @@ curl -sS -X POST http://<EC2_IP>:8000/auth/login \
 ```bash
 # Step 3.2 — live MQTT tap (broker is LOCKED: -u/-P required)
 WHERE: 💻 laptop (needs mosquitto-clients installed — README prerequisite)
-# <BROKER_PASSWORD> = the §2.5 value: grep '^MQTT_PASSWORD=' .env.development (on the server)
+# <BROKER_PASSWORD> = the §2.9 value — grep '^MQTT_PASSWORD=' .env.development (on the server)
 mosquitto_sub -h <EC2_IP> -p 1883 -t 'sleep/#' -u sm -P '<BROKER_PASSWORD>' -v
 # expect: one JSON reading per PUBLISH_INTERVAL (default 1s), e.g.:
 #   sleep/normal {"patientId":"patient-001","tier":"Normal",...}
 ```
 
-Both green → backend live. Continue to the app section.
+```bash
+# Step 3.3 — the DB is receiving (RDS side)
+WHERE: 🖥 EC2
+PGPASSWORD='<master password from §2.5>' psql -h "<RDS_ENDPOINT>" -U sleep_user -d sleep_monitor \
+  -c "SELECT count(*) FROM readings;"
+# expect: a count that grows every second while the publisher streams
+```
+
+All three green → backend live. Continue to the app section.
 
 ---
 
@@ -314,19 +348,15 @@ npx expo start
 # scan the QR with Expo Go on your phone
 ```
 
-Expected: login as `patient@sleep.com` / `1234` → Home shows live vitals, badge on Alert screen fires, Network screen shows broker CONNECTED. (Your old laptop IPs are `192.168.0.29` if you want to revert later.)
+Expected: login as `patient@sleep.com` / `1234` → Home shows live vitals, badge on Alert screen fires, Network screen shows broker CONNECTED.
 
 ```bash
 # Step 4.2 — bake IP + broker password into the release config
 WHERE: 💻 laptop, app/
 # eas.json is GITIGNORED (template: eas.example.json) — values stay
-# machine-local and never reach the repo. <BROKER_PASSWORD> is the §2.5 value
+# machine-local and never reach the repo. <BROKER_PASSWORD> is the §2.9 value
 # again (grep it on the server).
 cd app
-# scope: builds run on the PREVIEW profile (§4.3) — its two placeholders are
-# filled here. Production deliberately keeps SET_ME_HTTPS_ENDPOINT (fail-closed:
-# no build, no login until a real https endpoint + TLS exist — NOTES §8), so the
-# check below expects exactly ONE remaining SET_ME line.
 sed -i -e 's/SET_ME_EC2_PUBLIC_IP/<EC2_IP>/g' \
        -e 's/SET_ME_MQTT_PASSWORD/<BROKER_PASSWORD>/g' eas.json
 # mirror the same values into app/.env.local — SDK 54 `eas update` (§6.3)
@@ -338,7 +368,7 @@ EXPO_PUBLIC_MQTT_USER=sm
 EXPO_PUBLIC_MQTT_PASSWORD=<BROKER_PASSWORD>
 EXPO_PUBLIC_ALLOW_PLAIN_HTTP=true
 EOF
-grep SET_ME eas.json                        # expect ONLY: "SET_ME_HTTPS_ENDPOINT" (production, see above)
+grep SET_ME eas.json                        # expect ONLY: "SET_ME_HTTPS_ENDPOINT" (production, see §3 row of NOTES)
 grep -c "^EXPO_PUBLIC" .env.local           # expect: 5
 ```
 
@@ -351,33 +381,54 @@ npx eas-cli build -p android --profile preview --non-interactive
 #  app/app.config.js fails the config evaluation; fix §4.2 and re-run)
 ```
 
-Step 4.4 — install: open the build URL → download `SleepMonitor.apk` → move to phone → allow install from unknown sources → install → log in with the test credentials. **From now on, this APK performs with zero maintenance as long as `<EC2_IP>` settles (Elastic IP).**
+Step 4.4 — install: open the build URL → download `SleepMonitor.apk` → move to phone → allow install from unknown sources → install → log in with the test credentials.
 
 ---
 
-## 5. EVERY LAB SESSION
+## 5. OPERATIONS RUNBOOK (every session)
 
-```bash
-# 🖱 console: Start Lab → EC2 → Start instance → COPY THE NEW PUBLIC IPv4
-# If it differs from what the APK has — you're on a lab without an Elastic IP:
-# see DEPLOYMENT_NOTES §5 for the two options (EIP is the fix).
+```
+🖱 console (both in parallel, ~5–10 min):
+   A. RDS: Create database — same settings as §2.5, same identifier
+      (sleep-monitor-pg) and SAME master password → same endpoint string;
+      "Encryption at rest" stays enabled. When up: re-attach the sm-rds-sg
+      rule (5432 from sm-sg) if the console created a fresh SG.
+   B. EC2: Start your instance → copy Public IPv4 (no EIP? it CHANGED)
+      Both services flip healthy around the same minute.
 ```
 
 ```bash
 # 🖥 EC2 — check everything came back:
-docker ps --format 'table {{.Names}}\t{{.Status}}'     # broker + postgres (healthy)
-systemctl is-active sm-api sm-ingest sm-pub sm-echo    # 4× active
+docker ps --format 'table {{.Names}}\t{{.Status}}'     # sleep-broker up
+systemctl is-active sm-api sm-ingest sm-pub sm-echo    # 4× active (env unchanged since last session)
+# fresh RDS? the schema is applied in §2.6's -f step only on FIRST creation;
+# a re-created instance is empty until you re-apply:
+PGPASSWORD='<master password>' psql -h "<RDS_ENDPOINT>" -U sleep_user -d sleep_monitor \
+  -f postgres/init/01_schema.sql                        # re-run per fresh instance (idempotent enough for demo wipes)
 ```
 
 ```bash
 # 💻 laptop — confirm the demo is live before an evaluation:
 curl -sS -X POST http://<IP>:8000/auth/login -H 'Content-Type: application/json' \
   -d '{"email":"patient@sleep.com","password":"1234"}'
-# -P <BROKER_PASSWORD>: the §2.5 value again (grep it on the server)
+# -P <BROKER_PASSWORD>: the §2.9 value again (grep it on the server)
 mosquitto_sub -h <IP> -p 1883 -t 'sleep/#' -u sm -P '<BROKER_PASSWORD>' -v
+PGPASSWORD='<master password>' psql -h "<RDS_ENDPOINT>" -U sleep_user -d sleep_monitor \
+  -c "SELECT count(*) FROM readings;"
 ```
 
-Happy: green everywhere vs APK matching the IP → hand over the phone.
+**Session end (⚠ order matters — delete RDS FIRST, then End Lab):**
+
+🖱 RDS → `sleep-monitor-pg` → Actions → **Delete** → **UNCHECK "Create final snapshot"** → confirm. A retained snapshot keeps billing; skipping it means the next session recreates from `01_schema.sql` instead (~$0.10–0.20 saved/steady-state).
+
+| Activity | Cost |
+|---|---|
+| t3.micro running ~8h/day, 20 days | ≈ $3–4 term |
+| EBS 30 GB gp3 persistent | ≈ $2–3/mo |
+| **RDS per-session (created + deleted each session)** | **≈ $0.10–0.20 per session — the delete is what keeps this true** |
+| Elastic IP attached (even when stopped) | ≈ $3.6/mo — an additional drain on top of EBS, which also keeps billing while stopped |
+
+Leaving for a long break? Release the Elastic IP (accepting an OTA re-pin via §6.3) and let RDS/EC2 stay deleted.
 
 ---
 
@@ -389,7 +440,7 @@ First, classify the change:
 |---|---|
 | Backend Python (`api/`, `ingest/`, `publisher/`) | 6.1 |
 | Broker config (`mosquitto/mosquitto.conf`) | 6.2a — non-destructive restart only |
-| Database schema (`postgres/init/01_schema.sql`) | 6.2b — wipe + re-up (**data loss**; backup first) |
+| Database schema (`postgres/init/01_schema.sql`) | 6.2b — re-apply on RDS |
 | App JS code (screens, logic) | 6.3 — cheap OTA |
 | `app.json`, plugins, icons, native deps | 6.4 — only path |
 | `EXPO_PUBLIC_*` values in `app/eas.json` (via `eas build`) | 6.4 rebuild — `eas update` does NOT read the `eas.json` env block (NOTES §7) |
@@ -410,20 +461,20 @@ systemctl is-active sm-api                # expect: active
 # 6.2a — broker config change (non-destructive restart)
 WHERE: 🖥 EC2
 cd /opt/SleepMonitor
-# --env-file required: the compose file interpolates POSTGRES_PASSWORD with a
-# mandatory `:?` — any compose subcommand without it errors out.
-docker compose -f docker-compose.aws.yml --env-file .env.development restart broker
+docker compose -f docker-compose.aws.yml restart broker
 docker logs sleep-broker --tail 20    # expect: "Opening ... port 9001" again
 
-# 6.2b — schema change (DESTRUCTIVE: wipe + re-up; guarded backup first)
+# 6.2b — schema change (guarded backup → wipe schema on RDS → re-apply)
 WHERE: 🖥 EC2
 cd /opt/SleepMonitor
 SQL="backup-$(date +%F-%H%M).sql"
-docker exec sleep-postgres pg_dump -U sleep_user sleep_monitor > "$SQL" || { echo "pg_dump FAILED — aborting"; exit 1; }
+PGPASSWORD='<master password>' \
+  pg_dump -h "<RDS_ENDPOINT>" -U sleep_user -d sleep_monitor > "$SQL" || { echo "pg_dump FAILED — aborting"; exit 1; }
 [ -s "$SQL" ] || { echo "backup EMPTY — aborting"; exit 1; }
-echo "$SQL ready — review it, then rerun the down to confirm the destructive step"
-docker compose -f docker-compose.aws.yml --env-file .env.development down -v     # ⚠ delete stored data
-docker compose -f docker-compose.aws.yml --env-file .env.development up -d
+export PGPASSWORD='<master password>'
+psql -h "<RDS_ENDPOINT>" -U sleep_user -d sleep_monitor \
+  -c "DROP SCHEMA public CASCADE; CREATE SCHEMA public;"
+psql -h "<RDS_ENDPOINT>" -U sleep_user -d sleep_monitor -f postgres/init/01_schema.sql
 ```
 
 ```bash
@@ -440,7 +491,7 @@ npx eas-cli update --branch preview --message "what and why in plain words"
 ```
 
 ```bash
-# 6.4 — app config/native change, or EXPO_PUBLIC_* values — full rebuild:
+# 6.4 — app config/native change — full rebuild:
 WHERE: 💻 laptop, app/
 cd app
 npx eas-cli build -p android --profile preview --non-interactive
@@ -453,15 +504,16 @@ npx eas-cli build -p android --profile preview --non-interactive
 
 | Symptom | Run | Likely fix |
 |---|---|---|
-| API "RuntimeError: JWT_SECRET …" on start | `journalctl -u sm-api -n 20` | regenerate: it rejects `.env.example` placeholder values (`change_me…`) by design |
-| broker refuses to start / no "Opening port 9001" in logs | `docker logs sleep-broker --tail 20` | passwd file missing — repeat §2.7 |
-| mosquitto_sub says "not authorised" | re-run §3.2 | `-u sm -P '<BROKER_PASSWORD>'` (the §2.5-generated value) is mandatory — the broker is locked |
-| `sleep-postgres` restart-loop / unhealthy | `docker logs sleep-postgres --tail 20` | password mismatch: §2.5 vs the old volume → match values, or wipe (§6.2b) |
-| App "Broker: disconnected" after lab restart | §5 commands | IP changed without an EIP — §6.4 rebuild with new IP, or set up the EIP (NOTES §5) |
-| Publisher logs "connection refused" | `docker ps` | broker container not up — §2.8 again |
-| `eas build` fails immediately | `npx eas-cli whoami` | not logged in, or `eas.json` missing in `app/` (copy `eas.example.json` → `eas.json`, §0) |
-| login throws "Refusing to send credentials over plain HTTP" | read the host in the error | `assertSecureEndpoint` blocks public plain-HTTP unless `EXPO_PUBLIC_ALLOW_PLAIN_HTTP=true` is baked — `app/.env.development` for the rehearsal, `app/eas.json` for APKs (then OTA/rebuild §6.3/6.4); rationale in NOTES §8 |
-| Budget exhausted / lab locked | 🖱 console cost page | the Elastic IP is an additional drain (besides persistent EBS) — see NOTES §2 |
+| API "RuntimeError: JWT_SECRET …" at start | `journalctl -u sm-api -n 20` | regenerate: it rejects `.env.example` placeholder values (`change_me…`) by design |
+| broker refuses to start / no "Opening port 9001" | `docker logs sleep-broker --tail 20` | passwd file missing — repeat §2.9 |
+| mosquitto_sub says "not authorised" | re-run §3.2 | `-u sm -P '<BROKER_PASSWORD>'` (the §2.9-generated value) is mandatory — the broker is locked |
+| psql: "could not connect … timeout" to RDS | §2.5 SG step | `sm-rds-sg` inbound rule must source `sm-sg` (not 0.0.0.0/0) — instance and DB must share the VPC |
+| psql / API: "password authentication failed" | grep the env file | master password mismatch between §2.5 console value and §2.7 `DATABASE_URL` |
+| DB tables missing after a fresh RDS | §5 re-apply step | `01_schema.sql` is per-fresh-instance: run the `-f` apply |
+| App "Broker: disconnected" after lab restart | §5 commands | IP changed without an EIP — §6.4 rebuild with the new IP, or re-pin via §6.3/§6.4 (NOTES §5) |
+| Login throws "Refusing to send credentials over plain HTTP" | read the thrown host | `assertSecureEndpoint` blocks public plain-HTTP unless `EXPO_PUBLIC_ALLOW_PLAIN_HTTP=true` is baked — `app/.env.development` for the rehearsal, `eas.json` → rebuild/OTA for APKs (NOTES §8) |
+| `eas build` fails immediately | `npx eas-cli whoami` | not logged in, or `eas.example.json` not copied to `eas.json` (§0) |
+| Budget exhausted / lab locked | 🖱 console cost page | standing drains ranked: Elastic IP (~$3.6/mo idle) > EBS (~$2.4/mo) > everything else; RDS per-session is deleted before ending (NOTES §2) |
 
 ---
 

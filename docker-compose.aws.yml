@@ -1,52 +1,26 @@
 # =============================================================
-# Sleep Monitor — AWS Learner Lab stack (Postgres + Mosquitto)
+# Sleep Monitor — AWS Learner Lab stack (Mosquitto broker only)
 #
-# The Python services (api, ingest, publisher, echo) run in a host
-# venv, so Postgres is exposed on 127.0.0.1:5432 only and the broker
-# on :1883. The phone reaches the broker over WebSocket :9001 via the
-# security group — open 1883 + 9001, never 5432.
+# The database is AWS RDS (per-session lifecycle, docs/DEPLOYMENT.md §2.3):
+# master user sleep_user, database sleep_monitor, TLS via DATABASE_URL
+# ?sslmode=require in the server's .env.development. Host-only Postgres in
+# Docker would still be the laptop-dev path (docker-compose.yml).
+# The broker is the only container here: phone via WebSocket :9001,
+# publisher-side via TCP :1883. 5432 never appears in the EC2 SG — it lives
+# in the RDS security group, sourced from the EC2's sg (§2.3).
 #
-# The broker starts LOCKED (allow_anonymous false): the passwd file
-# must exist BEFORE the first start (see docs/DEPLOYMENT.md §3.6):
-#   docker run --rm -v "$PWD/mosquitto:/config" eclipse-mosquitto:2 \
-#     mosquitto_passwd -c -b /config/passwd sm '<password>'
-# The password lives in app/eas.json (EXPO_PUBLIC_MQTT_*) and this
-# repo's .env.development (MQTT_*).
+# The broker starts LOCKED (allow_anonymous false): the passwd file must
+# exist BEFORE the first start (see docs/DEPLOYMENT.md §2.6):
+#   MQPW="$(grep '^MQTT_PASSWORD=' .env.development | cut -d= -f2-)"
+#   docker run --rm -v "$PWD/mosquitto:/mosquitto/config" eclipse-mosquitto:2 \
+#     mosquitto_passwd -c -b /mosquitto/config/passwd sm "$MQPW"
+#   sudo chown 1883:1883 mosquitto/passwd && sudo chmod 600 mosquitto/passwd
 #
 # Usage (from the repo root, after repo + .env.development exist):
-#   docker compose -f docker-compose.aws.yml --env-file .env.development up -d
+#   docker compose -f docker-compose.aws.yml up -d
 # =============================================================
 
 services:
-  postgres:
-    image: postgres:16-alpine
-    container_name: sleep-postgres
-    restart: unless-stopped
-    ports:
-      # Host venv services connect over localhost — never open in SG
-      - "127.0.0.1:5432:5432"
-    volumes:
-      - postgres_data:/var/lib/postgresql/data
-      # SQL files here run alphabetically on first container start only.
-      - ./postgres/init:/docker-entrypoint-initdb.d:ro
-    environment:
-      POSTGRES_DB:       ${POSTGRES_DB:-sleep_monitor}
-      POSTGRES_USER:     ${POSTGRES_USER:-sleep_user}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env.development}
-    healthcheck:
-      test:
-        - "CMD-SHELL"
-        - "pg_isready -U ${POSTGRES_USER:-sleep_user} -d ${POSTGRES_DB:-sleep_monitor}"
-      interval: 10s
-      timeout: 5s
-      start_period: 20s
-      retries: 5
-    logging:
-      driver: "json-file"
-      options:
-        max-size: "10m"
-        max-file: "3"
-
   broker:
     image: eclipse-mosquitto:2
     container_name: sleep-broker
@@ -66,7 +40,5 @@ services:
         max-file: "3"
 
 volumes:
-  postgres_data:
-    driver: local
   mosquitto_data:
     driver: local
