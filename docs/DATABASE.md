@@ -373,9 +373,11 @@ of urgent data under an unreliable consumer.
 * **Tail loss when `totalReadings` is absent.** The `max(seq)+1` fallback cannot
   detect a dropped trailing QoS 0 run. The publisher always sends `totalReadings`,
   so this only applies to a Last-Will close with no clean `session/end`.
-* **HRV is still a constant.** `publisher.py` uses `row.get("hrv", 35)` and
-  `data/sleep_data_realistic.csv` has no `hrv` column (`minute,bo,hr,rr,motion,event`).
-  Deferred by design.
+* **HRV.** Resolved 2026-11-05: `publisher/publisher.py` reads per-reading HRV
+  from the committed dataset's `hrv` column (header `minute,spo2,hr,hrv,motion,event`).
+  The `row.get("hrv", 35)` fallback applies only to a CSV without an `hrv`
+  column — `publisher.load_csv` logs a loud warning when that happens
+  (`docs/PROJECT_OVERVIEW.md`, Issue 3). True RMSSD values arrive with the watch.
 * **`.env.development` is reused** as the compose env-file and the worker's
   dotenv source; a production setup should separate these.
 * **No automated tests.** Verified manually via the two scenarios above.

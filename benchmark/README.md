@@ -214,7 +214,7 @@ completed study records the pre-regeneration hash in its matrix —
 |---|---|---|---|
 | Main (75/75 gates) | `benchmark/results_v2/` | 5 per cell | `10e9df7f…` |
 | Sensitivity (12/12) | `benchmark/results_v2_sensitivity/` | 2 per cell | `10e9df7f…` |
-| Calibration stock + AF_UNIX | `benchmark/calibration_v2/bc_netem/{stock,af_unix}/` | 5 per cell | `10e9df7f…` |
+| Calibration stock + AF_UNIX | `benchmark/calibration_v2/bc_netem/{stock,af_unix}/` | 3 runs A/B/C at r01 in each directory | `10e9df7f…` |
 
 On that revision the `hrv` column was missing (the third vital was mislabeled
 `rr`), so the driver's `row.get("hrv", 35)` published the **constant HRV
@@ -559,11 +559,11 @@ excluded); the pooled median is a note only. `gate/gate.md` prints each stock
 and patched median as `value (n=messages)` with the exact limit.
 
 ```bash
-# v2 main study: 75 runs (~100-120 min), resumable, AF_UNIX by default
+# v3 main study: 75 runs (~100-120 min), resumable, AF_UNIX by default
 .venv-dev/bin/python benchmark/run_benchmark.py \
     --idle-max-pps <threshold pps>
 
-# v2 pacing study: 12 runs at 1 msg/s into results_v2_sensitivity/
+# v3 pacing study: 12 runs at 1 msg/s into results_v3_sensitivity/
 .venv-dev/bin/python benchmark/run_benchmark.py --sensitivity \
     --idle-max-pps <threshold pps>
 

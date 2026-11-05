@@ -65,6 +65,7 @@ _stats = {"critical": 0, "important": 0, "normal": 0, "background": 0, "total": 
 # ── MQTT callbacks ────────────────────────────────────────────
 
 def on_connect(client, userdata, connect_flags, reason_code, properties=None):
+    """Log a successful MQTT v5 broker connection or exit when the broker refuses it."""
     if reason_code.is_failure:
         log.error("Connection refused — reason code %s", reason_code)
         sys.exit(1)
@@ -72,6 +73,7 @@ def on_connect(client, userdata, connect_flags, reason_code, properties=None):
 
 
 def on_disconnect(client, userdata, disconnect_flags, reason_code, properties=None):
+    """Log an unexpected broker disconnection; the client loop retries."""
     if reason_code.is_failure:
         log.warning("Unexpected disconnection (reason=%s) — will retry", reason_code)
 
@@ -79,6 +81,7 @@ def on_disconnect(client, userdata, disconnect_flags, reason_code, properties=No
 # ── MQTT client setup ─────────────────────────────────────────
 
 def build_client() -> mqtt.Client:
+    """Build the MQTT v5 client, set optional credentials and install the session/end Last Will."""
     client = mqtt.Client(
         mqtt.CallbackAPIVersion.VERSION2,
         client_id=f"sleep-publisher-{PATIENT_ID}",
@@ -154,14 +157,17 @@ def load_csv(path: str | Path) -> pd.DataFrame:
 # ── Publishing ────────────────────────────────────────────────
 
 def now_iso() -> str:
+    """Return the wall-clock time formatted 'HH:MM AM/PM' for payload timestamps."""
     return datetime.now(timezone.utc).strftime("%I:%M %p")
 
 
 def now_ms() -> int:
+    """Return the current time as Unix milliseconds for the payload's publishedAt field."""
     return int(time.time() * 1000)
 
 
 def publish_session_event(client: mqtt.Client, event: str, reason: str | None = None) -> None:
+    """Publish session/start or session/end (with totalReadings) for the ingest worker's session lifecycle."""
     topic   = f"session/{event}"
     payload = {
         "sessionId": SESSION_ID,
@@ -185,6 +191,7 @@ def publish_session_event(client: mqtt.Client, event: str, reason: str | None = 
 
 
 def publish_reading(client: mqtt.Client, row: pd.Series, row_idx: int) -> None:
+    """Classify one dataset row and publish it to sleep/<tier> at the tier's QoS."""
     global _seq
 
     # sleep_data.csv uses 'bo' for processed SpO2 and 'hr' for heart rate
@@ -225,6 +232,7 @@ def publish_reading(client: mqtt.Client, row: pd.Series, row_idx: int) -> None:
 
 
 def publish_background_stats(client: mqtt.Client) -> None:
+    """Periodically publish zeroed vitals with the running per-tier stats on sleep/background."""
     topic   = "sleep/background"
     payload = json.dumps({
         "sessionId": SESSION_ID,
@@ -249,9 +257,11 @@ def publish_background_stats(client: mqtt.Client) -> None:
 # ── Main loop ─────────────────────────────────────────────────
 
 def run() -> None:
+    """Load the CSV and replay it at PUBLISH_INTERVAL seconds, looping until signalled, then publish session/end."""
     global _shutdown
 
     def handle_signal(sig, frame):
+        """Set the shutdown flag on SIGINT/SIGTERM so the replay loop unwinds cleanly."""
         global _shutdown
         log.info("Shutdown signal received")
         _shutdown = True

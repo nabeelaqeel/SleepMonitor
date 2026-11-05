@@ -39,6 +39,7 @@ from tier_rules import TIER_QOS  # noqa: E402
 
 
 def safe_median(series):
+    """Median over non-NaN values; NaN when the series is empty."""
     values = series.dropna()
     return values.median() if len(values) else float("nan")
 
@@ -60,11 +61,13 @@ TIER_COLORS = {"Critical": "#d62728", "Important": "#ff7f0e",
 
 
 def die(msg, code=2):
+    """Print an ERROR line to stderr and exit with the given code."""
     print(f"ERROR: {msg}", file=sys.stderr)
     sys.exit(code)
 
 
 def load_study(directory, name):
+    """Load all complete meta_*.json files in a study directory, refusing quick runs, partial studies or mixed config hashes; return (metas, config_hash)."""
     directory = Path(directory)
     if directory.name.startswith("results_quick"):
         die(f"refusing {directory.name} — smoke-test data is not evidence")
@@ -90,6 +93,7 @@ def load_study(directory, name):
 
 
 def read_run(meta, directory):
+    """Read a run's sent/recv CSVs with coerced numeric types; die when logs are missing."""
     run_id = meta["run_id"]
     sent_path = Path(directory) / f"sent_{run_id}.csv"
     recv_path = Path(directory) / f"recv_{run_id}.csv"
@@ -215,6 +219,7 @@ def analyse_run(meta, sent, recv):
 
 
 def aggregate(runs):
+    """Group per-run tier metrics by (experiment, scenario, position, tier) with median/min/max summaries; return (tier frame, aggregated frame)."""
     group = ["experiment", "scenario", "position", "tier"]
     frame = pd.DataFrame(runs)
     metrics = {
@@ -256,6 +261,7 @@ def aggregate(runs):
 
 
 def a_netem_on_publish_gate(frames, config, hard, notes):
+    """Hard-gate per A-netem run that the AF_UNIX t0->on_publish median stays under 2 ms, pooling the medians as a note."""
     if config.get("socketpair") != "af_unix":
         notes.append("A-netem t0 -> on_publish gate skipped: "
                      f"socketpair={config.get('socketpair')!r}")
@@ -311,6 +317,7 @@ def recorded_qos_mismatches(frames, tier_qos):
 
 
 def sanity_checks(run_df, agg, frames, config):
+    """Evaluate hard gates, soft expectations and informational notes for the whole study; return (hard, soft, notes)."""
     hard, soft, notes = [], [], []
     interval_ms = config["pacing_interval_s"] * 1000.0
     expected_rows = config["dataset_rows"]
@@ -422,6 +429,7 @@ def sanity_checks(run_df, agg, frames, config):
 
 
 def outage_critical(frames, tier_df):
+    """Summarise Critical-tier outage-window exposure, delivery and recovery per (experiment, position)."""
     records = []
     for (experiment, position), group in tier_df[tier_df["scenario"] == "outage"].groupby(
             ["experiment", "position"]):
@@ -449,9 +457,11 @@ def outage_critical(frames, tier_df):
 
 
 def sensitivity_comparison(main_frames, sens_frames, rows=100):
+    """Compare main-study (0.1 s pacing) against 1 msg/s latencies on the same first 100 rows per scenario and tier."""
     records = []
     for scenario in ("clean", "netem"):
         def per_run(frames):
+            """Aggregate delivered per-tier median latency stats from message frames restricted to the first `rows` readings."""
             out = []
             for frame in frames:
                 if frame["scenario"].iloc[0] != scenario:
@@ -491,6 +501,7 @@ def sensitivity_comparison(main_frames, sens_frames, rows=100):
 
 
 def wire_summary(run_df):
+    """Summarise loopback wire overhead per (experiment, scenario) as run medians and ranges."""
     frame = run_df.dropna(subset=["wire_bytes_per_msg"])
     if frame.empty:
         return pd.DataFrame()
@@ -508,6 +519,7 @@ def wire_summary(run_df):
 # ── Plots ──────────────────────────────────────────────────────
 
 def make_plots(agg, frames, run_df, tier_df, sens, figures_dir):
+    """Render all report figures (latency ECDFs, delivery bars, per-run boxes, outage recovery, ack times, wire overhead, sensitivity) into figures_dir."""
     import matplotlib
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
@@ -516,6 +528,7 @@ def make_plots(agg, frames, run_df, tier_df, sens, figures_dir):
     experiments = sorted(run_df["experiment"].unique())
 
     def save(fig, name):
+        """Tighten, save and close one matplotlib figure as PNG."""
         fig.tight_layout()
         fig.savefig(figures_dir / name, dpi=160)
         plt.close(fig)
@@ -737,6 +750,7 @@ def make_plots(agg, frames, run_df, tier_df, sens, figures_dir):
 # ── Report + entry point ──────────────────────────────────────
 
 def render_sanity(hard, soft, notes, metas, run_df, tier_df, cfg_hash, config):
+    """Render the sanity report text: gates, warnings, notes and per-condition detail."""
     lines = ["=" * 72,
              "MQTT benchmark — sanity report",
              "=" * 72,
@@ -805,6 +819,7 @@ def render_sanity(hard, soft, notes, metas, run_df, tier_df, cfg_hash, config):
 
 
 def main(argv=None):
+    """CLI entry: default to the archived results_v2* directories unless --main-dir/--sensitivity-dir are given, then analyse, gate and write the report, CSVs and figures."""
     parser = argparse.ArgumentParser(
         description="Analyse the single-clock MQTT benchmark.",
         formatter_class=argparse.ArgumentDefaultsHelpFormatter)
