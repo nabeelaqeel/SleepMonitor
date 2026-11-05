@@ -118,8 +118,8 @@ Rotation is an ordered sequence — **restarts are required, a rebuild usually i
 #    (run value through BOTH so nothing can mix credentials)
 #    in /opt/SleepMonitor:
 NEWPW=$(openssl rand -hex 12)
-docker run --rm -v "$PWD/mosquitto:/config" eclipse-mosquitto:2 \
-  mosquitto_passwd -c -b /config/passwd sm "$NEWPW"
+docker run --rm -u 1883 -v "$PWD/mosquitto:/mosquitto/config" eclipse-mosquitto:2 \
+  mosquitto_passwd /mosquitto/config/passwd sm "$NEWPW"     # no -c: add-or-update mode, keeps 1883 ownership
 sed -i "s/^MQTT_PASSWORD=.*/MQTT_PASSWORD=$NEWPW/" .env.development
 
 # 2. server: broker reload — password_file is only read at startup

@@ -152,10 +152,14 @@ cd /opt/SleepMonitor
 # the broker password is the one §2.5 generated into .env.development —
 # read it from there so the command and the file can never disagree:
 MQPW="$(grep '^MQTT_PASSWORD=' .env.development | cut -d= -f2-)"
-docker run --rm -v "$PWD/mosquitto:/config" eclipse-mosquitto:2 \
-  mosquitto_passwd -c -b /config/passwd sm "$MQPW"
+docker run --rm -v "$PWD/mosquitto:/mosquitto/config" eclipse-mosquitto:2 \
+  mosquitto_passwd -c -b /mosquitto/config/passwd sm "$MQPW"
+# the broker drops to its internal non-root user (uid 1883), and mosquitto
+# 2.1+ WARNs (future: refuses) files with other ownership — validated recipe:
+sudo chown 1883:1883 mosquitto/passwd
+sudo chmod 600 mosquitto/passwd
 
-ls -l mosquitto/passwd                    # expect: file exists (~70 bytes)
+ls -l mosquitto/passwd                    # expect: exists, owner = 1883, mode 600
 ```
 
 ```bash
