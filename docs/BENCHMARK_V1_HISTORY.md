@@ -52,7 +52,7 @@ reproducible result. Along with it, the **33 ms** latency figure and the
 The v2 harness measures instead: one process hosts the publisher and the
 measuring subscriber, latency is `t1 − t0` on one monotonic clock, loss is
 real MQTT/TCP behaviour under `tc netem`, all 526 dataset rows run, and the
-classifier is the shipped `python-publisher/classifier.py`. See
+classifier is the shipped `python-publisher/tier_rules.py`. See
 `benchmark/README.md` for the full methodology.
 
 ## Frozen v1 results (for the record, never for comparison citation)

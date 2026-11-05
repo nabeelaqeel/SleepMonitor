@@ -61,12 +61,13 @@ that the publisher chose. All benchmark topics are under `bench/`, so the app
 and the ingest worker (which subscribe to `sleep/#` and `session/#`) never
 record benchmark traffic.
 
-Tier assignment is done with the shipped classifier
-(`python-publisher/classifier.py`, SpO2-only):
+Tier assignment is done with the shared rules module
+(`python-publisher/tier_rules.py`), evaluated in strict order — the
+benchmark runner and the production publisher use the exact same code:
 
-- SpO2 < 90 → **Critical** (QoS 2 in B)
-- SpO2 < 95 → **Important** (QoS 1 in B)
-- otherwise → **Normal** (QoS 0 in B)
+- SpO2 < 90 OR HR < 40 OR HR > 100 → **Critical** (QoS 2 in B)
+- 90 ≤ SpO2 < 95 OR 40 ≤ HR < 50 OR 90 < HR ≤ 100 OR HRV < 20 → **Important** (QoS 1 in B)
+- 95 ≤ SpO2 ≤ 100 AND 50 ≤ HR ≤ 90 AND HRV ≥ 20 → **Normal** (QoS 0 in B)
 - session statistics → **Background** (QoS 0 in B, emitted every 10 readings,
   mirroring the production publisher)
 

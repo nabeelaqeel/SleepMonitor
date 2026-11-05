@@ -191,7 +191,11 @@ export function SleepProvider({ children, patientId = null }) {
     if (!topic.startsWith('sleep/')) return;
 
     const now = Date.now();
-    const isStatsOnly = topic === 'sleep/background';
+    // sleep/background carries two message kinds: periodic statistics carry
+    // no seq, while genuine Background-tier readings do (out-of-band values
+    // classified by tier_rules). Only the stats kind is "stats-only" here —
+    // readings must flow through the live display like any other tier.
+    const isStatsOnly = topic === 'sleep/background' && data.seq === undefined;
 
     if (!isStatsOnly) {
       // Update current live reading
@@ -263,8 +267,9 @@ export function SleepProvider({ children, patientId = null }) {
       [key]: { count, delivery },
     }));
 
-    // Per-patient snapshot for the doctor roster. Background messages carry
-    // no vitals, so they only refresh lastSeen.
+    // Per-patient snapshot for the doctor roster. Stats-only background
+    // messages carry no vitals, so they only refresh lastSeen; Background
+    // readings (with seq) update the vitals overlay like other tiers.
     if (data.patientId) {
       setPatientSnapshots(prev => {
         const prior = prev[data.patientId] || {};

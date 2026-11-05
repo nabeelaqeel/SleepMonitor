@@ -123,13 +123,15 @@ def on_message(client, userdata, msg):
             })
         return
 
-    # ── sleep/background is stats-only; session_stats are computed
-    #    from readings, so it is not persisted as a reading. ─────
-    if topic == "sleep/background":
-        return
-
+    # ── sleep/background now carries two message types: Background-tier
+    #    readings (out-of-band values, published WITH seq) and periodic
+    #    statistics (no seq). Persist the readings; skip the statistics —
+    #    session_stats are computed from readings. ───────────────────
     sid = data.get("sessionId")
     seq = data.get("seq")
+    if topic == "sleep/background" and seq is None:
+        return
+
     if sid is None or seq is None:
         log.warning("Reading without sessionId/seq on %s — dropped", topic)
         return

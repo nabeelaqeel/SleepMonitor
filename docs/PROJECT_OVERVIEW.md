@@ -9,17 +9,17 @@ A QoS-aware real-time sleep monitoring system built as a Final Year Project (FYP
 ## What It Is
 
 A Python publisher reads a dataset (`data/sleep_data_realistic.csv` for demos),
-uses `python-publisher/classifier.py` to assign each reading to one of four
+uses `python-publisher/tier_rules.py` to assign each reading to one of four
 clinical tiers, and publishes it over MQTT at a Quality-of-Service level matching
 that tier's urgency. An Expo React Native app (`app/`) subscribes to the broker
 over WebSocket and renders patient and doctor dashboards.
 
-| Tier | SpO2 Threshold | MQTT Topic | QoS | Colour |
+| Tier | Trigger Condition | MQTT Topic | QoS | Colour |
 |---|---|---|---|---|
-| Critical | < 90% | `sleep/critical` | 2 — Exactly once | Red |
-| Important | 90–94% | `sleep/important` | 1 — At least once | Amber |
-| Normal | ≥ 95% | `sleep/normal` | 0 — Best effort | Green |
-| Background | Stats / batch | `sleep/background` | 0 — Best effort | Grey |
+| Critical | SpO2 < 90% OR HR < 40 OR HR > 100 bpm | `sleep/critical` | 2 — Exactly once | Red |
+| Important | 90 ≤ SpO2 < 95% OR 40 ≤ HR < 50 OR 90 < HR ≤ 100 bpm OR HRV < 20 ms | `sleep/important` | 1 — At least once | Amber |
+| Normal | 95 ≤ SpO2 ≤ 100% AND 50 ≤ HR ≤ 90 bpm AND HRV ≥ 20 ms | `sleep/normal` | 0 — Best effort | Green |
+| Background | All other readings + periodic session stats | `sleep/background` | 0 — Best effort | Grey |
 
 **Thesis claim:** routing clinically urgent data at higher QoS improves the
 reliability of critical-event delivery compared with uniform (non-prioritised)
@@ -33,7 +33,7 @@ transmission.
 data/sleep_data_realistic.csv
       │
       ▼  classifies tier → selects QoS
-python-publisher/ (publisher.py + classifier.py)
+python-publisher/ (publisher.py + tier_rules.py)
       │
       │  TCP :1883
       ▼
@@ -102,7 +102,7 @@ data/                       datasets + generator
 
 python-publisher/           THE REAL PIPELINE
   publisher.py              reads CSV, owns session lifecycle, publishes MQTT
-  classifier.py             tier rules (SpO2 thresholds only)
+  tier_rules.py             single source of truth: tier thresholds + QoS
   echo.py                   qos/ping → qos/pong relay for the app latency probe
   requirements.txt
 
@@ -147,7 +147,7 @@ docs/                       ARCHITECTURE, DATA_MODEL, DATABASE, AUTH_API, MQTT_S
 | Doctor dashboards | Partial | Seeded roster with a live overlay, plus an Alerts tab and session PDF export for the live patient; one patient streams at a time (true multi-patient needs per-patient topics) |
 | MQTT client | Working | Per-install persisted client ID, `cleanSession: false`, `sleep/#` + `qos/pong` at QoS 2, exponential-backoff reconnect |
 | Python publisher | Partial | Runs; owns session lifecycle + `seq`/`publishedAt`. HRV still always 35 (Issue 3) |
-| Classifier | Working | The real pipeline uses `python-publisher/classifier.py` (SpO2-only thresholds); the legacy simulation classifier is retired (removed) |
+| Classifier | Working | The real pipeline uses `python-publisher/tier_rules.py` — SpO2 + HR + HRV thresholds in one shared module; the legacy simulation classifier is retired (removed) |
 | Mosquitto broker | Working | System install on `:1883` / `:9001` (anonymous, localhost) |
 | PostgreSQL schema | Working | Extended with `seq`, `published_at`, unique keys, delivery columns |
 | Ingest worker | Working | `ingest/worker.py` — MQTT → Postgres, verified end-to-end (see `docs/DATABASE.md`) |
@@ -208,9 +208,10 @@ from the single-clock benchmark.
 The retired simulation (`evaluation.py` — line refs preserved at the
 `benchmark-v1-frozen` tag; history in `docs/BENCHMARK_V1_HISTORY.md`)
 classified using SpO2 **and** heart rate **and**
-HRV, while `python-publisher/classifier.py:23-41` uses **SpO2 only** (the other
-parameters are accepted but never used). The simulated evaluation is retired;
-the single-clock benchmark imports `python-publisher/classifier.py`, so its
+HRV. `python-publisher/tier_rules.py` now implements the same three signals
+in one shared module, so the shipped rules and the simulated evaluation agree.
+The simulated evaluation is retired;
+the single-clock benchmark imports `python-publisher/tier_rules.py`, so its
 tiers describe the pipeline that actually runs.
 
 **Impact:** none on v1 benchmark results; no shared-classifier extraction is

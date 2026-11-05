@@ -26,12 +26,12 @@ A QoS-aware real-time sleep monitoring system built as a Final Year Project (FYP
 
 SleepMonitor classifies sleep readings into four tiers and transmits them over MQTT with different Quality-of-Service (QoS) levels matching the clinical urgency of each event:
 
-| Tier | SpO2 Threshold | MQTT Topic | QoS | Colour |
+| Tier | Trigger Condition | MQTT Topic | QoS | Colour |
 |---|---|---|---|---|
-| Critical | < 90% | `sleep/critical` | 2 — Exactly once | Red |
-| Important | 90–94% | `sleep/important` | 1 — At least once | Amber |
-| Normal | ≥ 95% | `sleep/normal` | 0 — Best effort | Green |
-| Background | Stats / batch | `sleep/background` | 0 — Best effort | Grey |
+| Critical | SpO2 < 90% OR HR < 40 OR HR > 100 bpm | `sleep/critical` | 2 — Exactly once | Red |
+| Important | 90 ≤ SpO2 < 95% OR 40 ≤ HR < 50 OR 90 < HR ≤ 100 bpm OR HRV < 20 ms | `sleep/important` | 1 — At least once | Amber |
+| Normal | 95 ≤ SpO2 ≤ 100% AND 50 ≤ HR ≤ 90 bpm AND HRV ≥ 20 ms | `sleep/normal` | 0 — Best effort | Green |
+| Background | All other readings + periodic session stats | `sleep/background` | 0 — Best effort | Grey |
 
 The Python publisher reads `data/sleep_data_realistic.csv`, assigns a tier, and publishes JSON payloads to the Mosquitto broker. The React Native app in `app/` subscribes over WebSocket and renders live vitals, an event log, session reports, and network diagnostics.
 
@@ -431,7 +431,7 @@ SleepMonitor/
 │
 ├── python-publisher/                 # MQTT publisher
 │   ├── publisher.py                  # Session lifecycle, seq/publishedAt, stats
-│   ├── classifier.py                 # Tier rules (SpO2 thresholds)
+│   ├── tier_rules.py                 # Single source of truth: tier thresholds + QoS
 │   └── echo.py                       # qos/ping → qos/pong latency relay
 │
 ├── ingest/                           # MQTT → PostgreSQL ingest worker

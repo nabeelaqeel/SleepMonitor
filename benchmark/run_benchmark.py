@@ -49,7 +49,7 @@ BENCH_DIR = Path(__file__).resolve().parent
 ROOT = BENCH_DIR.parent
 sys.path.insert(0, str(ROOT / "python-publisher"))
 
-from classifier import classify  # noqa: E402
+from tier_rules import classify, TIER_QOS  # noqa: E402
 
 METHOD_VERSION = "2.0.0"
 SOCKETPAIR_STOCK = "stock"
@@ -67,12 +67,13 @@ TIER_TOPICS = {
     "Normal": "bench/normal",
     "Background": "bench/background",
 }
-TIER_QOS = {"Critical": 2, "Important": 1, "Normal": 0, "Background": 0}
 
 DATASET_PATH = ROOT / "data" / "sleep_data_realistic.csv"
 EXPECTED_DATASET_SHA256 = (
     "10e9df7fc38087b8caad72aebdee3975f752da3dd4bd5d79f7aa7aa1b3de64de")
-CLASSIFIER_PATH = ROOT / "python-publisher" / "classifier.py"
+# Provenance hash target for the frozen methodology: the module holding the
+# tier rules every benchmark tier assignment is built from.
+CLASSIFIER_PATH = ROOT / "python-publisher" / "tier_rules.py"
 ANALYSIS_PATH = BENCH_DIR / "analyze_benchmark.py"
 FULL_ROWS, QUICK_ROWS, SENS_ROWS = 526, 60, 100
 
