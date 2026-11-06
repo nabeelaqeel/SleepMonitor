@@ -165,6 +165,12 @@ only process you still run by hand is the Expo app.
 
 ### One-time setup (fresh laptop)
 
+> **One command does steps 1–2 below *and* starts the whole stack**
+> (generates fresh secrets, never overwrites an existing env):
+> `./deploy/bootstrap.sh`
+> The script prints the `app/.env.development` values to paste, so step 3
+> stays the only manual bit. The manual recipe below is kept for reference.
+
 ```bash
 # 0. No system Mosquitto may hold ports 1883/9001 — retire it (sudo, once):
 sudo systemctl disable --now mosquitto
