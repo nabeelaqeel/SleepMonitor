@@ -80,10 +80,12 @@ app/context/SleepContext.js  (React Context — single source of truth)
 - **Node.js** ≥ 18
 - **Expo CLI** — use `npx expo` (no global install needed)
 - **Expo Go** app on your phone (iOS / Android), or an emulator
-- **Mosquitto** MQTT broker installed on your laptop
-- **Python 3** with `paho-mqtt` installed (for the publisher and ingest worker)
-- **Docker** + **Docker Compose** (for the PostgreSQL ingest database — optional)
+- **Docker** + **Docker Compose** — runs the entire server-side stack (broker, PostgreSQL, Auth API, ingest, publisher, echo) with one command
 - Your laptop and phone must be on the **same Wi-Fi network**
+
+Only the [alternative host-venv flow](#alternative--run-the-services-in-a-host-venv-one-terminal-each)
+below needs **Mosquitto** as a system service and a **Python venv** with
+`paho-mqtt` / `uvicorn` installed manually.
 
 ---
 
@@ -107,13 +109,100 @@ The repository has **two runtimes**:
 | Python (publisher, echo, ingest) | repo root | `.venv-dev/bin/python <script>` |
 | Auth API (`api/`) | repo root | `.venv-dev/bin/uvicorn api.main:app --host 0.0.0.0 --port 8000` |
 
+The containerized stack in [Run the Full Stack](#run-the-full-stack) replaces
+the last two rows: one shared image runs the publisher, echo, ingest worker,
+and Auth API as separate containers.
+
 Python commands are all run **from the repository root** — the scripts resolve `.env.development` and dataset paths relative to it.
 
 ---
 
 ## Run the Full Stack
 
-Six processes make up a complete demo. Each login needs **PostgreSQL + the
+One command brings up **everything server-side** — Mosquitto broker,
+PostgreSQL, Auth API, ingest worker, publisher, and echo responder — as one
+containerized stack (`docker-compose.aws.yml`: the same compose file that
+deploys to AWS, so a laptop rehearsal exercises the real deployment). The
+only process you still run by hand is the Expo app.
+
+**Prerequisites:** Docker is running, and the one-time setup below is done
+(`.env.development`, `mosquitto/passwd`, `app/.env.development`).
+
+> The app **cannot log in unless Postgres and the Auth API are up** —
+> credentials are bcrypt-verified against the database. The stack starts
+> both. Everything past the login screen (MQTT streaming) is unaffected.
+
+### One-time setup (fresh laptop)
+
+```bash
+# 0. No system Mosquitto may hold ports 1883/9001 — retire it (sudo, once):
+sudo systemctl disable --now mosquitto
+
+# 1. Repo env (gitignored — see .env.example). Set MQTT_USER=sm, a real
+#    MQTT_PASSWORD, JWT_SECRET, POSTGRES_PASSWORD:
+cp .env.example .env.development
+
+# 2. Broker credential file — the stack's broker is LOCKED (allow_anonymous
+#    false), so it refuses to start without ./mosquitto/passwd:
+MQPW="$(grep '^MQTT_PASSWORD=' .env.development | cut -d= -f2-)"
+docker run --rm -v "$PWD/mosquitto:/mosquitto/config" eclipse-mosquitto:2 \
+  mosquitto_passwd -c -b /mosquitto/config/passwd sm "$MQPW"
+docker run --rm -v "$PWD/mosquitto:/mosquitto/config" eclipse-mosquitto:2 \
+  sh -c 'chown 1883:1883 /mosquitto/config/passwd && chmod 600 /mosquitto/config/passwd'
+
+# 3. App env (copy app/.env.example → app/.env.development): set
+#    EXPO_PUBLIC_BROKER_IP + EXPO_PUBLIC_API_URL to this laptop's LAN IP and
+#    uncomment EXPO_PUBLIC_MQTT_USER / EXPO_PUBLIC_MQTT_PASSWORD with the same
+#    server values — the locked broker rejects unauthenticated phone clients.
+```
+
+### Every run
+
+```bash
+# server side (returns immediately; the first run builds the image, ~2 min):
+docker compose -f docker-compose.aws.yml --env-file .env.development \
+  --profile local-db up -d --build
+
+# client side (the only terminal):
+cd app && npx expo start
+```
+
+`--profile local-db` starts the bundled Postgres service, and `--env-file` is
+required on every compose call (compose auto-loads only `.env`, and profile
+interpolation needs the file regardless).
+
+Scan the QR code with Expo Go, log in as `patient@sleep.com` / `1234`, and
+verify with `docker ps` — `sleep-postgres` must report `healthy` and every
+`sleep-*` container `Up`. Home shows live vitals; the Network screen shows
+measured delivery and estimated latency.
+
+### Stack operations
+
+| Action | Command |
+|---|---|
+| Replay the demo CSV fast (DB demos) | Set `PUBLISH_INTERVAL=0.05` in `.env.development`, then re-run `up -d` — only the publisher recreates |
+| Watch a service | `docker logs -f sleep-publisher` (also `sleep-ingest`, `sleep-echo`) |
+| Stop the stack | `docker compose -f docker-compose.aws.yml --env-file .env.development --profile local-db down` |
+| Reset the database | Same `down -v` — schema reapplies from `postgres/init/` on the next boot |
+| Recreate after env/code edits | Re-run `up -d --build` — compose only remakes changed containers |
+
+Authenticated tap of the live pipeline (the broker is locked, so anonymous
+`mosquitto_sub` is refused):
+
+```bash
+MQPW="$(grep '^MQTT_PASSWORD=' .env.development | cut -d= -f2-)"
+docker run --rm --network host eclipse-mosquitto:2 \
+  mosquitto_sub -h 127.0.0.1 -p 1883 -u sm -P "$MQPW" -t 'sleep/#' -v
+```
+
+To flip back to the host-venv flow: `docker compose down`, swap the active
+`DATABASE_URL` and `MQTT_HOST` lines to their commented `localhost` variants
+in `.env.development` (container hostnames are `postgres` and `broker`), then
+`sudo systemctl enable --now mosquitto`.
+
+### Alternative — run the services in a host venv (one terminal each)
+
+Kept for debugging without Docker. Each login needs **PostgreSQL + the
 Auth API**, live data needs the **Publisher + Expo app**; the others add
 latency measurement and database persistence.
 
@@ -126,13 +215,11 @@ latency measurement and database persistence.
 | 5 | Publisher | **Required** | repo root |
 | 6 | Expo app | **Required** | `app/` |
 
-Prerequisites: Mosquitto is running (a system service — no terminal needed), and
-the one-time setup is done (`.env.development`, `.venv-dev/`, `app/.env.development`;
-see [Installation](#installation) and [Broker Setup](#broker-setup-mosquitto)).
-
-> The app **cannot log in unless both PostgreSQL and the Auth API are running** —
-> credentials are bcrypt-verified against the database. Everything past the
-> login screen (MQTT streaming) is unaffected.
+Prerequisites: Mosquitto is running (a system service — no terminal needed).
+First flip `.env.development`/`.env.example` active `DATABASE_URL` and
+`MQTT_HOST` lines to their `localhost` variants (the `docker compose` flow
+uses the container hostnames `postgres` / `broker`), and make sure `.venv-dev/`
+exists per [Database & Ingest](#database--ingest-postgresql).
 
 ### Terminal 1 — PostgreSQL (optional)
 
@@ -203,6 +290,13 @@ Start order does not matter — the app can join a publisher session mid-stream
 
 ## Broker Setup (Mosquitto)
 
+> Skip this section on the containerized flow — [Run the Full Stack](#run-the-full-stack)
+> starts `eclipse-mosquitto:2` configured by `mosquitto/mosquitto.conf`
+> (already locked, credentials via `mosquitto/passwd`). The steps below set up
+> the optional system-installed broker used by the host-venv flow only.
+> On a system already used by this stack, just re-enable it:
+> `sudo systemctl enable --now mosquitto`.
+
 ### 1. Install Mosquitto
 
 ```bash
@@ -272,7 +366,7 @@ mosquitto_pub -h <YOUR_IP> -p 1883 -t "sleep/normal" \
 
 ## Database & Ingest (PostgreSQL)
 
-Optional durable store for the MQTT stream. A Python **ingest worker** subscribes to the broker and writes readings, alerts, and per-session QoS delivery stats to PostgreSQL. Mosquitto stays native — only Postgres runs in Docker.
+Optional durable store for the MQTT stream. A Python **ingest worker** subscribes to the broker and writes readings, alerts, and per-session QoS delivery stats to PostgreSQL. In the containerized [Run the Full Stack](#run-the-full-stack) flow the worker runs inside the stack; the host-venv commands below are the alternative-flow way to drive the same database.
 
 **Flow:** `publisher → Mosquitto :1883 → ingest/worker.py → PostgreSQL :5432`
 
@@ -304,8 +398,9 @@ docker compose --env-file .env.development up -d
 python3 -m venv .venv-dev
 .venv-dev/bin/pip install -r ingest/requirements.txt -r publisher/requirements.txt -r api/requirements.txt
 
-# 4. Run the ingest worker and publisher — terminals 2 and 4 of
-#    "Run the Full Stack" in the README. For DB demos a fast replay is convenient:
+# 4. Run the ingest worker and publisher — Terminal 2 (ingest) and
+#    Terminal 5 (publisher) of the alternative host-venv flow. For DB demos
+#    a fast replay is convenient:
 LOOP_CSV=false PUBLISH_INTERVAL=0.05 \
   .venv-dev/bin/python publisher/publisher.py
 
@@ -335,7 +430,7 @@ salts) — no plaintext password is persisted there or shipped in the app
 the same 401 message covers unknown emails and wrong passwords.
 
 ```bash
-# Terminal 3 — required for login (after PostgreSQL is up)
+# Host-venv flow (Terminal 3) — required for login (after PostgreSQL is up)
 .venv-dev/bin/uvicorn api.main:app --host 0.0.0.0 --port 8000
 ```
 
