@@ -132,7 +132,10 @@ fi
 # default SEED_DEMO_USERS=true a token proves bcrypt → api → ACTIVE database;
 # with seeding off the demo account may not exist, so ANY structured response
 # (a 401 body, say) already proves the api is up and the token check is skipped.
-seed="$(grep '^SEED_DEMO_USERS=' .env.development | cut -d= -f2- | tr -d ' ' | tr '[:upper:]' '[:lower:]')"
+# sed -n ... p exits 0 even when the key is absent (grep under set -e would
+# abort): a missing or empty SEED_DEMO_USERS then falls through to enabled,
+# matching api/config.py's default — explicit false-like values disable.
+seed="$(sed -n 's/^SEED_DEMO_USERS=//p' .env.development | tr -d ' ' | tr '[:upper:]' '[:lower:]')"
 case "$seed" in 1|true|yes|"") seeded=1 ;; *) seeded=0 ;; esac
 resp=""
 for _ in 1 2 3; do
