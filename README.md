@@ -137,15 +137,15 @@ see [Installation](#installation) and [Broker Setup](#broker-setup-mosquitto)).
 ### One-command alternative — the containerized stack
 
 Same services as the six terminals above — broker included — as one compose
-stack mirroring the AWS deployment. `scripts/bootstrap.sh` renders
+stack mirroring the AWS deployment. `deploy/bootstrap.sh` renders
 `.env.development` from generated secrets (never overwrites an existing one),
 builds the locked broker's `mosquitto/passwd`, starts everything, and prints
 the `app/.env.development` values that the manual flow's step 3 asks for:
 
 ```bash
-./scripts/bootstrap.sh                 # TEST mode: bundled Postgres via --profile local-db
-./scripts/bootstrap.sh --no-start      # generate config only — run the terminals above beside it
-./scripts/deploy-update.sh             # later code updates: pull → rebuild → verify
+./deploy/bootstrap.sh                 # TEST mode: bundled Postgres via --profile local-db
+./deploy/bootstrap.sh --no-start      # generate config only — run the terminals above beside it
+./deploy/deploy-update.sh             # later code updates: pull → rebuild → verify
 ```
 
 ### Terminal 1 — PostgreSQL (optional)

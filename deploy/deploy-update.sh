@@ -2,14 +2,14 @@
 # =============================================================
 # Sleep Monitor — deployment update (DEPLOYMENT.md §6.1, automated)
 #
-#   ./scripts/deploy-update.sh                 # git pull → compose up → verify
-#   ./scripts/deploy-update.sh --skip-pull     # no git step (bootstrap uses this)
-#   ./scripts/deploy-update.sh --allow-dirty   # proceed despite uncommitted edits
+#   ./deploy/deploy-update.sh                 # git pull → compose up → verify
+#   ./deploy/deploy-update.sh --skip-pull     # no git step (bootstrap uses this)
+#   ./deploy/deploy-update.sh --allow-dirty   # proceed despite uncommitted edits
 #
 # CI seam (future): a deploy job is one line and changes nothing here —
-#   ssh <host> 'cd /opt/SleepMonitor && ./scripts/deploy-update.sh'
+#   ssh <host> 'cd /opt/SleepMonitor && ./deploy/deploy-update.sh'
 # This script NEVER creates or rotates secrets: the server keeps its
-# .env.development forever (generated once by ./scripts/bootstrap.sh).
+# .env.development forever (generated once by ./deploy/bootstrap.sh).
 #
 # Mode-aware: reads the ACTIVE DATABASE_URL (same dispatch as runbook §6.2b) —
 #   TEST (@postgres:5432)  → compose gets --profile local-db and the script
@@ -46,7 +46,7 @@ if [ ! -f .env.development ]; then
     PROFILE=(--profile local-db); MODE=TEST
     DSN="plan-only"
   else
-    die ".env.development missing — run ./scripts/bootstrap.sh once first (secrets are NOT handled here)"
+    die ".env.development missing — run ./deploy/bootstrap.sh once first (secrets are NOT handled here)"
   fi
 fi
 
