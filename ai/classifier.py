@@ -15,7 +15,7 @@ import joblib
 import numpy as np
 import pandas as pd
 
-from .config import AI_RECOMMENDATION_DISCLAIMER, DISCLAIMER
+from .config import AI_RECOMMENDATION_DISCLAIMER, DISCLAIMER, MODEL_VERSION
 
 MODEL_PATH = Path(__file__).resolve().parent / "models" / "rf_phase2.joblib"
 
@@ -34,6 +34,7 @@ class Phase2Classifier:
     extra: dict = field(default_factory=dict)
 
     def frame_from_dict(self, features: dict) -> pd.DataFrame:
+        """Single-row feature frame in the model's trained column order."""
         missing = [c for c in self.feature_names if c not in features]
         if missing:
             raise KeyError(f"missing feature values: {missing}")
@@ -56,6 +57,8 @@ class Phase2Classifier:
             "positive_class": pos,
             "flagged_positive": bool(p[pos] >= self.threshold_2class),
             "threshold": self.threshold_2class,
+            "model_version": MODEL_VERSION,
+            "trained_on": self.fitted_on or "",
             "disclaimer": DISCLAIMER,
         }
 
@@ -92,5 +95,6 @@ def _register_model_modules() -> None:
 
 
 def load(path: Path | str | None = None) -> Phase2Classifier:
+    """Load the trained artifact (default path), registering its module aliases."""
     _register_model_modules()
     return joblib.load(Path(path) if path else MODEL_PATH)

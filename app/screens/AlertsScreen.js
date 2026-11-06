@@ -2,6 +2,7 @@ import { View, Text, StyleSheet } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useSleep } from '../context/SleepContext';
 import EventLog from '../components/EventLog';
+import { alertSubtitleCounts } from '../config/displayText';
 
 export default function AlertsScreen() {
   const { eventLog, sessionStats } = useSleep();
@@ -11,7 +12,7 @@ export default function AlertsScreen() {
       <View style={styles.header}>
         <Text style={styles.title}>Tonight's events</Text>
         <Text style={styles.subtitle}>
-          {sessionStats.critical} critical · {sessionStats.important} important
+          {alertSubtitleCounts(sessionStats.critical, sessionStats.important)}
         </Text>
       </View>
 

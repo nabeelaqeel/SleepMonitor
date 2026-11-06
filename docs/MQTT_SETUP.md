@@ -2,7 +2,7 @@
 
 This guide covers everything needed to run the full SleepMonitor data pipeline: Mosquitto broker, the React Native app, and the Python publisher.
 
-> **Quick runbook:** the README's [Run the Full Stack](../README.md#run-the-full-stack) section has the terminal-by-terminal version; this document is the reference detail for each piece.
+> **Quick runbook:** the README's [Run the Full Stack](../README.md#run-the-full-stack) starts everything server-side with one command; the terminal-by-terminal host-venv version lives in [RUN_TERMINAL.md](RUN_TERMINAL.md). This document is the reference detail for each piece.
 
 ---
 
@@ -206,6 +206,20 @@ The broker retransmits until it receives a PUBACK. The message is guaranteed to 
 
 The publisher sends once and moves on. No acknowledgement, no retransmission. Acceptable for high-frequency routine readings where the next sample arrives in seconds.
 
+### QoS Rationale
+
+| QoS | Guarantee | Est. latency (RTT/2) | Used for |
+|---|---|---|---|
+| 2 | Exactly once (4-way handshake) | measured live | Critical — apnea events; must not be lost or duplicated |
+| 1 | At least once (PUBACK) | measured live | Important — borderline readings; duplicates tolerable |
+| 0 | Best effort (fire and forget) | measured live | Normal + Background — high-frequency routine data |
+
+> **Latency** figures in the app are **estimated** from round-trip ping/echo
+> (`RTT/2`) via `publisher/echo.py`; they are an on-device indicator, not the
+> thesis measurement. The authoritative figures come from the single-clock
+> benchmark (producer and consumer timestamps on one host clock) — see
+> [`benchmark/README.md`](../benchmark/README.md).
+
 > **Subscribe QoS:** The app subscribes with a single wildcard at QoS 2, so the
 > broker-to-app leg is never downgraded (effective QoS = min(publish QoS, 2)).
 > It also connects with `cleanSession: false`, so QoS 1/2 messages are queued while
@@ -215,6 +229,46 @@ The publisher sends once and moves on. No acknowledgement, no retransmission. Ac
 > client.subscribe('sleep/#', { qos: 2 });
 > client.subscribe('qos/pong', { qos: 2 });
 > ```
+
+### Message Payload Schema
+
+Every message published to any `sleep/*` topic is a JSON object:
+
+```json
+{
+  "patientId": "patient-001",
+  "tier":      "Critical",
+  "spo2":      88,
+  "heartRate": 71,
+  "hrv":       18,
+  "motion":    0,
+  "timestamp": "02:14 AM",
+  "reason":    "SpO2 below critical threshold (88%)",
+  "qos":       2,
+  "topic":     "sleep/critical",
+  "stats": {
+    "critical":   5,
+    "important":  12,
+    "normal":     48,
+    "background": 3,
+    "total":      68
+  }
+}
+```
+
+| Field | Type | Description |
+|---|---|---|
+| `patientId` | string | Patient identifier (e.g. `patient-001`) — the doctor roster matches it to decide which entry is live |
+| `tier` | string | `Critical` / `Important` / `Normal` / `Background` |
+| `spo2` | number | Blood oxygen saturation (%) |
+| `heartRate` | number | Heart rate (BPM) |
+| `hrv` | number | Heart rate variability — RMSSD (ms) |
+| `motion` | number | Limb movement index (0 = low) |
+| `timestamp` | string | Human-readable time, e.g. `"02:14 AM"` |
+| `reason` | string | Classifier explanation (optional) |
+| `qos` | number | QoS level used (0, 1, or 2) |
+| `topic` | string | MQTT topic name echoed in payload |
+| `stats` | object | Cumulative session counts per tier + total |
 
 ---
 

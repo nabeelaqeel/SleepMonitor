@@ -1,5 +1,6 @@
-# Sleep Monitor — ONE image for the four Python services
-# (api, ingest, publisher, echo — compose assigns the command per service).
+# Sleep Monitor — ONE image for the Python services
+# (api, ingest, publisher, echo + the demo-only ai module — compose assigns
+# the command per service).
 #
 # Built from the repo root after each `git pull` — layer caching means
 # nothing rebuilds unless code/requirements actually changed. No registry:
@@ -15,15 +16,20 @@ WORKDIR /app
 COPY api/requirements.txt api/requirements.txt
 COPY ingest/requirements.txt ingest/requirements.txt
 COPY publisher/requirements.txt publisher/requirements.txt
+COPY ai/requirements.txt ai/requirements.txt
 RUN pip install --no-cache-dir \
     -r api/requirements.txt \
     -r ingest/requirements.txt \
-    -r publisher/requirements.txt
+    -r publisher/requirements.txt \
+    -r ai/requirements.txt
 
 # Then the code:
 COPY api/ api/
 COPY ingest/ ingest/
 COPY publisher/ publisher/
+# ai/ (classifier + Trained model) is demo-only — used by the ai-demo compose
+# profile, never part of the always-on services.
+COPY ai/ ai/
 
 # The publisher reads the demo CSV at runtime (CSV_PATH env var):
 COPY data/sleep_data_realistic.csv data/sleep_data_realistic.csv

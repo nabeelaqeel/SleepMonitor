@@ -30,11 +30,13 @@ def publish(
     qos: int = 1,
     retain: bool = False,
     timeout: float = 5.0,
+    host: str | None = None,
+    port: int | None = None,
 ) -> None:
-    host = os.getenv("MQTT_HOST", "localhost")
-    port = int(os.getenv("MQTT_PORT", "1883"))
+    broker_host = host or os.getenv("MQTT_HOST", "localhost")
+    broker_port = port if port is not None else int(os.getenv("MQTT_PORT", "1883"))
     client = build_client()
-    client.connect(host, port, keepalive=60)
+    client.connect(broker_host, broker_port, keepalive=60)
     try:
         client.loop_start()
         info = client.publish(topic, json.dumps(payload, default=str), qos=qos, retain=retain)

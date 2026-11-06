@@ -3,10 +3,12 @@ import { NavigationContainer } from '@react-navigation/native';
 import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import PatientListScreen   from '../screens/doctor/PatientListScreen';
 import PatientDetailScreen from '../screens/doctor/PatientDetailScreen';
 import DoctorAlertsScreen  from '../screens/doctor/DoctorAlertsScreen';
+import AboutScreen         from '../screens/AboutScreen';
 
 const Tab   = createBottomTabNavigator();
 const Stack = createNativeStackNavigator();
@@ -48,6 +50,10 @@ function PatientsStack({ onLogout }) {
 // ─── Navigator: two tabs, matching the patient-side tab bar styling ──────────
 
 export default function DoctorNavigator({ onLogout }) {
+  // Same edge-to-edge handling as PatientNavigator in App.js: keep the tab
+  // bar contents clear of the Android system nav bar on 3-button phones.
+  const { bottom } = useSafeAreaInsets();
+
   return (
     <NavigationContainer>
       <Tab.Navigator
@@ -59,8 +65,8 @@ export default function DoctorNavigator({ onLogout }) {
             backgroundColor: '#0a0a0f',
             borderTopColor:  '#1a1a2e',
             borderTopWidth:  0.5,
-            paddingBottom:   10,
-            height:          70,
+            paddingBottom:   bottom,
+            height:          60 + bottom,
           },
           tabBarActiveTintColor:   '#818cf8',
           tabBarInactiveTintColor: '#444',
@@ -83,6 +89,16 @@ export default function DoctorNavigator({ onLogout }) {
           options={{
             tabBarIcon: ({ color, size }) => (
               <MaterialCommunityIcons name="bell-alert" color={color} size={size} />
+            ),
+          }}
+        />
+
+        <Tab.Screen
+          name="About"
+          component={AboutScreen}
+          options={{
+            tabBarIcon: ({ color, size }) => (
+              <MaterialCommunityIcons name="information-outline" color={color} size={size} />
             ),
           }}
         />

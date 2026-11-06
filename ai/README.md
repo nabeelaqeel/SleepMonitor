@@ -23,6 +23,45 @@ It is intentionally never run during the live session. The model requires a
 10-minute / night-level rolling buffer, and the app only needs the completed
 band, not per-reading inference.
 
+## Demo mode (container, off by default)
+
+`ai/demo.py` fabricates a synthetic night of readings in-process (no database)
+and runs them through the REAL trained model, so everything it prints/publishes
+is a genuine model output. Scenarios — `healthy`, `monitor`, `apnea` — mirror
+the three research bands by episode cadence and nightly SpO2 profile.
+`rotate` cycles all three in order.
+
+```bash
+# Local, print only (what the model says for a synthetic night)
+.venv-dev/bin/python -m ai.demo --scenario apnea
+
+# Local, publish to the host broker
+.venv-dev/bin/python -m ai.demo --scenario monitor --publish \
+  --patient-id 00000000-0000-0000-0000-000000000002 --host localhost
+```
+
+Container demo (AWS stack) — demo mode is a compose profile, OFF by default:
+
+```bash
+# ON: one extra flag — sleep-ai-demo publishes every AI_DEMO_INTERVAL seconds
+docker compose -f docker-compose.aws.yml --env-file .env.development \
+  --profile ai-demo up -d --build
+
+# OFF: drop the flag, then:
+docker compose -f docker-compose.aws.yml --env-file .env.development up -d
+```
+
+While demo mode is ON, the sleep-ai-demo service publishes (retained) to
+`sleep/recommendation` every `AI_DEMO_INTERVAL` seconds with
+`AI_DEMO_PATIENT_ID` as the payload's patientId — so the app account you log
+into with that patientId shows the band on the Home screen. Drops of ~0.1
+probability aside, the bands match the model's real behaviour for the staged
+night.
+
+> Demo-only caveat: the trained model artifact (`ai/models/rf_phase2.joblib`)
+> is baked into the image so the demo profile can run it. Keep demo images
+> private (they are built on the server, never pushed).
+
 ## Non-diagnostic disclaimer
 
 Every output includes:

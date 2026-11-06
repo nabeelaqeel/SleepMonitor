@@ -20,6 +20,12 @@ DISCLAIMER = (
 )
 AI_RECOMMENDATION_DISCLAIMER = DISCLAIMER
 
+# Reproducibility metadata shipped in the sleep/recommendation payload so the
+# app can stamp "model version · dataset version" onto exported reports. The
+# human-readable dataset lineage per artifact lives in Phase2Classifier.fitted_on
+# (e.g. "139 participants, PAAWS R2 v1.3 ...") — MODEL_VERSION only names the file.
+MODEL_VERSION = "rf_phase2.joblib"
+
 
 @dataclass(frozen=True)
 class FeatureConfig:
