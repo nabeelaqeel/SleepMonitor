@@ -75,6 +75,7 @@ class RecommendationPayloadTestCase(unittest.TestCase):
         self.assertNotIn("not_sent", payload)
 
     def test_payload_carries_report_export_fields(self):
+        """The export fields the nightly PDF needs ride along in the payload."""
         result = {
             "session_id": "abc",
             "patient_id": "pd",
@@ -108,6 +109,7 @@ class RecommendationPayloadTestCase(unittest.TestCase):
         json.dumps(payload, allow_nan=False)
 
     def test_nightly_nan_becomes_null_in_payload(self):
+        """NaN nightly features serialize as JSON null, never bare NaN."""
         result = {
             "session_id": "abc",
             "band": None,

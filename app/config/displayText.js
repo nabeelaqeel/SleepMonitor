@@ -186,7 +186,7 @@ export const PATTERN_REPORT_TEXT = {
   },
 
   nextSteps: {
-    healthy:    'No concerning sleep pattern right now — no action needed. Keep consistent sleep habits and stable bed/wake times.',
+    healthy:    'No concerning sleep pattern in tonight’s data. Keep consistent sleep habits and stable bed/wake times. If you have sleep symptoms or other medical concerns, discuss them with a healthcare professional.',
     monitor:    'Continue tracking your sleep pattern. Revisit in 2–4 weeks and consider lifestyle factors (caffeine, alcohol, late screens, irregular bed times).',
     see_doctor: 'Share this report with a qualified healthcare professional and discuss whether a clinical sleep study is appropriate.',
   },

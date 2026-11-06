@@ -34,6 +34,7 @@ class Phase2Classifier:
     extra: dict = field(default_factory=dict)
 
     def frame_from_dict(self, features: dict) -> pd.DataFrame:
+        """Single-row feature frame in the model's trained column order."""
         missing = [c for c in self.feature_names if c not in features]
         if missing:
             raise KeyError(f"missing feature values: {missing}")
@@ -94,5 +95,6 @@ def _register_model_modules() -> None:
 
 
 def load(path: Path | str | None = None) -> Phase2Classifier:
+    """Load the trained artifact (default path), registering its module aliases."""
     _register_model_modules()
     return joblib.load(Path(path) if path else MODEL_PATH)

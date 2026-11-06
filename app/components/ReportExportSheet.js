@@ -21,7 +21,11 @@ export default function ReportExportSheet({ visible, onClose, rows }) {
         activeOpacity={1}
         onPress={onClose}
       >
-        <View style={styles.sheet}>
+        {/* Inner touchable claims taps on the title, gaps and disabled rows so
+            they don't bubble to the overlay's close handler. No onPress: the
+            sheet itself closes only via rows, Cancel, backdrop or back. */}
+        <TouchableOpacity style={styles.sheet} activeOpacity={1}>
+          <View style={styles.handle} />
           <View style={styles.handle} />
           <Text style={styles.title}>{EXPORT_SHEET_TEXT.title}</Text>
 
@@ -67,7 +71,7 @@ export default function ReportExportSheet({ visible, onClose, rows }) {
           <TouchableOpacity style={styles.cancelBtn} activeOpacity={0.75} onPress={onClose}>
             <Text style={styles.cancelText}>{EXPORT_SHEET_TEXT.cancel}</Text>
           </TouchableOpacity>
-        </View>
+        </TouchableOpacity>
       </TouchableOpacity>
     </Modal>
   );

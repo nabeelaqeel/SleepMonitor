@@ -4,7 +4,8 @@
 # coderabbitai on one PR and prints them as they arrive, so review rounds on
 # a laptop without gh/token are still detected.
 #
-# Unauthenticated API allows 60 req/h; the watcher spends 2 req per poll,
+# Unauthenticated API allows 60 req/h; the watcher walks 1 page per endpoint
+# per poll while the thread fits one page (longer threads walk up to 10),
 # so the default interval of 150 s stays well inside the limit.
 #
 # Usage:
@@ -52,28 +53,43 @@ echo "watching https://github.com/$REPO_SLUG/pull/$NAMESPACE for coderabbitai co
 echo "stop with Ctrl-C; a fresh review round prints here the moment it posts."
 echo
 
-# ── python payload: report new coderabbitai comments, bump the id state file ─
-# Note: script goes via -c so stdin stays free for the curl data, and a
-# transient API hiccup is swallowed (state untouched, retried next poll).
+# ── python payload: walk the endpoint's pages, report new coderabbitai ───────
+# comments, bump the per-endpoint watermark file.
+# Note: script goes via -c (bash keeps no stdin), requests carry a single
+# socket-level time bound so a stalled call can't block the poll, and any
+# transient/rate-limit error is swallowed — state stays untouched and the next
+# interval retries.
 PY_MAIN='
-import json, os, sys, textwrap
+import json, os, sys, textwrap, urllib.request
 
-state_path = sys.argv[1]
+state_path = sys.argv[2]
 picker = os.environ.get("REMOTE_PICKER", "")
 
-try:
-    raw = sys.stdin.read()
-    items = json.loads(raw) if raw.strip() else []
-    items = items if isinstance(items, list) else []
-except Exception:
-    sys.exit(0)  # transient API hiccup — retry next poll
+def http_get_json(url):
+    req = urllib.request.Request(url, headers={
+        "Accept": "application/vnd.github+json",
+        "User-Agent": "sleepmonitor-coderabbit-watcher",
+    })
+    with urllib.request.urlopen(req, timeout=25) as r:  # connect + read ≤ 25 s
+        return json.load(r)
 
-last = int(open(state_path).read().strip())
+items, page = [], 0
+try:
+    while page < 10:  # cap: 10 pages x 100 comments — more than any PR thread
+        page_url = sys.argv[1] if page == 0 else "%s&page=%d" % (sys.argv[1], page + 1)
+        got = http_get_json(page_url)
+        items.extend(got if isinstance(got, list) else [])
+        if len(got) < 100:
+            break
+        page += 1
+except Exception:
+    sys.exit(0)
+
 new = [c for c in items
        if c.get("user", {}).get("login", "").startswith("coderabbitai")
-       and c.get("id", 0) > last]
+       and c.get("id", 0) > int(open(state_path).read().strip())]
 
-max_id = max([c.get("id", 0) for c in items] + [last])
+max_id = max([c.get("id", 0) for c in items] + [int(open(state_path).read().strip())])
 open(state_path, "w").write(str(max_id))
 
 for c in sorted(new, key=lambda x: x["id"]):
@@ -84,26 +100,32 @@ for c in sorted(new, key=lambda x: x["id"]):
     print()
 '
 
-# ── collect new coderabbitai comments for one collection endpoint ────────────
-# State file holds the highest comment id already reported.
-state_file="$(mktemp -t codrabit.XXXXXX)"
-trap 'rm -f "$state_file"' EXIT
+# ── per-endpoint watermarks: one state file each, so one endpoint can never ──
+# advance the other's id past a comment it has not reported.
+state_dir="$(mktemp -d -t codrabit.XXXXXX)"
+trap 'rm -rf "$state_dir"' EXIT
 
-if [ "${WATCHER_SHOW_ALL:-0}" = "1" ]; then
-  echo 0 > "$state_file"
-else
-  echo 999999999999 > "$state_file"  # high seed: first poll reports nothing
-fi
+init_state() {
+  if [ "${WATCHER_SHOW_ALL:-0}" = "1" ]; then
+    echo 0 > "$1"
+  else
+    echo 999999999999 > "$1"  # high seed: first successful response records the
+  fi                           # current max id and reports nothing historic
+}
+init_state "$state_dir/issue"
+init_state "$state_dir/review"
 
 new_for_kind() {
-  # $1 = API collection URL, $2 = label for the report header
-  curl -s "$1" | REMOTE_PICKER="$2" python3 -c "$PY_MAIN" "$state_file"
+  # $1 = watermark state file, $2 = report label, $3 = collection URL
+  REMOTE_PICKER="$2" python3 -c "$PY_MAIN" "$3" "$1"
 }
 
 while true; do
   # commentary + walkthrough/review summary posts land as issue comments
-  new_for_kind "https://api.github.com/repos/$REPO_SLUG/issues/$NAMESPACE/comments?per_page=100" "review comment"
+  new_for_kind "$state_dir/issue" "review comment" \
+    "https://api.github.com/repos/$REPO_SLUG/issues/$NAMESPACE/comments?per_page=100"
   # inline path-tagged findings land as PR review comments
-  new_for_kind "https://api.github.com/repos/$REPO_SLUG/pulls/$NAMESPACE/comments?per_page=100" "inline finding"
+  new_for_kind "$state_dir/review" "inline finding" \
+    "https://api.github.com/repos/$REPO_SLUG/pulls/$NAMESPACE/comments?per_page=100"
   sleep "$INTERVAL"
 done

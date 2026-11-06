@@ -33,7 +33,7 @@ const METRIC_RANGES = {
 // cutoffs.
 const FINDING_THRESHOLDS = {
   desatFrac:   0.005, // ≥0.5% of readings below 90% SpO2
-  spo2Min:     90,    // lowest SpO2 at/below the desat threshold
+  spo2Min:     90,    // lowest SpO2 strictly below the desat threshold (exactly 90% does not fire)
   rmssdMedian: 20,    // overnight RMSSD median on the clearly-low side (ms)
 };
 
@@ -145,7 +145,7 @@ function findingsLines(nightly) {
   }
 
   const spo2Min = n.spo2_min;
-  if (typeof spo2Min === 'number' && Number.isFinite(spo2Min) && spo2Min <= FINDING_THRESHOLDS.spo2Min) {
+  if (typeof spo2Min === 'number' && Number.isFinite(spo2Min) && spo2Min < FINDING_THRESHOLDS.spo2Min) {
     lines.push(PATTERN_REPORT_TEXT.findings.spo2Min(fmt(spo2Min, 0)));
   }
 
@@ -379,7 +379,7 @@ ${nextHtml}
 ${limitationsHtml}
 ${disclaimerHtml}
 
-<div class="footer">${DISCLAIMER.footer}<br/>${T.versionLine(payload)}</div>
+<div class="footer">${DISCLAIMER.footer}<br/>${escapeHtml(T.versionLine(payload))}</div>
 </body>
 </html>`;
 }

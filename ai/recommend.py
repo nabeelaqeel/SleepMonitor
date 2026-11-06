@@ -42,7 +42,9 @@ def _json_safe(value):
     if isinstance(value, (list, tuple)):
         return [_json_safe(v) for v in value]
     if isinstance(value, dict):
-        return {k: _json_safe(v) for k, v in value.items()}
+        # keys too: numpy scalars as keys raise in json.dumps ("keys must be str")
+        return {k if isinstance(k, str) else str(k): _json_safe(v)
+                for k, v in value.items()}
     # numpy scalars (np.int64 / np.float32 / np.bool_ are not native subclasses)
     if type(value).__module__.startswith("numpy"):
         return _json_safe(value.item())
@@ -95,6 +97,8 @@ def recommendation_payload(result: dict) -> dict:
 
 
 def main() -> int:
+    """CLI entry: build the payload for the requested session (or the patient's
+    latest), print it, and publish to sleep/recommendation when --publish."""
     parser = argparse.ArgumentParser(description="Post-night AI recommendation")
     group = parser.add_mutually_exclusive_group(required=True)
     group.add_argument("--session-id", help="UUID of a specific session")
