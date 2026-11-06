@@ -134,6 +134,20 @@ see [Installation](#installation) and [Broker Setup](#broker-setup-mosquitto)).
 > credentials are bcrypt-verified against the database. Everything past the
 > login screen (MQTT streaming) is unaffected.
 
+### One-command alternative — the containerized stack
+
+Same services as the six terminals above — broker included — as one compose
+stack mirroring the AWS deployment. `scripts/bootstrap.sh` renders
+`.env.development` from generated secrets (never overwrites an existing one),
+builds the locked broker's `mosquitto/passwd`, starts everything, and prints
+the `app/.env.development` values that the manual flow's step 3 asks for:
+
+```bash
+./scripts/bootstrap.sh                 # TEST mode: bundled Postgres via --profile local-db
+./scripts/bootstrap.sh --no-start      # generate config only — run the terminals above beside it
+./scripts/deploy-update.sh             # later code updates: pull → rebuild → verify
+```
+
 ### Terminal 1 — PostgreSQL (optional)
 
 ```bash
