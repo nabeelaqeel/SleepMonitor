@@ -7,10 +7,14 @@ import { MaterialCommunityIcons } from '@expo/vector-icons';
 import { useState } from 'react';
 import { useSleep } from '../context/SleepContext';
 import { exportSessionReport } from '../services/exportSessionReport';
+import { exportPatternReport } from '../services/exportPatternReport';
+import ReportExportSheet from '../components/ReportExportSheet';
+import { tierShortLabel, topicDisplayLabel, EXPORT_SHEET_TEXT } from '../config/displayText';
 
 export default function ReportScreen() {
-  const { sessionStats, currentData, sleepTimeline } = useSleep();
-  const [exporting, setExporting] = useState(false);
+  const { sessionStats, currentData, sleepTimeline, aiRecommendation } = useSleep();
+  const [exportPickerOpen, setExportPickerOpen] = useState(false);
+  const [busyKey, setBusyKey] = useState(null); // 'session' | 'pattern' | null
 
   const total = sessionStats.total || 1;
 
@@ -21,43 +25,80 @@ export default function ReportScreen() {
     ? Math.round(hrValues.reduce((a, b) => a + b, 0) / hrValues.length)
     : '--';
 
+  // Legend names come from the centralized display labels; the underlying
+  // sessionStats keys (critical / important / normal / background) stay as-is.
   const tiers = [
     {
-      name:    'Critical',
+      name:    tierShortLabel('Critical'),
       color:   '#ef4444',
       count:   sessionStats.critical,
       pct:     Math.round((sessionStats.critical / total) * 100),
     },
     {
-      name:    'Important',
+      name:    tierShortLabel('Important'),
       color:   '#f59e0b',
       count:   sessionStats.important,
       pct:     Math.round((sessionStats.important / total) * 100),
     },
     {
-      name:    'Normal',
+      name:    tierShortLabel('Normal'),
       color:   '#22c55e',
       count:   sessionStats.normal,
       pct:     Math.round((sessionStats.normal / total) * 100),
     },
     {
-      name:    'Background',
+      name:    tierShortLabel('Background'),
       color:   '#6b7280',
       count:   sessionStats.background,
       pct:     Math.round((sessionStats.background / total) * 100),
     },
   ];
 
+  // The nightly pattern report is only exportable once a sleep/recommendation
+  // payload with an actual band has arrived for this patient.
+  const patternAvailable = !!aiRecommendation?.band;
+
   async function handleExportPdf() {
-    setExporting(true);
-    try {
-      await exportSessionReport({ sessionStats, currentData, sleepTimeline });
-    } catch (e) {
-      console.error('PDF export failed:', e);
-    } finally {
-      setExporting(false);
-    }
+    setExportPickerOpen(true);
   }
+
+  function runExport(key, task) {
+    setExportPickerOpen(false);
+    setBusyKey(key);
+    task().catch(e => {
+      console.error(`PDF export failed (${key}):`, e);
+    }).finally(() => setBusyKey(null));
+  }
+
+  const handleExportSession = () =>
+    runExport('session', () =>
+      exportSessionReport({ sessionStats, currentData, sleepTimeline }));
+
+  const handleExportPattern = () =>
+    runExport('pattern', () =>
+      exportPatternReport({ payload: aiRecommendation }));
+
+  const exportRows = [
+    {
+      key: 'session',
+      icon: 'clipboard-pulse-outline',
+      title: EXPORT_SHEET_TEXT.session.title,
+      subtitle: EXPORT_SHEET_TEXT.session.subtitle,
+      enabled: true,
+      busy: busyKey === 'session',
+      onPress: handleExportSession,
+    },
+    {
+      key: 'pattern',
+      icon: 'moon-waning-crescent',
+      title: EXPORT_SHEET_TEXT.pattern.title,
+      subtitle: EXPORT_SHEET_TEXT.pattern.subtitle,
+      enabled: patternAvailable,
+      reason: EXPORT_SHEET_TEXT.pattern.unavailable,
+      busy: busyKey === 'pattern',
+      onPress: handleExportPattern,
+    },
+  ];
 
   return (
     <SafeAreaView style={styles.container}>
@@ -73,17 +114,17 @@ export default function ReportScreen() {
             </Text>
           </View>
           <TouchableOpacity
-            style={[styles.exportBtn, exporting && styles.exportBtnDisabled]}
+            style={[styles.exportBtn, busyKey && styles.exportBtnDisabled]}
             onPress={handleExportPdf}
-            disabled={exporting}
+            disabled={!!busyKey}
             activeOpacity={0.75}
           >
-            {exporting
+            {busyKey
               ? <ActivityIndicator size="small" color="#818cf8" />
               : <MaterialCommunityIcons name="file-pdf-box" size={18} color="#818cf8" />
             }
             <Text style={styles.exportBtnText}>
-              {exporting ? 'Exporting...' : 'Export PDF'}
+              {busyKey ? 'Exporting...' : 'Export PDF'}
             </Text>
           </TouchableOpacity>
         </View>
@@ -91,12 +132,12 @@ export default function ReportScreen() {
         {/* Summary cards */}
         <View style={styles.grid}>
           <SummaryCard
-            label="Critical events"
+            label={`${tierShortLabel('Critical')} events`}
             value={sessionStats.critical}
             color="#f87171"
           />
           <SummaryCard
-            label="Important events"
+            label={`${tierShortLabel('Important')} events`}
             value={sessionStats.important}
             color="#fbbf24"
           />
@@ -117,7 +158,7 @@ export default function ReportScreen() {
           />
           <SummaryCard
             label="Current tier"
-            value={currentData.tier}
+            value={tierShortLabel(currentData.tier)}
             color="#818cf8"
           />
         </View>
@@ -159,25 +200,25 @@ export default function ReportScreen() {
         <Text style={styles.sectionLabel}>QoS transmission summary</Text>
         <View style={styles.qosCard}>
           <QoSRow
-            topic="sleep/critical"
+            topic={topicDisplayLabel('sleep/critical')}
             qos="QoS 2"
             count={sessionStats.critical}
             color="#f87171"
           />
           <QoSRow
-            topic="sleep/important"
+            topic={topicDisplayLabel('sleep/important')}
             qos="QoS 1"
             count={sessionStats.important}
             color="#fbbf24"
           />
           <QoSRow
-            topic="sleep/normal"
+            topic={topicDisplayLabel('sleep/normal')}
             qos="QoS 0"
             count={sessionStats.normal}
             color="#4ade80"
           />
           <QoSRow
-            topic="sleep/background"
+            topic={topicDisplayLabel('sleep/background')}
             qos="QoS 0"
             count={sessionStats.background}
             color="#9ca3af"
@@ -216,6 +257,13 @@ export default function ReportScreen() {
         </View>
 
       </ScrollView>
+
+      {/* Which PDF to export: live session or nightly pattern report */}
+      <ReportExportSheet
+        visible={exportPickerOpen}
+        onClose={() => setExportPickerOpen(false)}
+        rows={exportRows}
+      />
     </SafeAreaView>
   );
 }

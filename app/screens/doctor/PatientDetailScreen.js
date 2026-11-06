@@ -2,17 +2,20 @@ import { useState } from 'react';
 import { View, Text, ScrollView, TouchableOpacity, ActivityIndicator, StyleSheet } from 'react-native';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
 import VitalCard from '../../components/VitalCard';
+import ReportExportSheet from '../../components/ReportExportSheet';
 import { useSleep, PATIENT_LIVE_WINDOW_MS } from '../../context/SleepContext';
 import { useNow } from '../../hooks/useNow';
 import { exportSessionReport } from '../../services/exportSessionReport';
+import { exportPatternReport } from '../../services/exportPatternReport';
+import { tierLongLabel, tierShortLabel, OFFLINE_TIER_LABEL, topicDisplayLabel, EXPORT_SHEET_TEXT } from '../../config/displayText';
 
 const TIER_CONFIG = {
   Critical:   { bg: '#3d1010', text: '#f87171', border: '#7f1d1d',
-                label: 'CRITICAL — apnea suspected', dot: '#ef4444' },
+                label: tierLongLabel('Critical'),    dot: '#ef4444' },
   Important:  { bg: '#2d1f07', text: '#fbbf24', border: '#78350f',
-                label: 'IMPORTANT — abnormal trend', dot: '#f59e0b' },
+                label: tierLongLabel('Important'),   dot: '#f59e0b' },
   Normal:     { bg: '#0a2010', text: '#4ade80', border: '#14532d',
-                label: 'NORMAL — routine sleep',    dot: '#22c55e' },
+                label: tierLongLabel('Normal'),      dot: '#22c55e' },
 };
 
 const HISTORY_TYPE_CONFIG = {
@@ -24,7 +27,7 @@ const HISTORY_TYPE_CONFIG = {
 // Non-live records carry no current severity, so the tier banner shows a
 // neutral offline state instead of deriving a tier from the seeded record.
 const OFFLINE_TIER = { bg: '#13131f', border: '#2a2a4a', text: '#9ca3af',
-                       dot: '#6b7280', label: 'OFFLINE — no live session' };
+                       dot: '#6b7280', label: OFFLINE_TIER_LABEL };
 
 const RECORD_COLOR = '#9ca3af';   // neutral grey for non-live (record) values
 
@@ -65,8 +68,9 @@ function MedicalHistoryItem({ record }) {
 
 export default function PatientDetailScreen({ route }) {
   const { patient } = route.params;
-  const { patientSnapshots, sessionStats, currentData, sleepTimeline } = useSleep();
-  const [exporting, setExporting] = useState(false);
+  const { patientSnapshots, sessionStats, currentData, sleepTimeline, aiRecommendations } = useSleep();
+  const [busyKey, setBusyKey] = useState(null); // 'session' | 'pattern' | null
+  const [exportPickerOpen, setExportPickerOpen] = useState(false);
   const now = useNow();
 
   // Live overlay: only the patient whose patientId is streaming gets fresh
@@ -92,25 +96,62 @@ export default function PatientDetailScreen({ route }) {
 
   // The PDF export reuses the patient-side report (services/exportSessionReport).
   // It can only cover this patient if they have streamed during this app run,
-  // so the button stays disabled for records that never had a session.
+  // so the session row stays disabled for records that never had a session.
   const canExport = !!snapshot;
 
-  async function handleExportReport() {
-    setExporting(true);
-    try {
-      await exportSessionReport({
+  // Nightly pattern report: needs a sleep/recommendation band for THIS
+  // patient (broadcast payloads are stored per patientId in SleepContext).
+  const recommendation = patient.patientId ? aiRecommendations[patient.patientId] : null;
+  const patternAvailable = !!recommendation?.band;
+
+  function runExport(key, task) {
+    setExportPickerOpen(false);
+    setBusyKey(key);
+    task().catch(e => {
+      console.error(`PDF export failed (${key}):`, e);
+    }).finally(() => setBusyKey(null));
+  }
+
+  const handleExportSession = () =>
+    runExport('session', () =>
+      exportSessionReport({
         sessionStats,
         currentData,
         sleepTimeline,
         patientName: patient.name,
         patientId: patient.patientId,
-      });
-    } catch (e) {
-      console.error('PDF export failed:', e);
-    } finally {
-      setExporting(false);
-    }
-  }
+      }));
+
+  const handleExportPattern = () =>
+    runExport('pattern', () =>
+      exportPatternReport({
+        payload: recommendation,
+        patientName: patient.name,
+        patientId: patient.patientId,
+      }));
+
+  const exportRows = [
+    {
+      key: 'session',
+      icon: 'clipboard-pulse-outline',
+      title: EXPORT_SHEET_TEXT.session.title,
+      subtitle: EXPORT_SHEET_TEXT.session.subtitle,
+      enabled: canExport,
+      reason: EXPORT_SHEET_TEXT.session.unavailable,
+      busy: busyKey === 'session',
+      onPress: handleExportSession,
+    },
+    {
+      key: 'pattern',
+      icon: 'moon-waning-crescent',
+      title: EXPORT_SHEET_TEXT.pattern.title,
+      subtitle: EXPORT_SHEET_TEXT.pattern.subtitle,
+      enabled: patternAvailable,
+      reason: EXPORT_SHEET_TEXT.pattern.unavailable,
+      busy: busyKey === 'pattern',
+      onPress: handleExportPattern,
+    },
+  ];
 
   return (
     <ScrollView
@@ -151,7 +192,7 @@ export default function PatientDetailScreen({ route }) {
           color={hrColor}
         />
         <VitalCard
-          label="Critical Events"
+          label={`${tierShortLabel('Critical')} Events`}
           value={`${criticalCount}`}
           color={!isLive ? RECORD_COLOR : criticalCount > 0 ? '#f87171' : '#4ade80'}
         />
@@ -185,7 +226,7 @@ export default function PatientDetailScreen({ route }) {
           <MaterialCommunityIcons name="alert-circle" size={16} color="#f87171" />
           <View style={{ flex: 1 }}>
             <Text style={styles.alertTitle}>
-              {criticalCount} critical event{criticalCount > 1 ? 's' : ''} recorded
+              {criticalCount} {tierShortLabel('Critical').toLowerCase()} event{criticalCount > 1 ? 's' : ''} recorded
             </Text>
             <Text style={styles.alertBody}>
               SpO2 dropped below threshold during this session. Review MQTT alert log for timestamps.
@@ -194,30 +235,42 @@ export default function PatientDetailScreen({ route }) {
         </View>
       )}
 
-      {/* Session report export */}
+      {/* Report exports — one button opens the picker sheet (session /
+          nightly pattern); disabled when neither report has data yet */}
       <TouchableOpacity
-        style={[styles.exportBtn, (!canExport || exporting) && styles.exportBtnDisabled]}
-        onPress={handleExportReport}
-        disabled={!canExport || exporting}
+        style={[styles.exportBtn, (busyKey || (!canExport && !patternAvailable)) && styles.exportBtnDisabled]}
+        onPress={() => setExportPickerOpen(true)}
+        disabled={!!busyKey || (!canExport && !patternAvailable)}
         activeOpacity={0.75}
       >
-        {exporting
+        {busyKey
           ? <ActivityIndicator size="small" color="#818cf8" />
-          : <MaterialCommunityIcons name="file-pdf-box" size={18} color={canExport ? '#818cf8' : '#444'} />
+          : <MaterialCommunityIcons
+              name="file-pdf-box"
+              size={18}
+              color={canExport || patternAvailable ? '#818cf8' : '#444'}
+            />
         }
-        <Text style={[styles.exportText, !canExport && { color: '#444' }]}>
-          {exporting
+        <Text
+          style={[
+            styles.exportText,
+            !canExport && !patternAvailable && { color: '#444' },
+          ]}
+        >
+          {busyKey
             ? 'Exporting...'
             : canExport
               ? (isLive ? 'Export PDF' : 'Export PDF (last session)')
-              : 'No session to export'}
+              : patternAvailable
+                ? 'Export PDF (nightly)'
+                : 'No session to export'}
         </Text>
       </TouchableOpacity>
 
-      {/* MQTT topic row */}
+      {/* MQTT topic row — real topic stays; display name is centralized */}
       <View style={styles.mqttRow}>
         <Text style={styles.mqttLabel}>MQTT topic</Text>
-        <Text style={styles.mqttTopic}>{isLive && snapshot.topic ? snapshot.topic : 'no live session'}</Text>
+        <Text style={styles.mqttTopic}>{isLive && snapshot.topic ? topicDisplayLabel(snapshot.topic) : 'no live session'}</Text>
       </View>
 
       {/* Live / static notice */}
@@ -235,6 +288,13 @@ export default function PatientDetailScreen({ route }) {
               : 'Static demo record — no device assigned'}
         </Text>
       </View>
+
+      {/* Which PDF to export: live session or nightly pattern report */}
+      <ReportExportSheet
+        visible={exportPickerOpen}
+        onClose={() => setExportPickerOpen(false)}
+        rows={exportRows}
+      />
     </ScrollView>
   );
 }

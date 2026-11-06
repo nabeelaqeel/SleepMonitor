@@ -1,5 +1,6 @@
 import * as Print from 'expo-print';
 import * as Sharing from 'expo-sharing';
+import { DISCLAIMER } from '../config/displayText';
 
 // Builds the sleep-session report as an HTML document, renders it to a PDF
 // and opens the OS share sheet.
@@ -150,7 +151,7 @@ ${sleepTimeline.length > 0 ? `
   ${timelineRows}
 </table>` : ''}
 
-<div class="footer">Sleep Monitor · Auto-generated report · For clinical review only</div>
+<div class="footer">${DISCLAIMER.footer}<br/>Sleep Monitor · Auto-generated report</div>
 </body>
 </html>`;
 

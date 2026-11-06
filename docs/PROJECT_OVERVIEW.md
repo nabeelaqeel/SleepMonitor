@@ -366,11 +366,12 @@ remains an on-device estimate, not a thesis result.
 
 | Document | Contents |
 |---|---|
-| `README.md` | Setup, running instructions, payload schema, limitations |
+| `README.md` | Quick start + Docker full-stack run, QoS tier table, structure, limitations |
+| `docs/RUN_TERMINAL.md` | Docker-free, terminal-by-terminal run (host venv), incl. Mosquitto setup |
 | `docs/ARCHITECTURE.md` | App bootstrapping, state shape, component responsibilities |
 | `docs/DATA_MODEL.md` | Payload fields and app state mapping |
 | `docs/DATABASE.md` | Postgres schema, ingest worker, QoS delivery accounting; users + password_hash |
 | `docs/AUTH_API.md` | Login API: runbook, endpoints, JWT design, bcrypt/HS256 security summary |
-| `docs/MQTT_SETUP.md` | Broker configuration and topic layout |
+| `docs/MQTT_SETUP.md` | Broker configuration, topic layout, payload schema, QoS rationale |
 | `docs/DOCKER.md` | Containers, image tagging, CI/CD, branching *(on `feature/docker-cicd-infra`)* |
 | `docs/AWS_MIGRATION.md` | Target AWS architecture *(on `feature/docker-cicd-infra`)* |

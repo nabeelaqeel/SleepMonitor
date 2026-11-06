@@ -4,6 +4,7 @@ import {
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useSleep } from '../context/SleepContext';
+import { topicDisplayLabel, QOS_LEVEL_TEXT } from '../config/displayText';
 
 // Sub-millisecond-aware formatting.
 function formatLatency(ms) {
@@ -21,6 +22,8 @@ export default function NetworkScreen() {
 
   const totalMessages = sessionStats.total || 0;
 
+  // `name` and `tierKey` are real system identifiers (payload topics, stats
+  // keys) — the card shows the centralized display topic instead.
   const topics = [
     {
       name:      'sleep/critical',
@@ -124,7 +127,7 @@ export default function NetworkScreen() {
             color="#f87171"
             delivery={formatDelivery(networkStats.critical?.delivery)}
             latency={formatLatency(latencyStats[2]?.ms)}
-            useCase="Critical — apnea events"
+            useCase={QOS_LEVEL_TEXT.qos2.useCase}
           />
           <View style={styles.compareDivider} />
           <CompareRow
@@ -132,7 +135,7 @@ export default function NetworkScreen() {
             color="#fbbf24"
             delivery={formatDelivery(networkStats.important?.delivery)}
             latency={formatLatency(latencyStats[1]?.ms)}
-            useCase="Important — abnormal trends"
+            useCase={QOS_LEVEL_TEXT.qos1.useCase}
           />
           <View style={styles.compareDivider} />
           <CompareRow
@@ -140,7 +143,7 @@ export default function NetworkScreen() {
             color="#4ade80"
             delivery={formatDelivery(networkStats.normal?.delivery)}
             latency={formatLatency(latencyStats[0]?.ms)}
-            useCase="Normal + Background data"
+            useCase={QOS_LEVEL_TEXT.qos0.useCase}
           />
         </View>
 
@@ -150,17 +153,17 @@ export default function NetworkScreen() {
           <ExplainRow
             level="QoS 2"
             color="#f87171"
-            desc="Exactly-once delivery. Broker stores message and waits for acknowledgement. Used for life-critical apnea events."
+            desc={QOS_LEVEL_TEXT.qos2.explain}
           />
           <ExplainRow
             level="QoS 1"
             color="#fbbf24"
-            desc="At least once delivery. Message may duplicate but never lost. Used for important physiological trends."
+            desc={QOS_LEVEL_TEXT.qos1.explain}
           />
           <ExplainRow
             level="QoS 0"
             color="#9ca3af"
-            desc="Best effort delivery. May be dropped under network load. Acceptable for routine sleep data and statistics."
+            desc={QOS_LEVEL_TEXT.qos0.explain}
           />
         </View>
 
@@ -189,7 +192,7 @@ function TopicCard({ topic, stats, latency }) {
   return (
     <View style={[styles.topicCard, { borderLeftColor: topic.color }]}>
       <View style={styles.topicTop}>
-        <Text style={styles.topicName}>{topic.name}</Text>
+        <Text style={styles.topicName}>{topicDisplayLabel(topic.name)}</Text>
         <View style={[styles.qosBadge, { backgroundColor: topic.badgeBg }]}>
           <Text style={[styles.qosBadgeText, { color: topic.color }]}>
             {topic.qosLabel}

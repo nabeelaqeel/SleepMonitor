@@ -344,6 +344,10 @@ export function SleepProvider({ children, patientId = null }) {
       latencyStats,
       sleepTimeline,
       patientSnapshots,
+      // Raw per-patient recommendation map — doctor screens pick their
+      // patient's entry here (aiRecommendation below is only for the patient
+      // app, where the provider was mounted with a patientId).
+      aiRecommendations,
       aiRecommendation: patientId
         ? aiRecommendations[patientId] || AWAITING_AI_RECOMMENDATION
         : AWAITING_AI_RECOMMENDATION,

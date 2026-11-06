@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import json
+import math
 import unittest
 from unittest.mock import MagicMock, patch
 from ai.nightly_adapter import get_recommendation, session_to_nightly_features
@@ -71,6 +73,55 @@ class RecommendationPayloadTestCase(unittest.TestCase):
         self.assertEqual(payload["band"], "monitor")
         self.assertEqual(payload["disclaimer"], "Research guidance band only.")
         self.assertNotIn("not_sent", payload)
+
+    def test_payload_carries_report_export_fields(self):
+        """The export fields the nightly PDF needs ride along in the payload."""
+        result = {
+            "session_id": "abc",
+            "patient_id": "pd",
+            "band": "monitor",
+            "p_positive": 0.5,
+            "flagged_positive": True,
+            "threshold": 0.1292,
+            "window": {"start": "2026-11-04T01:00:00+00:00",
+                       "end": "2026-11-04T07:30:00+00:00"},
+            "model_version": "rf_phase2.joblib",
+            "trained_on": "139 participants, PAAWS R2 v1.3",
+            "disclaimer": "Research guidance band only.",
+            "nightly": {
+                "hr_median": 55.2,
+                "spo2_below90_frac": 0.04,
+                "rmssd_coverage": 0.82,
+                "hrv_sufficient": True,
+                "sleep_minutes": 396.0,
+            },
+        }
+        payload = recommendation_payload(result)
+
+        self.assertEqual(payload["threshold"], 0.1292)
+        self.assertEqual(payload["window"]["start"], "2026-11-04T01:00:00+00:00")
+        self.assertEqual(payload["modelVersion"], "rf_phase2.joblib")
+        self.assertEqual(payload["trainedOn"], "139 participants, PAAWS R2 v1.3")
+        self.assertEqual(payload["nightly"]["hr_median"], 55.2)
+
+        # The extended payload must stay strict-JSON-safe, since it travels
+        # over MQTT and is parsed phone-side.
+        json.dumps(payload, allow_nan=False)
+
+    def test_nightly_nan_becomes_null_in_payload(self):
+        """NaN nightly features serialize as JSON null, never bare NaN."""
+        result = {
+            "session_id": "abc",
+            "band": None,
+            "p_positive": 0.5,
+            "flagged_positive": False,
+            "disclaimer": "Research guidance band only.",
+            "nightly": {"rmssd_median": math.nan},
+        }
+        payload = recommendation_payload(result)
+
+        self.assertIsNone(payload["nightly"]["rmssd_median"])
+        json.dumps(payload, allow_nan=False)
 
 
 if __name__ == "__main__":
