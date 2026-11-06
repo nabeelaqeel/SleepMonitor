@@ -6,7 +6,7 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import VitalCard from '../components/VitalCard';
 import { useSleep } from '../context/SleepContext';
 import {
-  tierLongLabel, aiBandLabel, DISCLAIMER, topicDisplayLabel,
+  tierLongLabel, aiBandLabel, DISCLAIMER,
 } from '../config/displayText';
 
 const TIER_CONFIG = {
@@ -116,9 +116,9 @@ export default function HomeScreen() {
           </View>
         )}
 
-        {/* Sleep assessment (AI module, post-night, separate from QoS).
+        {/* AI sleep assessment (AI module, post-night, separate from QoS).
             Band values are what the user reads; the wording is centralized. */}
-        <Text style={styles.sectionLabel}>Sleep assessment</Text>
+        <Text style={styles.sectionLabel}>AI sleep assessment</Text>
         <View style={styles.assessmentCard}>
           <Text style={styles.assessmentValue}>
             {aiBandLabel(aiRecommendation?.band)}
@@ -128,14 +128,6 @@ export default function HomeScreen() {
             {aiRecommendation?.band
               ? DISCLAIMER.inlineNote
               : DISCLAIMER.awaiting}
-          </Text>
-        </View>
-
-        {/* MQTT topic footer — real topic stays; display name is centralized */}
-        <View style={styles.mqttRow}>
-          <Text style={styles.mqttLabel}>MQTT topic</Text>
-          <Text style={styles.mqttTopic}>
-            {topicDisplayLabel(`sleep/${currentData.tier.toLowerCase()}`)}
           </Text>
         </View>
 
@@ -214,13 +206,6 @@ const styles = StyleSheet.create({
   },
   alertTitle:  { fontSize: 13, color: '#f87171', fontWeight: '700', marginBottom: 4 },
   alertBody:   { fontSize: 12, color: '#888', lineHeight: 18 },
-  mqttRow:     {
-    flexDirection: 'row', justifyContent: 'space-between',
-    backgroundColor: '#13131f', borderRadius: 10,
-    padding: 12, borderWidth: 0.5, borderColor: '#1e1e30',
-  },
-  mqttLabel:   { fontSize: 12, color: '#555' },
-  mqttTopic:   { fontSize: 12, color: '#818cf8', fontWeight: '600' },
   disclaimerFooter: {
     marginTop: 16, paddingTop: 12,
     borderTopWidth: 0.5, borderTopColor: '#1e1e30',

@@ -118,6 +118,31 @@ services:
     container_name: sleep-echo
     command: ["python", "publisher/echo.py"]
 
+  # ── AI recommendation DEMO service ──
+  # Demo mode is OFF by default: this service only starts when the compose
+  # command carries --profile ai-demo. It loops a synthetic night through the
+  # real trained model and publishes the band to sleep/recommendation every
+  # AI_DEMO_INTERVAL seconds (rotate cycles healthy → monitor → apnea).
+  #
+  # ON:   docker compose -f docker-compose.aws.yml --env-file .env.development \
+  #         --profile ai-demo up -d --build
+  # OFF:  same command without the flag, then up -d — compose removes only
+  #       this container.
+  #
+  # AI_DEMO_PATIENT_ID must equal the patientId of the app account you log
+  # into during the demo (the app keys recommendations by that field).
+  ai-demo:
+    profiles: [ai-demo]
+    <<: *python-common
+    container_name: sleep-ai-demo
+    environment:
+      MQTT_HOST: broker
+      MQTT_PORT: "1883"
+    command:
+      ["python", "-m", "ai.demo", "--publish-loop", "--scenario", "rotate",
+       "--interval", "${AI_DEMO_INTERVAL:-60}", "--retain",
+       "--patient-id", "${AI_DEMO_PATIENT_ID:-demo-patient}"]
+
 volumes:
   mosquitto_data:
     driver: local
