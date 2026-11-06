@@ -52,7 +52,39 @@ echo "watching https://github.com/$REPO_SLUG/pull/$NAMESPACE for coderabbitai co
 echo "stop with Ctrl-C; a fresh review round prints here the moment it posts."
 echo
 
-# ── collect new coderabbitai comments; return "" and update state file ───────
+# ── python payload: report new coderabbitai comments, bump the id state file ─
+# Note: script goes via -c so stdin stays free for the curl data, and a
+# transient API hiccup is swallowed (state untouched, retried next poll).
+PY_MAIN='
+import json, os, sys, textwrap
+
+state_path = sys.argv[1]
+picker = os.environ.get("REMOTE_PICKER", "")
+
+try:
+    raw = sys.stdin.read()
+    items = json.loads(raw) if raw.strip() else []
+    items = items if isinstance(items, list) else []
+except Exception:
+    sys.exit(0)  # transient API hiccup — retry next poll
+
+last = int(open(state_path).read().strip())
+new = [c for c in items
+       if c.get("user", {}).get("login", "").startswith("coderabbitai")
+       and c.get("id", 0) > last]
+
+max_id = max([c.get("id", 0) for c in items] + [last])
+open(state_path, "w").write(str(max_id))
+
+for c in sorted(new, key=lambda x: x["id"]):
+    body = (c.get("body") or "").strip()
+    head = "\n".join(body.splitlines()[:45])
+    print("[%s] %s id=%s — %s" % (c.get("created_at", ""), picker, c["id"], c.get("html_url", "")))
+    print(textwrap.indent(head[:4000], "  | "))
+    print()
+'
+
+# ── collect new coderabbitai comments for one collection endpoint ────────────
 # State file holds the highest comment id already reported.
 state_file="$(mktemp -t codrabit.XXXXXX)"
 trap 'rm -f "$state_file"' EXIT
@@ -64,33 +96,8 @@ else
 fi
 
 new_for_kind() {
-  # $1 = API collection URL, $2 = comma keywords joined into the label
-  curl -s "$1" | REMOTE_PICKER="$2" python3 - "$state_file" <<'PYEOF'
-import json, os, sys
-
-state_path = sys.argv[1]
-last = int(open(state_path).read().strip())
-picker = os.environ.get("REMOTE_PICKER", "")
-
-items = json.load(sys.stdin) or []
-new = [c for c in items
-       if c.get("user", {}).get("login", "").startswith("coderabbitai")
-       and c.get("id", 0) > last]
-
-max_id = max([c.get("id", 0) for c in items] + [last])
-open(state_path, "w").write(str(max_id))
-
-if not new:
-    sys.exit(0)
-
-import textwrap
-for c in sorted(new, key=lambda x: x["id"]):
-    body = (c.get("body") or "").strip()
-    head = "\n".join(body.splitlines()[:45])
-    print(f"[{c.get('created_at','')}] {picker} id={c['id']} — {c.get('html_url','')}")
-    print(textwrap.indent(head[:4000], "  | "))
-    print()
-PYEOF
+  # $1 = API collection URL, $2 = label for the report header
+  curl -s "$1" | REMOTE_PICKER="$2" python3 -c "$PY_MAIN" "$state_file"
 }
 
 while true; do
