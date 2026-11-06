@@ -68,8 +68,11 @@ say "── mode: $MODE (profile: ${PROFILE[*]:-none})"
 # ── git step ─────────────────────────────────────────────────
 if [ "$SKIP_PULL" = 1 ]; then
   say "── git: skipped (--skip-pull)"
+elif [ ! -d .git ]; then
+  # tarball/Option-B deployments (git archive) have no .git — the pull step is
+  # meaningless there, so it is GENUINELY skipped instead of failing later:
+  say "⚠ not a git checkout — skipping the pull entirely"
 else
-  [ -d .git ] || { say "⚠ not a git checkout — skipping the pull"; }
   if [ "$DRY" = 1 ]; then
     say "[dry-run] git fetch + dirty check + git pull --ff-only"
   else
@@ -125,19 +128,33 @@ else
   fail=1
 fi
 
-# login round-trip: bcrypt-verified against the ACTIVE database, so a token
-# also proves api → DB connectivity (3 attempts: uvicorn may still be booting)
-token=""
+# /auth/login round-trip (3 attempts: uvicorn may still be booting). With the
+# default SEED_DEMO_USERS=true a token proves bcrypt → api → ACTIVE database;
+# with seeding off the demo account may not exist, so ANY structured response
+# (a 401 body, say) already proves the api is up and the token check is skipped.
+seed="$(grep '^SEED_DEMO_USERS=' .env.development | cut -d= -f2- | tr -d ' ' | tr '[:upper:]' '[:lower:]')"
+case "$seed" in 1|true|yes|"") seeded=1 ;; *) seeded=0 ;; esac
+resp=""
 for _ in 1 2 3; do
   resp="$(curl -sS --max-time 10 -X POST http://localhost:8000/auth/login \
             -H 'Content-Type: application/json' \
             -d '{"email":"patient@sleep.com","password":"1234"}' 2>/dev/null || true)"
-  case "$resp" in *'"token"'*) token=1; break ;; *) sleep 3 ;; esac
+  [ -n "$resp" ] && break
+  sleep 3
 done
-if [ -n "$token" ]; then
-  say "✓ /auth/login returned a token (api → database OK)"
+if [ -n "$resp" ]; then
+  if [ "$seeded" = 1 ]; then
+    if printf '%s' "$resp" | grep -q '"token"'; then
+      say "✓ /auth/login returned a token (bcrypt → api → database OK)"
+    else
+      say "✗ /auth/login gave no token — check: docker logs sleep-api --tail 20 (runbook §7)"
+      fail=1
+    fi
+  else
+    say "✓ api reachable (SEED_DEMO_USERS disabled — token round-trip skipped)"
+  fi
 else
-  say "✗ /auth/login gave no token — check: docker logs sleep-api --tail 20 (runbook §7)"
+  say "✗ /auth/login unreachable — check: docker logs sleep-api --tail 20 (runbook §7)"
   fail=1
 fi
 

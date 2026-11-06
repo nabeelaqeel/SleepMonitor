@@ -173,9 +173,22 @@ if [ "$DEMO" = 1 ]; then
     say "[dry-run] fill <FILL_RDS_*> markers, comment the TEST line, activate the RDS line"
     say "[dry-run] PGSSLMODE=require psql -h <endpoint> -U sleep_user -d sleep_monitor -f postgres/init/01_schema.sql"
   else
+    # percent-encode the DSN password: a raw @ / or : inside the URL breaks
+    # postgres URL parsing entirely; PGPASSWORD + the schema psql below keep
+    # the RAW value (env vars and arguments are not URLs — do not encode there)
+    enc_pw=""
+    for ((i = 0; i < ${#RDS_PW}; i++)); do
+      c="${RDS_PW:i:1}"
+      case "$c" in
+        [a-zA-Z0-9._~-]) enc_pw+="$c" ;;
+        *) enc_pw+=$(printf '%%%02X' "'$c") ;;
+      esac
+    done
+    # single-quoted | delimiter + encoded pw (only % and hex survive) and a
+    # plain hostname → no sed metacharacters can corrupt either replacement:
     sed -i \
-      -e "s/<FILL_RDS_ENDPOINT>/$RDS_ENDPOINT/g" \
-      -e "s/<FILL_RDS_PASSWORD>/$RDS_PW/g" \
+      -e "s|<FILL_RDS_ENDPOINT>|$RDS_ENDPOINT|g" \
+      -e "s|<FILL_RDS_PASSWORD>|$enc_pw|g" \
       .env.development
     # swap the two DATABASE_URL lines (§5 flip block, automated):
     sed -i 's|^\(DATABASE_URL=postgresql://sleep_user:[^@]*\)@postgres:5432/sleep_monitor$|# \1@postgres:5432/sleep_monitor|' .env.development
@@ -260,7 +273,7 @@ fi
 # ── 8. handoff: the values the *phone* side needs ─────────────
 if [ -n "$IP_OVERRIDE" ]; then
   IP="$IP_OVERRIDE"
-elif [ "$DRY" != 1 ] && TOKEN_PW="$(curl -fsS -m 2 -X PUT 'http://169.254.169.254/latest/api/token' -H 'X-aws-ec2-metadata-token: 256' 2>/dev/null)" && [ -n "${TOKEN_PW:-}" ]; then
+elif [ "$DRY" != 1 ] && TOKEN_PW="$(curl -fsS -m 2 -X PUT 'http://169.254.169.254/latest/api/token' -H 'X-aws-ec2-metadata-token-ttl-seconds: 60' 2>/dev/null)" && [ -n "${TOKEN_PW:-}" ]; then
   # EC2: hostname -I prints only the PRIVATE address — the app needs PUBLIC
   IP="$(curl -fsS -m 2 -H "X-aws-ec2-metadata-token: $TOKEN_PW" http://169.254.169.254/latest/meta-data/public-ipv4 2>/dev/null || true)"
 fi
