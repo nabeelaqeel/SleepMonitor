@@ -3,6 +3,7 @@ import {
   View, Text, StyleSheet,
   FlatList, TouchableOpacity,
 } from 'react-native';
+import { tierShortLabel, topicDisplayLabel } from '../config/displayText';
 
 const TIER_STYLE = {
   Critical:   { border: '#ef4444', badge: '#3d1010', badgeText: '#f87171' },
@@ -11,6 +12,8 @@ const TIER_STYLE = {
   Background: { border: '#6b7280', badge: '#1a1a1a', badgeText: '#9ca3af' },
 };
 
+// Filter pills display the centralized short labels, but filtering still
+// compares raw code identifiers ('Critical' / 'Important') — never renamed.
 const FILTERS = ['All', 'Critical', 'Important'];
 
 // Shared event log — used by the patient's Alerts tab and the doctor's
@@ -40,7 +43,7 @@ export default function EventLog({
             onPress={() => setFilter(f)}
           >
             <Text style={[styles.pillText, filter === f && styles.pillTextActive]}>
-              {f}
+              {f === 'All' ? f : tierShortLabel(f)}
             </Text>
           </TouchableOpacity>
         ))}
@@ -78,7 +81,7 @@ function EventItem({ event, patientLabel }) {
           ) : null}
           <View style={[styles.badge, { backgroundColor: style.badge }]}>
             <Text style={[styles.badgeText, { color: style.badgeText }]}>
-              {event.tier}
+              {tierShortLabel(event.tier)}
             </Text>
           </View>
         </View>
@@ -89,7 +92,7 @@ function EventItem({ event, patientLabel }) {
         <Text style={styles.valueText}>HR {event.hr} bpm</Text>
       </View>
       <Text style={styles.reason}>{event.reason}</Text>
-      <Text style={styles.topic}>{event.topic}</Text>
+      <Text style={styles.topic}>{topicDisplayLabel(event.topic)}</Text>
     </View>
   );
 }

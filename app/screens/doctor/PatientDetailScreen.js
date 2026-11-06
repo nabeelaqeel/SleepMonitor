@@ -5,14 +5,15 @@ import VitalCard from '../../components/VitalCard';
 import { useSleep, PATIENT_LIVE_WINDOW_MS } from '../../context/SleepContext';
 import { useNow } from '../../hooks/useNow';
 import { exportSessionReport } from '../../services/exportSessionReport';
+import { tierLongLabel, tierShortLabel, OFFLINE_TIER_LABEL, topicDisplayLabel } from '../../config/displayText';
 
 const TIER_CONFIG = {
   Critical:   { bg: '#3d1010', text: '#f87171', border: '#7f1d1d',
-                label: 'CRITICAL — apnea suspected', dot: '#ef4444' },
+                label: tierLongLabel('Critical'),    dot: '#ef4444' },
   Important:  { bg: '#2d1f07', text: '#fbbf24', border: '#78350f',
-                label: 'IMPORTANT — abnormal trend', dot: '#f59e0b' },
+                label: tierLongLabel('Important'),   dot: '#f59e0b' },
   Normal:     { bg: '#0a2010', text: '#4ade80', border: '#14532d',
-                label: 'NORMAL — routine sleep',    dot: '#22c55e' },
+                label: tierLongLabel('Normal'),      dot: '#22c55e' },
 };
 
 const HISTORY_TYPE_CONFIG = {
@@ -24,7 +25,7 @@ const HISTORY_TYPE_CONFIG = {
 // Non-live records carry no current severity, so the tier banner shows a
 // neutral offline state instead of deriving a tier from the seeded record.
 const OFFLINE_TIER = { bg: '#13131f', border: '#2a2a4a', text: '#9ca3af',
-                       dot: '#6b7280', label: 'OFFLINE — no live session' };
+                       dot: '#6b7280', label: OFFLINE_TIER_LABEL };
 
 const RECORD_COLOR = '#9ca3af';   // neutral grey for non-live (record) values
 
@@ -151,7 +152,7 @@ export default function PatientDetailScreen({ route }) {
           color={hrColor}
         />
         <VitalCard
-          label="Critical Events"
+          label={`${tierShortLabel('Critical')} Events`}
           value={`${criticalCount}`}
           color={!isLive ? RECORD_COLOR : criticalCount > 0 ? '#f87171' : '#4ade80'}
         />
@@ -185,7 +186,7 @@ export default function PatientDetailScreen({ route }) {
           <MaterialCommunityIcons name="alert-circle" size={16} color="#f87171" />
           <View style={{ flex: 1 }}>
             <Text style={styles.alertTitle}>
-              {criticalCount} critical event{criticalCount > 1 ? 's' : ''} recorded
+              {criticalCount} {tierShortLabel('Critical').toLowerCase()} event{criticalCount > 1 ? 's' : ''} recorded
             </Text>
             <Text style={styles.alertBody}>
               SpO2 dropped below threshold during this session. Review MQTT alert log for timestamps.
@@ -214,10 +215,10 @@ export default function PatientDetailScreen({ route }) {
         </Text>
       </TouchableOpacity>
 
-      {/* MQTT topic row */}
+      {/* MQTT topic row — real topic stays; display name is centralized */}
       <View style={styles.mqttRow}>
         <Text style={styles.mqttLabel}>MQTT topic</Text>
-        <Text style={styles.mqttTopic}>{isLive && snapshot.topic ? snapshot.topic : 'no live session'}</Text>
+        <Text style={styles.mqttTopic}>{isLive && snapshot.topic ? topicDisplayLabel(snapshot.topic) : 'no live session'}</Text>
       </View>
 
       {/* Live / static notice */}

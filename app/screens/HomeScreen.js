@@ -5,33 +5,23 @@ import {
 import { SafeAreaView } from 'react-native-safe-area-context';
 import VitalCard from '../components/VitalCard';
 import { useSleep } from '../context/SleepContext';
+import {
+  tierLongLabel, aiBandLabel, DISCLAIMER, topicDisplayLabel,
+} from '../config/displayText';
 
 const TIER_CONFIG = {
   Critical:   { bg: '#3d1010', text: '#f87171', border: '#7f1d1d',
-                label: 'CRITICAL — apnea suspected', dot: '#ef4444' },
+                label: tierLongLabel('Critical'),    dot: '#ef4444' },
   Important:  { bg: '#2d1f07', text: '#fbbf24', border: '#78350f',
-                label: 'IMPORTANT — abnormal trend', dot: '#f59e0b' },
+                label: tierLongLabel('Important'),   dot: '#f59e0b' },
   Normal:     { bg: '#0a2010', text: '#4ade80', border: '#14532d',
-                label: 'NORMAL — routine sleep',    dot: '#22c55e' },
+                label: tierLongLabel('Normal'),      dot: '#22c55e' },
   Background: { bg: '#1a1a1a', text: '#9ca3af', border: '#374151',
-                label: 'BACKGROUND — statistics',   dot: '#6b7280' },
+                label: tierLongLabel('Background'),  dot: '#6b7280' },
 };
-
-// Maps the trained model's band labels to readable UI text.
-const AI_BAND_LABELS = {
-  healthy:    'Healthy',
-  monitor:    'Monitor',
-  see_doctor: 'See Doctor',
-};
-
-function readableAiBand(band) {
-  if (typeof band !== 'string' || band.length === 0) {
-    return '—';
-  }
-  return Object.hasOwn(AI_BAND_LABELS, band)
-    ? AI_BAND_LABELS[band]
-    : band;
-}
+// Code identifiers — the band keys ('healthy'/'monitor'/'see_doctor'), the
+// tier keys above, `currentData.tier` comparisons and `sleep/<tier>` topics —
+// stay untouched. User-facing wording lives in config/displayText.js.
 
 export default function HomeScreen() {
   const { currentData, spo2History, aiRecommendation } = useSleep();
@@ -126,26 +116,32 @@ export default function HomeScreen() {
           </View>
         )}
 
-        {/* Sleep assessment (AI module, post-night, separate from QoS) */}
-        <View style={styles.mqttRow}>
-          <Text style={styles.mqttLabel}>Sleep assessment</Text>
-          <Text style={styles.mqttTopic}>
-            {readableAiBand(aiRecommendation?.band)}
+        {/* Sleep assessment (AI module, post-night, separate from QoS).
+            Band values are what the user reads; the wording is centralized. */}
+        <Text style={styles.sectionLabel}>Sleep assessment</Text>
+        <View style={styles.assessmentCard}>
+          <Text style={styles.assessmentValue}>
+            {aiBandLabel(aiRecommendation?.band)}
+          </Text>
+          {/* Inline note under the indicator (research tier, not a diagnosis) */}
+          <Text style={styles.inlineNote}>
+            {aiRecommendation?.band
+              ? DISCLAIMER.inlineNote
+              : DISCLAIMER.awaiting}
           </Text>
         </View>
 
-        {/* Disclaimer */}
-        <Text style={styles.aiResultText}>
-          {aiRecommendation?.disclaimer ||
-            'Awaiting nightly analysis.'}
-        </Text>
-
-        {/* MQTT topic footer */}
+        {/* MQTT topic footer — real topic stays; display name is centralized */}
         <View style={styles.mqttRow}>
           <Text style={styles.mqttLabel}>MQTT topic</Text>
           <Text style={styles.mqttTopic}>
-            sleep/{currentData.tier.toLowerCase()}
+            {topicDisplayLabel(`sleep/${currentData.tier.toLowerCase()}`)}
           </Text>
+        </View>
+
+        {/* Always-visible footer — research prototype, guidance only */}
+        <View style={styles.disclaimerFooter}>
+          <Text style={styles.disclaimerFooterText}>{DISCLAIMER.footer}</Text>
         </View>
 
       </ScrollView>
@@ -193,7 +189,13 @@ const styles = StyleSheet.create({
   tierLabel:   { fontSize: 13, fontWeight: '700', flex: 1 },
   tierTime:    { fontSize: 12, opacity: 0.7 },
   reasonText:  { fontSize: 11, color: '#555', marginBottom: 16, fontStyle: 'italic' },
-  aiResultText:{ fontSize: 10, color: '#4b5563', marginTop: 6, fontStyle: 'italic' },
+  assessmentCard: {
+    backgroundColor: '#13131f', borderRadius: 12,
+    padding: 14, marginBottom: 12,
+    borderWidth: 0.5, borderColor: '#1e1e30',
+  },
+  assessmentValue: { fontSize: 15, color: '#818cf8', fontWeight: '600' },
+  inlineNote:  { fontSize: 10, color: '#555', marginTop: 8, fontStyle: 'italic', lineHeight: 15 },
   sectionLabel:{ fontSize: 11, color: '#555', marginBottom: 10,
                  letterSpacing: 0.5, textTransform: 'uppercase' },
   grid:        { flexDirection: 'row', flexWrap: 'wrap', gap: 10, marginBottom: 22 },
@@ -219,6 +221,13 @@ const styles = StyleSheet.create({
   },
   mqttLabel:   { fontSize: 12, color: '#555' },
   mqttTopic:   { fontSize: 12, color: '#818cf8', fontWeight: '600' },
+  disclaimerFooter: {
+    marginTop: 16, paddingTop: 12,
+    borderTopWidth: 0.5, borderTopColor: '#1e1e30',
+  },
+  disclaimerFooterText: {
+    fontSize: 10, color: '#4b5563', textAlign: 'center', lineHeight: 15,
+  },
 });
 
 const spark = StyleSheet.create({

@@ -4,6 +4,7 @@ import EventLog from '../../components/EventLog';
 import { useSleep, PATIENT_LIVE_WINDOW_MS } from '../../context/SleepContext';
 import { useNow } from '../../hooks/useNow';
 import { MOCK_PATIENTS } from '../../data/patients';
+import { alertSubtitleCounts } from '../../config/displayText';
 
 // The doctor's alert inbox. The app currently receives a single live stream,
 // so this list is that session's events, captioned with the patient they
@@ -34,7 +35,7 @@ export default function DoctorAlertsScreen() {
       <View style={styles.header}>
         <Text style={styles.title}>Alerts</Text>
         <Text style={styles.subtitle}>
-          {sessionStats.critical} critical · {sessionStats.important} important
+          {alertSubtitleCounts(sessionStats.critical, sessionStats.important)}
         </Text>
         {caption && (
           <View style={styles.sessionRow}>

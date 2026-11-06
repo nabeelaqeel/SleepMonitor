@@ -7,6 +7,7 @@ import { MaterialCommunityIcons } from '@expo/vector-icons';
 import PatientListScreen   from '../screens/doctor/PatientListScreen';
 import PatientDetailScreen from '../screens/doctor/PatientDetailScreen';
 import DoctorAlertsScreen  from '../screens/doctor/DoctorAlertsScreen';
+import AboutScreen         from '../screens/AboutScreen';
 
 const Tab   = createBottomTabNavigator();
 const Stack = createNativeStackNavigator();
@@ -83,6 +84,16 @@ export default function DoctorNavigator({ onLogout }) {
           options={{
             tabBarIcon: ({ color, size }) => (
               <MaterialCommunityIcons name="bell-alert" color={color} size={size} />
+            ),
+          }}
+        />
+
+        <Tab.Screen
+          name="About"
+          component={AboutScreen}
+          options={{
+            tabBarIcon: ({ color, size }) => (
+              <MaterialCommunityIcons name="information-outline" color={color} size={size} />
             ),
           }}
         />

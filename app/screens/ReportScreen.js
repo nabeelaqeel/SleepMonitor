@@ -7,6 +7,7 @@ import { MaterialCommunityIcons } from '@expo/vector-icons';
 import { useState } from 'react';
 import { useSleep } from '../context/SleepContext';
 import { exportSessionReport } from '../services/exportSessionReport';
+import { tierShortLabel, topicDisplayLabel } from '../config/displayText';
 
 export default function ReportScreen() {
   const { sessionStats, currentData, sleepTimeline } = useSleep();
@@ -21,27 +22,29 @@ export default function ReportScreen() {
     ? Math.round(hrValues.reduce((a, b) => a + b, 0) / hrValues.length)
     : '--';
 
+  // Legend names come from the centralized display labels; the underlying
+  // sessionStats keys (critical / important / normal / background) stay as-is.
   const tiers = [
     {
-      name:    'Critical',
+      name:    tierShortLabel('Critical'),
       color:   '#ef4444',
       count:   sessionStats.critical,
       pct:     Math.round((sessionStats.critical / total) * 100),
     },
     {
-      name:    'Important',
+      name:    tierShortLabel('Important'),
       color:   '#f59e0b',
       count:   sessionStats.important,
       pct:     Math.round((sessionStats.important / total) * 100),
     },
     {
-      name:    'Normal',
+      name:    tierShortLabel('Normal'),
       color:   '#22c55e',
       count:   sessionStats.normal,
       pct:     Math.round((sessionStats.normal / total) * 100),
     },
     {
-      name:    'Background',
+      name:    tierShortLabel('Background'),
       color:   '#6b7280',
       count:   sessionStats.background,
       pct:     Math.round((sessionStats.background / total) * 100),
@@ -91,12 +94,12 @@ export default function ReportScreen() {
         {/* Summary cards */}
         <View style={styles.grid}>
           <SummaryCard
-            label="Critical events"
+            label={`${tierShortLabel('Critical')} events`}
             value={sessionStats.critical}
             color="#f87171"
           />
           <SummaryCard
-            label="Important events"
+            label={`${tierShortLabel('Important')} events`}
             value={sessionStats.important}
             color="#fbbf24"
           />
@@ -117,7 +120,7 @@ export default function ReportScreen() {
           />
           <SummaryCard
             label="Current tier"
-            value={currentData.tier}
+            value={tierShortLabel(currentData.tier)}
             color="#818cf8"
           />
         </View>
@@ -159,25 +162,25 @@ export default function ReportScreen() {
         <Text style={styles.sectionLabel}>QoS transmission summary</Text>
         <View style={styles.qosCard}>
           <QoSRow
-            topic="sleep/critical"
+            topic={topicDisplayLabel('sleep/critical')}
             qos="QoS 2"
             count={sessionStats.critical}
             color="#f87171"
           />
           <QoSRow
-            topic="sleep/important"
+            topic={topicDisplayLabel('sleep/important')}
             qos="QoS 1"
             count={sessionStats.important}
             color="#fbbf24"
           />
           <QoSRow
-            topic="sleep/normal"
+            topic={topicDisplayLabel('sleep/normal')}
             qos="QoS 0"
             count={sessionStats.normal}
             color="#4ade80"
           />
           <QoSRow
-            topic="sleep/background"
+            topic={topicDisplayLabel('sleep/background')}
             qos="QoS 0"
             count={sessionStats.background}
             color="#9ca3af"
