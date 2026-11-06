@@ -21,6 +21,9 @@ expo-env.d.ts
 # Metro
 .metro-health-check*
 
+# personal tooling (local helper scripts, not project code)
+scripts/
+
 # debug
 npm-debug.*
 yarn-debug.*
