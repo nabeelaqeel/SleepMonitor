@@ -9,7 +9,7 @@ import {
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { NavigationContainer } from '@react-navigation/native';
 import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
-import { SafeAreaProvider } from 'react-native-safe-area-context';
+import { SafeAreaProvider, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
 
 import { SleepProvider } from './context/SleepContext';
@@ -30,6 +30,13 @@ const Tab = createBottomTabNavigator();
 // ─── Patient: existing 4-tab navigator ───────────────────────────────────────
 
 function PatientNavigator({ onLogout }) {
+  // The app draws edge-to-edge, so lift the tab bar contents above the
+  // Android system nav bar when the phone uses 3-button navigation
+  // (insets.bottom ~48dp); gesture navigation has a tiny inset, keeping
+  // the bar near-compact there. Our tabBarStyle overrides bottom-tabs'
+  // own safe-area padding, so we have to feed the inset back in.
+  const { bottom } = useSafeAreaInsets();
+
   return (
     <NavigationContainer>
       <Tab.Navigator
@@ -48,8 +55,8 @@ function PatientNavigator({ onLogout }) {
             backgroundColor: '#0a0a0f',
             borderTopColor:  '#1a1a2e',
             borderTopWidth:  0.5,
-            paddingBottom:   10,
-            height:          70,
+            paddingBottom:   bottom,
+            height:          60 + bottom,
           },
           tabBarActiveTintColor:   '#818cf8',
           tabBarInactiveTintColor: '#444',
