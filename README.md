@@ -6,19 +6,54 @@ A QoS-aware real-time sleep monitoring system built as a Final Year Project (FYP
 
 ## Table of Contents
 
+- [Run the demo](#run-the-demo)
 - [Overview](#overview)
 - [Architecture](#architecture)
 - [Prerequisites](#prerequisites)
 - [Installation](#installation)
-- [Run the Full Stack](#run-the-full-stack)
-- [Broker Setup (Mosquitto)](#broker-setup-mosquitto)
-- [Database & Ingest (PostgreSQL)](#database--ingest-postgresql)
-- [Authentication (HTTP Login)](#authentication-http-login)
-- [Running the App](#running-the-app)
-- [Test Credentials](#test-credentials)
-- [Project Structure](#project-structure)
-- [MQTT Topics and QoS](#mqtt-topics-and-qos)
-- [Known Limitations](#known-limitations)
+- [Run the full stack](#run-the-full-stack)
+- [Running the app](#running-the-app)
+- [Test credentials](#test-credentials)
+- [MQTT messages and QoS](#mqtt-messages-and-qos)
+- [Project structure](#project-structure)
+- [Documentation](#documentation)
+- [Known limitations](#known-limitations)
+
+---
+
+## Run the demo
+
+Server side is **one command** — Mosquitto broker, PostgreSQL, Auth API, ingest worker, publisher, and echo responder all start as one containerized stack. The Expo app is the only process you start by hand.
+
+**First time on this machine?** Do the [one-time setup](#one-time-setup-fresh-laptop) below (env files + broker credentials), then come back here.
+
+```bash
+# Server — returns immediately; the first run builds the image (~2 min)
+docker compose -f docker-compose.aws.yml --env-file .env.development \
+  --profile local-db up -d --build
+
+# Client
+cd app && npx expo start
+```
+
+Scan the QR code with Expo Go (same Wi-Fi), then log in as `patient@sleep.com` / `1234` or `doctor@sleep.com` / `1234`. Verify with `docker ps` — `sleep-postgres` must report `healthy` and every `sleep-*` container `Up`.
+
+### Docker-free alternative
+
+Prefer running each service by hand, one terminal at a time from a host venv? The complete flow — including system Mosquitto setup — lives in [`docs/RUN_TERMINAL.md`](docs/RUN_TERMINAL.md).
+
+### AI recommendation demo
+
+```bash
+# Print what the model says for a synthetic night (healthy | monitor | apnea | rotate)
+.venv-dev/bin/python -m ai.demo --scenario apnea
+
+# Or publish to the broker so the app account with that patientId shows the band
+.venv-dev/bin/python -m ai.demo --scenario monitor --publish \
+  --patient-id 00000000-0000-0000-0000-000000000002 --host localhost
+```
+
+Details and the container `--profile ai-demo` variant: [`ai/README.md`](ai/README.md).
 
 ---
 
@@ -80,12 +115,10 @@ app/context/SleepContext.js  (React Context — single source of truth)
 - **Node.js** ≥ 18
 - **Expo CLI** — use `npx expo` (no global install needed)
 - **Expo Go** app on your phone (iOS / Android), or an emulator
-- **Docker** + **Docker Compose** — runs the entire server-side stack (broker, PostgreSQL, Auth API, ingest, publisher, echo) with one command
+- **Docker** + **Docker Compose** — runs the entire server-side stack with one command
 - Your laptop and phone must be on the **same Wi-Fi network**
 
-Only the [alternative host-venv flow](#alternative--run-the-services-in-a-host-venv-one-terminal-each)
-below needs **Mosquitto** as a system service and a **Python venv** with
-`paho-mqtt` / `uvicorn` installed manually.
+Only the Docker-free [terminal-by-terminal flow](docs/RUN_TERMINAL.md) additionally needs **Mosquitto** as a system service and a **Python venv** with `paho-mqtt` / `uvicorn` installed manually.
 
 ---
 
@@ -104,20 +137,18 @@ npm install
 The repository has **two runtimes**:
 
 | Runtime | Where | How to run |
- |---|---|---|
+|---|---|---|
 | Expo app | `app/` | `cd app && npx expo start` |
 | Python (publisher, echo, ingest) | repo root | `.venv-dev/bin/python <script>` |
 | Auth API (`api/`) | repo root | `.venv-dev/bin/uvicorn api.main:app --host 0.0.0.0 --port 8000` |
 
-The containerized stack in [Run the Full Stack](#run-the-full-stack) replaces
+The containerized stack in [Run the full stack](#run-the-full-stack) replaces
 the last two rows: one shared image runs the publisher, echo, ingest worker,
 and Auth API as separate containers.
 
-Python commands are all run **from the repository root** — the scripts resolve `.env.development` and dataset paths relative to it.
-
 ---
 
-## Run the Full Stack
+## Run the full stack
 
 One command brings up **everything server-side** — Mosquitto broker,
 PostgreSQL, Auth API, ingest worker, publisher, and echo responder — as one
@@ -195,259 +226,14 @@ docker run --rm --network host eclipse-mosquitto:2 \
   mosquitto_sub -h 127.0.0.1 -p 1883 -u sm -P "$MQPW" -t 'sleep/#' -v
 ```
 
-To flip back to the host-venv flow: `docker compose down`, swap the active
-`DATABASE_URL` and `MQTT_HOST` lines to their commented `localhost` variants
-in `.env.development` (container hostnames are `postgres` and `broker`), then
-`sudo systemctl enable --now mosquitto`.
-
-### Alternative — run the services in a host venv (one terminal each)
-
-Kept for debugging without Docker. Each login needs **PostgreSQL + the
-Auth API**, live data needs the **Publisher + Expo app**; the others add
-latency measurement and database persistence.
-
-| # | Process | Optional? | Run from |
-|---|---|---|---|
-| 1 | PostgreSQL (Docker) | Optional for the DB demo — **required for login** (credentials are bcrypt-verified against it) | repo root |
-| 2 | Ingest worker | Optional — DB demo only | repo root |
-| 3 | Auth API | **Required** — login only | repo root |
-| 4 | Echo responder | Optional — latency readout only | repo root |
-| 5 | Publisher | **Required** | repo root |
-| 6 | Expo app | **Required** | `app/` |
-
-Prerequisites: Mosquitto is running (a system service — no terminal needed).
-First flip `.env.development`/`.env.example` active `DATABASE_URL` and
-`MQTT_HOST` lines to their `localhost` variants (the `docker compose` flow
-uses the container hostnames `postgres` / `broker`), and make sure `.venv-dev/`
-exists per [Database & Ingest](#database--ingest-postgresql).
-
-### Terminal 1 — PostgreSQL (optional)
-
-```bash
-docker compose --env-file .env.development up -d
-docker ps --filter name=sleep-postgres   # wait until STATUS shows "healthy"
-```
-
-### Terminal 2 — Ingest worker (optional, leave running)
-
-```bash
-.venv-dev/bin/python ingest/worker.py
-```
-
-### Terminal 3 — Auth API (required for login, leave running)
-
-```bash
-.venv-dev/bin/uvicorn api.main:app --host 0.0.0.0 --port 8000
-```
-
-Startup seeds bcrypt hashes for the two demo users (only when empty) and then
-serves `POST /auth/login` on port 8000 — the app's `EXPO_PUBLIC_API_URL` must
-point at this host's LAN IP.
-
-### Terminal 4 — Echo responder (optional, leave running)
-
-```bash
-.venv-dev/bin/python publisher/echo.py
-```
-
-It answers the app's latency probes. Without it the Network screen shows `—` for
-latency; everything else keeps working.
-
-### Terminal 5 — Publisher (leave running)
-
-```bash
-.venv-dev/bin/python publisher/publisher.py
-```
-
-You should see `Loaded 526 rows from data/sleep_data_realistic.csv`, then one line
-per published reading. For a fast replay (handy for DB demos):
-
-```bash
-PUBLISH_INTERVAL=0.05 .venv-dev/bin/python publisher/publisher.py
-```
-
-### Terminal 6 — Expo app
-
-```bash
-cd app && npx expo start
-```
-
-Scan the QR code with Expo Go on your phone (same Wi-Fi), then log in as
-`patient@sleep.com` / `1234`. Home shows live vitals; Network shows measured
-delivery and estimated latency.
-
-### Sanity check (optional)
-
-```bash
-# Raw MQTT tap — prints every message the broker routes
-mosquitto_sub -h localhost -p 1883 -t "sleep/#" -v
-```
-
-Start order does not matter — the app can join a publisher session mid-stream
-(the delivery baseline is recorded when the app joins).
+To run any service by hand instead (host venv, system Mosquitto), follow
+[`docs/RUN_TERMINAL.md`](docs/RUN_TERMINAL.md) — including switching the
+active `DATABASE_URL` and `MQTT_HOST` lines in `.env.development` to their
+`localhost` variants after you `docker compose down`.
 
 ---
 
-## Broker Setup (Mosquitto)
-
-> Skip this section on the containerized flow — [Run the Full Stack](#run-the-full-stack)
-> starts `eclipse-mosquitto:2` configured by `mosquitto/mosquitto.conf`
-> (already locked, credentials via `mosquitto/passwd`). The steps below set up
-> the optional system-installed broker used by the host-venv flow only.
-> On a system already used by this stack, just re-enable it:
-> `sudo systemctl enable --now mosquitto`.
-
-### 1. Install Mosquitto
-
-```bash
-# Ubuntu / Debian
-sudo apt install mosquitto mosquitto-clients
-
-# macOS
-brew install mosquitto
-```
-
-### 2. Enable the WebSocket listener
-
-Create or edit `/etc/mosquitto/conf.d/sleepmonitor.conf` (Linux) or the equivalent on macOS:
-
-```
-listener 1883
-allow_anonymous true
-
-listener 9001
-protocol websockets
-allow_anonymous true
-```
-
-Restart the broker:
-
-```bash
-# Linux
-sudo systemctl restart mosquitto
-
-# macOS
-brew services restart mosquitto
-```
-
-### 3. Update the broker IP in the app
-
-Find your laptop's LAN IP address:
-
-```bash
-# Linux / macOS
-ip addr show   # or: ifconfig | grep "inet "
-
-# Windows
-ipconfig       # look for IPv4 Address
-```
-
-Set the broker IP in `app/.env.development` (gitignored — copy `app/.env.example` to create it):
-
-```bash
-# app/.env.development
-EXPO_PUBLIC_BROKER_IP=192.168.x.x
-```
-
-Expo inlines `EXPO_PUBLIC_*` variables at bundle time, so **restart `npx expo start`** after changing it. The app falls back to a built-in default if the variable is missing.
-
-### 4. Verify the broker is routing messages
-
-```bash
-# Terminal 1 — subscribe to all sleep topics
-mosquitto_sub -h <YOUR_IP> -p 1883 -t "sleep/#" -v
-
-# Terminal 2 — publish a test message
-mosquitto_pub -h <YOUR_IP> -p 1883 -t "sleep/normal" \
-  -m '{"tier":"Normal","spo2":97,"heartRate":62,"hrv":40,"motion":0,"timestamp":"01:00 AM","reason":"","stats":{"critical":0,"important":0,"normal":1,"background":0,"total":1},"qos":0,"topic":"sleep/normal"}'
-```
-
----
-
-## Database & Ingest (PostgreSQL)
-
-Optional durable store for the MQTT stream. A Python **ingest worker** subscribes to the broker and writes readings, alerts, and per-session QoS delivery stats to PostgreSQL. In the containerized [Run the Full Stack](#run-the-full-stack) flow the worker runs inside the stack; the host-venv commands below are the alternative-flow way to drive the same database.
-
-**Flow:** `publisher → Mosquitto :1883 → ingest/worker.py → PostgreSQL :5432`
-
-```bash
-# 1. Config (first time only — .env.development is gitignored)
-cp .env.example .env.development
-# 1b. Auth API secret — inspects ONLY the JWT_SECRET assignment value:
-#     replaces it in place when empty or a known placeholder, appends when
-#     missing, and leaves every other value (and line) untouched.
-JWT_CURRENT=$(grep '^JWT_SECRET=' .env.development | cut -d= -f2- | head -n1)
-if [ -z "$JWT_CURRENT" ] || \
-   [ "$JWT_CURRENT" = "change_me_random_hex_at_least_32_characters_long" ] || \
-   [ "$JWT_CURRENT" = "change_me_random_hex" ]; then
-  V=$(python3 -c 'import secrets; print(secrets.token_hex(32))')
-  if grep -q '^JWT_SECRET=' .env.development; then
-    # awk, not sed -i — GNU sed and BSD/macOS sed disagree on `-i` syntax
-    awk -v v="$V" '/^JWT_SECRET=/ { if (!done) { print "JWT_SECRET=" v; done = 1 }; next } { print }' \
-      .env.development > .env.development.tmp
-    mv .env.development.tmp .env.development
-  else
-    echo "JWT_SECRET=${V}" >> .env.development
-  fi
-fi
-
-# 2. Start PostgreSQL (schema applied automatically on first boot)
-docker compose --env-file .env.development up -d
-
-# 3. Python deps in a host venv
-python3 -m venv .venv-dev
-.venv-dev/bin/pip install -r ingest/requirements.txt -r publisher/requirements.txt -r api/requirements.txt
-
-# 4. Run the ingest worker and publisher — Terminal 2 (ingest) and
-#    Terminal 5 (publisher) of the alternative host-venv flow. For DB demos
-#    a fast replay is convenient:
-LOOP_CSV=false PUBLISH_INTERVAL=0.05 \
-  .venv-dev/bin/python publisher/publisher.py
-
-# 5. Inspect the results
-docker exec sleep-postgres psql -U sleep_user -d sleep_monitor \
-  -c "SELECT * FROM session_stats;"
-```
-
-`session_stats.missing_readings` measures QoS 0 loss: with the worker stopped during a run, only the QoS 1/2 messages are redelivered on restart.
-
-`echo.py` powers the app's estimated latency readout (it relays `qos/ping` → `qos/pong`). Without it, latency shows `—`. The broker should retain app sessions long enough to survive a disconnect — add `persistent_client_expiration 2h` to `/etc/mosquitto/mosquitto.conf` and restart Mosquitto so abandoned sessions are reaped while queued QoS 1/2 messages still survive.
-
-To re-apply schema changes, wipe the volume with `docker compose --env-file .env.development down -v`.
-
-See [`docs/DATABASE.md`](docs/DATABASE.md) for the schema, payload fields, and design details.
-
----
-
-## Authentication (HTTP Login)
-
-Login is no longer hardcoded in the app. `app/auth/apiAuth.js` POSTs
-`{email, password}` to the FastAPI service in `api/` (host venv, port 8000),
-which bcrypt-verifies against `users.password_hash` and issues a 12-hour
-HS256 JWT. The database stores hashes only (`$2b$12$…`, cost factor 12, per-user
-salts) — no plaintext password is persisted there or shipped in the app
-(the demo seed password exists once, server-side, in `api/db.py`), and
-the same 401 message covers unknown emails and wrong passwords.
-
-```bash
-# Host-venv flow (Terminal 3) — required for login (after PostgreSQL is up)
-.venv-dev/bin/uvicorn api.main:app --host 0.0.0.0 --port 8000
-```
-
-Set `EXPO_PUBLIC_API_URL=http://<LAN-IP>:8000` in `app/.env.development`
-(next to the broker IP) and restart `npx expo start` — the phone must reach
-the same LAN host as the MQTT broker.
-
-The API seeds the demo hashes on startup (only when a user's hash is empty),
-so Postgres **and** the API must be running before anyone can log in. MQTT
-streaming beyond the login screen is unaffected.
-
-See [`docs/AUTH_API.md`](docs/AUTH_API.md) for endpoints, JWT claims, the
-bcrypt/HS256 security matrix, and troubleshooting.
-
----
-
-## Running the App
+## Running the app
 
 ```bash
 cd app
@@ -465,7 +251,7 @@ Scan the QR code with Expo Go on your phone, or press `a` for Android emulator /
 
 ---
 
-## Test Credentials
+## Test credentials
 
 | Role | Email | Password |
 |---|---|---|
@@ -473,13 +259,28 @@ Scan the QR code with Expo Go on your phone, or press `a` for Android emulator /
 | Patient | `patient@sleep.com` | `1234` |
 
 Password `1234` is stored as a **bcrypt hash (cost 12)** in
-`users.password_hash` and verified server-side by the Auth API — see
-[Authentication (HTTP Login)](#authentication-http-login). Both accounts are
-fixed on purpose: the project monitors a single patient with a single watch.
+`users.password_hash` and verified server-side by the Auth API —
+[`docs/AUTH_API.md`](docs/AUTH_API.md) covers endpoints, JWT claims, and the
+security matrix. Both accounts are fixed on purpose: the project monitors a
+single patient with a single watch.
 
 Sessions persist across app restarts: the user object via `AsyncStorage`
 and the 12-hour JWT via `expo-secure-store` (device Keychain/Keystore,
 with an AsyncStorage fallback on web). Logout clears both.
+
+---
+
+## MQTT messages and QoS
+
+Every reading is classified into one of four tiers (see the table in
+[Overview](#overview)) and published as a JSON payload containing the vitals,
+a classifier `reason` for alerts, cumulative session stats, and the QoS level
+used. The app subscribes `sleep/#` at QoS 2 with `cleanSession: false`, so the
+broker never downgrades critical traffic and queues QoS 1/2 messages while the
+app is offline.
+
+Full payload schema, field reference, QoS rationale, and reconnection
+behaviour: [`docs/MQTT_SETUP.md`](docs/MQTT_SETUP.md).
 
 ---
 
@@ -535,64 +336,25 @@ SleepMonitor/
 ├── benchmark/                        # Latency benchmark harness (single-clock)
 ├── docker-compose.yml                # PostgreSQL service (Docker)
 ├── .env.example                      # Python env template (copy to .env.development)
-└── docs/                             # ARCHITECTURE, DATA_MODEL, DATABASE, AUTH_API, MQTT_SETUP
+└── docs/                             # ARCHITECTURE, DATA_MODEL, DATABASE, AUTH_API, MQTT_SETUP, RUN_TERMINAL
 ```
 
 ---
 
-## MQTT Topics and QoS
+## Documentation
 
-### Message Payload Schema
-
-Every message published to any `sleep/*` topic is a JSON object:
-
-```json
-{
-  "patientId": "patient-001",
-  "tier":      "Critical",
-  "spo2":      88,
-  "heartRate": 71,
-  "hrv":       18,
-  "motion":    0,
-  "timestamp": "02:14 AM",
-  "reason":    "SpO2 below critical threshold (88%)",
-  "qos":       2,
-  "topic":     "sleep/critical",
-  "stats": {
-    "critical":   5,
-    "important":  12,
-    "normal":     48,
-    "background": 3,
-    "total":      68
-  }
-}
-```
-
-| Field | Type | Description |
-|---|---|---|
-| `patientId` | string | Patient identifier (e.g. `patient-001`) — the doctor roster matches it to decide which entry is live |
-| `tier` | string | `Critical` / `Important` / `Normal` / `Background` |
-| `spo2` | number | Blood oxygen saturation (%) |
-| `heartRate` | number | Heart rate (BPM) |
-| `hrv` | number | Heart rate variability — RMSSD (ms) |
-| `motion` | number | Limb movement index (0 = low) |
-| `timestamp` | string | Human-readable time, e.g. `"02:14 AM"` |
-| `reason` | string | Classifier explanation (optional) |
-| `qos` | number | QoS level used (0, 1, or 2) |
-| `topic` | string | MQTT topic name echoed in payload |
-| `stats` | object | Cumulative session counts per tier + total |
-
-### QoS Rationale
-
-| QoS | Guarantee | Est. latency (RTT/2) | Used for |
-|---|---|---|---|
-| 2 | Exactly once (4-way handshake) | measured live | Critical — apnea events; must not be lost or duplicated |
-| 1 | At least once (PUBACK) | measured live | Important — borderline readings; duplicates tolerable |
-| 0 | Best effort (fire and forget) | measured live | Normal + Background — high-frequency routine data |
-
-> **Latency** figures in the app are **estimated** from round-trip ping/echo (`RTT/2`) via `publisher/echo.py`; they are an on-device indicator, not the thesis measurement. The authoritative figures come from the single-clock benchmark (producer and consumer timestamps on one host clock).
-
-> **Note:** The app subscribes `sleep/#` at QoS 2 and connects with `cleanSession: false`, so the broker does not downgrade critical/important traffic and queues QoS 1/2 while the app is offline.
+| Doc | Contents |
+|---|---|
+| [`docs/PROJECT_OVERVIEW.md`](docs/PROJECT_OVERVIEW.md) | Project status, verification results, demo-day plan |
+| [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) | App bootstrapping, state shape, component responsibilities |
+| [`docs/DATA_MODEL.md`](docs/DATA_MODEL.md) | Payload fields and app state mapping |
+| [`docs/MQTT_SETUP.md`](docs/MQTT_SETUP.md) | Broker configuration, payload schema, QoS rationale, reconnection |
+| [`docs/DATABASE.md`](docs/DATABASE.md) | Postgres schema, ingest worker, QoS delivery accounting; users + password_hash |
+| [`docs/AUTH_API.md`](docs/AUTH_API.md) | Login API: endpoints, JWT design, bcrypt/HS256 security matrix |
+| [`docs/RUN_TERMINAL.md`](docs/RUN_TERMINAL.md) | Docker-free, one-terminal-each run (host venv), incl. Mosquitto broker setup |
+| [`docs/BENCHMARK_V1_HISTORY.md`](docs/BENCHMARK_V1_HISTORY.md) | History of the v1 latency benchmark |
+| [`ai/README.md`](ai/README.md) | AI recommendation module: nightly guidance bands + demo mode |
+| [`benchmark/README.md`](benchmark/README.md) | Latency benchmark harness: single-clock methodology, results |
 
 ---
 
