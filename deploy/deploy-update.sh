@@ -93,7 +93,7 @@ run docker compose -f docker-compose.aws.yml --env-file .env.development \
 
 if [ "$DRY" = 1 ]; then
   pgcheck=""; [ "$MODE" = TEST ] && pgcheck=" + sleep-postgres healthy"
-  say "[dry-run] would now verify: containers Up${pgcheck}, broker socket 9001, and a /auth/login round-trip"
+  say "[dry-run] would now verify: containers Up${pgcheck}, broker listener lines + websocket 101 + one MQTT read, and a /auth/login round-trip"
   exit 0
 fi
 
@@ -120,13 +120,78 @@ for name in "${EXPECTED[@]}"; do
   if [ "$state" = "running" ]; then say "✓ $name running"; else say "✗ $name ($state)"; fail=1; fi
 done
 
-# broker socket: the log line only appears when BOTH listeners came up
-if docker logs sleep-broker 2>&1 | grep -m1 -q 'Opening ipv4 listen socket on port 9001'; then
-  say "✓ broker listening on 9001 (websockets) + 1883 (TCP)"
-else
-  say "✗ broker log lacks the port-9001 line — usually the passwd file (runbook §7)"
-  fail=1
-fi
+# ── broker: proof, not paperwork ─────────────────────────────
+# The §6.1 check this replaces grepped ONE log line once and walked away —
+# it could run before a slow bind flushed the line (declaring a healthy
+# broker broken), and it never knew WHY when the line truly never arrived.
+# Three layers instead, mirroring the app's own paths (args default to the
+# production stack; tests drive the same function against probe fixtures):
+#   (a) listener lines for BOTH ports, with a 30 s retry window;
+#   (b) a websocket handshake on the published port — the phone's only
+#       broker path (HTTP 101 = listener + websockets protocol really up;
+#       curl then holds the open socket, so its exit 28 at --max-time is
+#       the success path — the captured first header line is the verdict);
+#   (c) one MQTT read inside the broker's netns — the publisher streams the
+#       band every second, so received bytes prove passwd → auth → publish
+#       → subscribe end to end, independent of host port bindings.
+verify_broker() {
+  local container="${1:-sleep-broker}"
+  local image="${2:-eclipse-mosquitto:2.1.2-alpine}"
+  local ws_port="${3:-9001}"
+  local log="" seen=""
+  local ws=""
+  local mqpw="" data=""
+
+  # (a) both listener lines in the log (broker may lag the "running" check):
+  for _ in $(seq 1 10); do
+    log="$(docker logs "$container" 2>&1 || true)"
+    if grep -q 'listen socket on port 1883' <<<"$log" && \
+       grep -q 'listen socket on port 9001' <<<"$log"; then
+      seen=1; break
+    fi
+    sleep 3
+  done
+  if [ -z "$seen" ]; then
+    say "✗ listener line(s) still absent after 30 s — broker log tail:"
+    printf '%s\n' "$log" | tail -6 | sed 's/^/      /'
+    if grep -qiE 'password-file|Unable to open pwfile' <<<"$log"; then
+      say "  (password-file error — ./deploy/bootstrap.sh --rotate-mqtt-password rebuilds it; runbook §7)"
+    else
+      say "  (config/startup error shown above — runbook §7)"
+    fi
+    return 1
+  fi
+  say "✓ broker bound 1883 (TCP) + 9001 (websockets)"
+
+  # (b) the published websocket port answers the phone's handshake:
+  ws="$(curl -s -i --max-time 5 \
+        -H 'Upgrade: websocket' -H 'Connection: Upgrade' \
+        -H 'Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==' \
+        -H 'Sec-WebSocket-Version: 13' -H 'Sec-WebSocket-Protocol: mqtt' \
+        "http://localhost:$ws_port/" 2>/dev/null | head -n1 || true)"
+  if grep -q ' 101' <<<"$ws"; then
+    say "✓ websocket 101 handshake on :$ws_port (the phone's path)"
+  else
+    say "✗ no websocket 101 on :$ws_port (first line captured: ${ws:-<nothing>}) — compose ports / SG next (runbook §7)"
+    return 1
+  fi
+
+  # (c) live MQTT data inside the broker's netns (no host-port coupling:
+  #     the netns sees the in-container 1883 directly).
+  mqpw="$(sed -n 's/^MQTT_PASSWORD=//p' .env.development)"
+  data="$(docker run --rm --network "container:$container" "$image" \
+          timeout 6 mosquitto_sub -h localhost -p 1883 -t 'sleep/#' \
+          -u sm -P "$mqpw" -C 1 -W 5 2>/dev/null || true)"
+  if [ -n "$data" ]; then
+    say "✓ MQTT data flowing (sample: ${data:0:56}…)"
+  else
+    say "✗ subscriber got no MQTT data in 5 s — publisher quiet or broker creds rejected; publisher log tail:"
+    printf '%s\n' "$(docker logs sleep-publisher --tail 5 2>&1 || true)" | sed 's/^/      /'
+    return 1
+  fi
+}
+
+verify_broker || fail=1
 
 # /auth/login round-trip (3 attempts: uvicorn may still be booting). With the
 # default SEED_DEMO_USERS=true a token proves bcrypt → api → ACTIVE database;

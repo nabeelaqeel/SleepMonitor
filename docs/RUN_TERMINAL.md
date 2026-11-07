@@ -173,7 +173,7 @@ design details.
 One-time setup of the system-installed broker that the host-venv flow uses.
 (Skipped on the containerized flow — the README's
 [Run the Full Stack](../README.md#run-the-full-stack) starts
-`eclipse-mosquitto:2` configured by `mosquitto/mosquitto.conf`, already
+`eclipse-mosquitto:2.1.2-alpine` configured by `mosquitto/mosquitto.conf`, already
 locked, credentials via `mosquitto/passwd`.)
 
 ### 1. Install Mosquitto
