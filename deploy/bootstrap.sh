@@ -211,15 +211,17 @@ if [ -f mosquitto/passwd ] && [ "$FORCE" != 1 ] && [ "$ROTATE" != 1 ]; then
 else
   [ -n "$MQPW" ] || die "no MQTT_PASSWORD available to write into mosquitto/passwd"
   if [ "$DRY" = 1 ]; then
-    say "[dry-run] docker run --rm -v mosquitto eclipse-mosquitto:2 mosquitto_passwd -c -b /mosquitto/config/passwd sm <hidden>"
+    say "[dry-run] docker run --rm -v mosquitto eclipse-mosquitto:2.1.2-alpine mosquitto_passwd -c -b /mosquitto/config/passwd sm <hidden>"
     say "[dry-run] chown 1883:1883 + chmod 600 mosquitto/passwd (via a throwaway container, so no sudo)"
   else
-    docker run --rm -v "$PWD/mosquitto:/mosquitto/config" eclipse-mosquitto:2 \
+    # same pinned broker build as compose (passwd must stay in lockstep with
+    # the image that will read it — see the pin rationale in docker-compose.aws.yml):
+    docker run --rm -v "$PWD/mosquitto:/mosquitto/config" eclipse-mosquitto:2.1.2-alpine \
       mosquitto_passwd -c -b /mosquitto/config/passwd sm "$MQPW" >/dev/null
     # broker drops to its internal non-root user (uid 1883) and 2.1+ warns on
     # other ownership — validated recipe, done via container so it works on
     # the laptop (no sudoer requirement) AND the server (§2.9):
-    docker run --rm -v "$PWD/mosquitto:/mosquitto/config" eclipse-mosquitto:2 \
+    docker run --rm -v "$PWD/mosquitto:/mosquitto/config" eclipse-mosquitto:2.1.2-alpine \
       sh -c 'chown 1883:1883 /mosquitto/config/passwd && chmod 600 /mosquitto/config/passwd'
   fi
   if [ "$DRY" = 1 ]; then
