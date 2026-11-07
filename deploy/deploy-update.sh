@@ -5,6 +5,9 @@
 #   ./deploy/deploy-update.sh                 # git pull → compose up → verify
 #   ./deploy/deploy-update.sh --skip-pull     # no git step (bootstrap uses this)
 #   ./deploy/deploy-update.sh --allow-dirty   # proceed despite uncommitted edits
+#   ./deploy/deploy-update.sh --ai-demo       # also run the AI demo band publisher
+#                                             #   (compose profile ai-demo; sleep-ai-demo
+#                                             #   joins the verified container list)
 #   ./deploy/deploy-update.sh --repair-postgres-password
 #                                             # TEST: point the postgres volume's
 #                                             #   stored password at .env.development's
@@ -31,12 +34,14 @@ DRY="${SM_BOOTSTRAP_DRY:-0}"
 SKIP_PULL=0
 ALLOW_DIRTY=0
 REPAIR_PG=0
+AI_DEMO=0
 for arg in "$@"; do
   case "$arg" in
     --skip-pull)  SKIP_PULL=1 ;;
     --allow-dirty) ALLOW_DIRTY=1 ;;
+    --ai-demo)    AI_DEMO=1 ;;
     --repair-postgres-password) REPAIR_PG=1 ;;
-    -h|--help)    sed -n '2,10p' "$0"; exit 0 ;;
+    -h|--help)    sed -n '2,14p' "$0"; exit 0 ;;
     *) echo "unknown flag: $arg (see header)"; exit 2 ;;
   esac
 done
@@ -70,6 +75,10 @@ else
     *) die "ACTIVE DATABASE_URL must select TEST (@postgres:5432) or DEMO (?sslmode=require) — see runbook §5" ;;
   esac
 fi
+# --ai-demo: APPEND the demo profile to the mode's profile (never replace —
+# TEST needs local-db alongside it, and dropping an enabled profile makes the
+# next `compose up` REMOVE that profile's containers).
+[ "$AI_DEMO" = 1 ] && PROFILE+=(--profile ai-demo)
 say "── mode: $MODE (profile: ${PROFILE[*]:-none})"
 
 # ── --repair-postgres-password (TEST): point the VOLUME at .env.development ──
@@ -167,6 +176,7 @@ postgres_dsn_coherence() {
 # ── verify (matches runbook §6.1's checks) ───────────────────
 EXPECTED=(sleep-broker sleep-api sleep-ingest sleep-publisher sleep-echo)
 [ "$MODE" = TEST ] && EXPECTED+=(sleep-postgres)
+[ "$AI_DEMO" = 1 ] && EXPECTED+=(sleep-ai-demo)
 
 # sleep-postgres must reach EXACTLY "healthy" within 60 s ("unhealthy", or
 # "starting" forever, must NOT satisfy this — §6.2b's rule):

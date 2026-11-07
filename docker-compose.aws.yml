@@ -130,6 +130,8 @@ services:
   #
   # ON:   docker compose -f docker-compose.aws.yml --env-file .env.development \
   #         --profile ai-demo up -d --build
+  #       (script form: ./deploy/deploy-update.sh --ai-demo — appends the
+  #       profile to the mode's profile and verifies sleep-ai-demo after)
   # OFF:  same command without the flag, then up -d — compose removes only
   #       this container.
   #

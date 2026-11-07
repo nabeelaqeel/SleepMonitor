@@ -47,6 +47,10 @@ Container demo (AWS stack) — demo mode is a compose profile, OFF by default:
 docker compose -f docker-compose.aws.yml --env-file .env.development \
   --profile ai-demo up -d --build
 
+# Script form (deploys): ./deploy/deploy-update.sh --ai-demo — same profile,
+# added on top of the mode's profile (TEST keeps local-db), and sleep-ai-demo
+# joins the post-deploy container verification.
+
 # OFF: drop the flag, then:
 docker compose -f docker-compose.aws.yml --env-file .env.development up -d
 ```

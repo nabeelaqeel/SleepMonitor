@@ -20,6 +20,8 @@
 #   ./deploy/bootstrap.sh --force              # regenerate .env.development + passwd
 #   ./deploy/bootstrap.sh --rotate-mqtt-password
 #   ./deploy/bootstrap.sh --no-start           # generate + passwd only
+#   ./deploy/bootstrap.sh --ai-demo            # also start the AI demo band
+#                                              #   publisher (compose profile ai-demo)
 #   ./deploy/bootstrap.sh --dry-run            # print every action, write nothing
 #   ./deploy/bootstrap.sh --ip 54.10.20.30     # override the printed broker IP
 #
@@ -31,16 +33,17 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
 
-DRY=0 FORCE=0 ROTATE=0 DEMO=0 NO_START=0 IP_OVERRIDE=""
+DRY=0 FORCE=0 ROTATE=0 DEMO=0 NO_START=0 AI_DEMO=0 IP_OVERRIDE=""
 while [ $# -gt 0 ]; do
   case "$1" in
     --force)FORCE=1 ;;
     --rotate-mqtt-password) ROTATE=1 ;;
     --demo) DEMO=1 ;;
     --no-start) NO_START=1 ;;
+    --ai-demo) AI_DEMO=1 ;;
     --dry-run) DRY=1 ;;
     --ip) IP_OVERRIDE="${2:?--ip needs a value}"; shift ;;
-    -h|--help) sed -n '2,26p' "$0"; exit 0 ;;
+    -h|--help) sed -n '2,28p' "$0"; exit 0 ;;
     *) echo "unknown flag: $1 (see header)"; exit 2 ;;
   esac
   shift
@@ -75,6 +78,23 @@ if [ -f .env.development ] && [ "$FORCE" != 1 ]; then
   say "── .env.development exists — keeping it (--force regenerates ALL secrets)"
   MQPW="$(grep '^MQTT_PASSWORD=' .env.development | cut -d= -f2- || true)"
   [ -n "$MQPW" ] || die "existing .env.development has no MQTT_PASSWORD — regenerate with --force"
+  # --ai-demo on a kept env: append-only addition of the demo publisher's
+  # target account (the same two keys ship in the template for fresh
+  # bootstraps). Idempotent — a second --ai-demo run appends nothing.
+  if [ "$AI_DEMO" = 1 ] && ! grep -q '^AI_DEMO_PATIENT_ID=' .env.development; then
+    if [ "$DRY" = 1 ]; then
+      say "[dry-run] would append AI_DEMO_PATIENT_ID + AI_DEMO_INTERVAL to .env.development"
+    else
+      cat >> .env.development <<'SM_ENV_APPEND'
+
+# AI demo band publisher (compose profile ai-demo) — bootstrap --ai-demo added.
+# Must equal the app login's UUID (the seeded patient@sleep.com account).
+AI_DEMO_PATIENT_ID=00000000-0000-0000-0000-000000000002
+AI_DEMO_INTERVAL=60
+SM_ENV_APPEND
+      ok "AI_DEMO_PATIENT_ID/AI_DEMO_INTERVAL appended to .env.development"
+    fi
+  fi
 else
   DB_PW="$(openssl rand -hex 12)"
   JWT_SECRET="$(openssl rand -hex 32)"
@@ -133,6 +153,12 @@ FLUSH_MAX=50
 PATIENT_ID=patient-001
 PATIENT_UUID=00000000-0000-0000-0000-000000000002
 DEVICE_ID=sleepband-001
+
+# AI demo band publisher (compose profile ai-demo — ./deploy/deploy-update.sh
+# --ai-demo starts it). AI_DEMO_PATIENT_ID must equal the app login's UUID —
+# PATIENT_UUID above, the seeded patient@sleep.com account.
+AI_DEMO_PATIENT_ID=00000000-0000-0000-0000-000000000002
+AI_DEMO_INTERVAL=60
 
 CSV_PATH=data/sleep_data_realistic.csv
 PUBLISH_INTERVAL=1.0
@@ -263,13 +289,15 @@ if [ "$ROTATE" = 1 ] || [ "$FORCE" = 1 ]; then
 fi
 
 # ── 7. start + verify (single implementation lives in deploy-update.sh) ──
+UP_FLAGS=()
+[ "$AI_DEMO" = 1 ] && UP_FLAGS+=(--ai-demo)
 if [ "$NO_START" = 1 ]; then
-  say "── start skipped (--no-start): ./deploy/deploy-update.sh --skip-pull whenever you want it"
+  say "── start skipped (--no-start): ./deploy/deploy-update.sh --skip-pull${UP_FLAGS:+ --ai-demo} whenever you want it"
 elif [ "$DRY" = 1 ]; then
-  say "[dry-run] SM_BOOTSTRAP_DRY=1 ./deploy/deploy-update.sh --skip-pull (compose up + verify)"
-  SM_BOOTSTRAP_DRY=1 ./deploy/deploy-update.sh --skip-pull
+  say "[dry-run] SM_BOOTSTRAP_DRY=1 ./deploy/deploy-update.sh --skip-pull${UP_FLAGS:+ --ai-demo} (compose up + verify)"
+  SM_BOOTSTRAP_DRY=1 ./deploy/deploy-update.sh --skip-pull "${UP_FLAGS[@]}"
 else
-  ./deploy/deploy-update.sh --skip-pull
+  ./deploy/deploy-update.sh --skip-pull "${UP_FLAGS[@]}"
 fi
 
 # ── 8. handoff: the values the *phone* side needs ─────────────
