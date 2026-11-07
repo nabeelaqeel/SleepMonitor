@@ -5,6 +5,11 @@
 #   ./deploy/deploy-update.sh                 # git pull → compose up → verify
 #   ./deploy/deploy-update.sh --skip-pull     # no git step (bootstrap uses this)
 #   ./deploy/deploy-update.sh --allow-dirty   # proceed despite uncommitted edits
+#   ./deploy/deploy-update.sh --repair-postgres-password
+#                                             # TEST: point the postgres volume's
+#                                             #   stored password at .env.development's
+#                                             #   DSN (rows + MQTT creds untouched),
+#                                             #   then continue with compose up + verify
 #
 # CI seam (future): a deploy job is one line and changes nothing here —
 #   ssh <host> 'cd /opt/SleepMonitor && ./deploy/deploy-update.sh'
@@ -25,10 +30,12 @@ cd "$ROOT"
 DRY="${SM_BOOTSTRAP_DRY:-0}"
 SKIP_PULL=0
 ALLOW_DIRTY=0
+REPAIR_PG=0
 for arg in "$@"; do
   case "$arg" in
     --skip-pull)  SKIP_PULL=1 ;;
     --allow-dirty) ALLOW_DIRTY=1 ;;
+    --repair-postgres-password) REPAIR_PG=1 ;;
     -h|--help)    sed -n '2,10p' "$0"; exit 0 ;;
     *) echo "unknown flag: $arg (see header)"; exit 2 ;;
   esac
@@ -65,6 +72,31 @@ else
 fi
 say "── mode: $MODE (profile: ${PROFILE[*]:-none})"
 
+# ── --repair-postgres-password (TEST): point the VOLUME at .env.development ──
+# The reverse edit — rewriting .env.development to match the volume — would
+# silently strand this server's app-side values (the printed MQTT/JWT block
+# the phone was configured from). Instead the volume's role password becomes
+# the CURRENT DSN password: rows, MQTT creds and the phone config all stay
+# valid. ALTER runs on the pg container's socket (trust inside the container,
+# by design of postgres:16-alpine) — the pw is never echoed and never has to
+# cross the network path the coherence check replays below.
+# Bootstrap-generated passwords are hex (no sed/SQL metacharacters); a
+# hand-edited DSN carrying quotes needs escaping before this recipe.
+if [ "$REPAIR_PG" = 1 ]; then
+  if [ "$DRY" = 1 ]; then
+    say "[dry-run] would ALTER sleep_user to the .env.development DSN password (inside sleep-postgres)"
+  else
+    [ "$MODE" = TEST ] || die "--repair-postgres-password applies to TEST mode only (DEMO/RDS passwords change at RDS — runbook §5)"
+    docker ps -q --filter name='^sleep-postgres$' | grep -q . \
+      || die "--repair-postgres-password needs sleep-postgres running — compose up first, then re-run"
+    dbpw="$(sed -n 's#^DATABASE_URL=postgresql://sleep_user:\([^@]*\)@postgres:5432/sleep_monitor.*#\1#p' .env.development)"
+    [ -n "$dbpw" ] || die "no TEST-shape DATABASE_URL password in .env.development — nothing to repair"
+    docker exec sleep-postgres psql -U sleep_user -d sleep_monitor \
+      -c "ALTER USER sleep_user PASSWORD '$dbpw';"
+    say "✔ postgres now accepts the .env.development DSN password (volume data untouched)"
+  fi
+fi
+
 # ── git step ─────────────────────────────────────────────────
 if [ "$SKIP_PULL" = 1 ]; then
   say "── git: skipped (--skip-pull)"
@@ -93,9 +125,44 @@ run docker compose -f docker-compose.aws.yml --env-file .env.development \
 
 if [ "$DRY" = 1 ]; then
   pgcheck=""; [ "$MODE" = TEST ] && pgcheck=" + sleep-postgres healthy"
-  say "[dry-run] would now verify: containers Up${pgcheck}, broker listener lines + websocket 101 + one MQTT read, and a /auth/login round-trip"
+  say "[dry-run] would now verify: containers Up${pgcheck}, postgres DSN coherence (TEST), broker listener lines + websocket 101 + one MQTT read, and a /auth/login round-trip"
   exit 0
 fi
+
+# ── .env.development ⇆ initialized volume coherence (TEST only) ──
+# The postgres_data volume stores the password of the bootstrap that FIRST
+# initialized it; a server-side clone move (~/SleepMonitor → elsewhere) or a
+# regenerated .env ships a DSN the volume rejects — the api then crash-loops
+# at startup (psycopg2 "password authentication failed") and the deploy
+# concludes with a confusing ✗ /auth/login unreachable. One readable line up
+# front instead. The check replays the API'S OWN connection class — a psql
+# client on the compose network reaching the `postgres` service name — since
+# a shell inside the pg container reaches itself over 127.0.0.1/its socket
+# where postgres:16-alpine is trust-auth (accepts ANY password; verified
+# empirically) — only the network path discriminates.
+postgres_dsn_coherence() {
+  local dbpw="" pg_net=""
+  dbpw="$(sed -n 's#^DATABASE_URL=postgresql://sleep_user:\([^@]*\)@postgres:5432/sleep_monitor.*#\1#p' .env.development)"
+  if [ -z "$dbpw" ]; then
+    say "⚠ DATABASE_URL is not the expected TEST shape — DSN coherence check skipped"
+    return 0
+  fi
+  pg_net="$(docker inspect sleep-postgres --format '{{range $k,$_ := .NetworkSettings.Networks}}{{$k}}{{end}}' 2>/dev/null || true)"
+  if [ -z "$pg_net" ]; then
+    say "⚠ sleep-postgres has no compose network — DSN coherence check skipped"
+    return 0
+  fi
+  if docker run --rm --network "$pg_net" postgres:16-alpine \
+       env PGPASSWORD="$dbpw" psql -h postgres -U sleep_user -d sleep_monitor \
+       -tAc 'SELECT 1' >/dev/null 2>&1; then
+    say "✓ .env.development DSN accepted by the postgres volume (the api's auth path)"
+    return 0
+  fi
+  say "✗ postgres REJECTED the .env.development DSN password — the postgres_data volume keeps the password of the bootstrap that FIRST initialized it;"
+  say "  the api will crash-loop on psycopg2 'password authentication failed'. Data-preserving fix (rows + MQTT creds unchanged):"
+  say "  ./deploy/deploy-update.sh --repair-postgres-password"
+  return 1
+}
 
 # ── verify (matches runbook §6.1's checks) ───────────────────
 EXPECTED=(sleep-broker sleep-api sleep-ingest sleep-publisher sleep-echo)
@@ -112,6 +179,7 @@ if [ "$MODE" = TEST ]; then
     sleep 5
   done
   [ -n "$healthy" ] || die "sleep-postgres never reached healthy in 60 s — docker logs sleep-postgres"
+  postgres_dsn_coherence || die "postgres coherence failed — see the ✗ above (runbook §7)"
 fi
 
 fail=0
@@ -193,38 +261,71 @@ verify_broker() {
 
 verify_broker || fail=1
 
-# /auth/login round-trip (3 attempts: uvicorn may still be booting). With the
-# default SEED_DEMO_USERS=true a token proves bcrypt → api → ACTIVE database;
-# with seeding off the demo account may not exist, so ANY structured response
-# (a 401 body, say) already proves the api is up and the token check is skipped.
-# sed -n ... p exits 0 even when the key is absent (grep under set -e would
-# abort): a missing or empty SEED_DEMO_USERS then falls through to enabled,
-# matching api/config.py's default — explicit false-like values disable.
-seed="$(sed -n 's/^SEED_DEMO_USERS=//p' .env.development | tr -d ' ' | tr '[:upper:]' '[:lower:]')"
-case "$seed" in 1|true|yes|"") seeded=1 ;; *) seeded=0 ;; esac
-resp=""
-for _ in 1 2 3; do
-  resp="$(curl -sS --max-time 10 -X POST http://localhost:8000/auth/login \
-            -H 'Content-Type: application/json' \
-            -d '{"email":"patient@sleep.com","password":"1234"}' 2>/dev/null || true)"
-  [ -n "$resp" ] && break
-  sleep 3
-done
-if [ -n "$resp" ]; then
-  if [ "$seeded" = 1 ]; then
-    if printf '%s' "$resp" | grep -q '"token"'; then
-      say "✓ /auth/login returned a token (bcrypt → api → database OK)"
+# /auth/login round-trip — windowed for a COLD 1-vCPU server: all four python
+# containers start together and uvicorn can lag behind that start burst for
+# tens of seconds. 12 × (max-time 5 s + 3 s) ≈ a two-minute ceiling; fast
+# exits stay: the FIRST structured response settles the probe (token →
+# green). With the default SEED_DEMO_USERS=true a token proves bcrypt → api →
+# ACTIVE database; with seeding off the demo account may not exist, so ANY
+# structured response (a 401 body, say) already proves the api is up and the
+# token check is skipped. sed -n ... p exits 0 even when the key is absent
+# (grep under set -e would abort): a missing or empty SEED_DEMO_USERS then
+# falls through to enabled, matching api/config.py's default — explicit
+# false-like values disable.
+login_roundtrip() {
+  local container="${1:-sleep-api}" port="${2:-8000}"
+  local resp="" rc=0
+
+  # seed-aware (reads .env.development from the clone root — cwd contract);
+  # like above, missing/empty key ⇒ enabled (api/config.py's default):
+  seed="$(sed -n 's/^SEED_DEMO_USERS=//p' .env.development | tr -d ' ' | tr '[:upper:]' '[:lower:]')"
+  case "$seed" in 1|true|yes|"") seeded=1 ;; *) seeded=0 ;; esac
+
+  for _ in $(seq 1 12); do
+    resp="$(curl -sS --max-time 5 -X POST "http://localhost:$port/auth/login" \
+              -H 'Content-Type: application/json' \
+              -d '{"email":"patient@sleep.com","password":"1234"}' 2>/dev/null)" || rc=$?
+    [ -n "$resp" ] && break
+    sleep 3
+  done
+
+  if [ -n "$resp" ]; then
+    if [ "$seeded" = 1 ]; then
+      if printf '%s' "$resp" | grep -q '"token"'; then
+        say "✓ /auth/login returned a token (bcrypt → api → active database OK)"
+      else
+        say "✗ /auth/login gave no token — check: docker logs $container --tail 20 (runbook §7)"
+        return 1
+      fi
     else
-      say "✗ /auth/login gave no token — check: docker logs sleep-api --tail 20 (runbook §7)"
-      fail=1
+      say "✓ api reachable (SEED_DEMO_USERS disabled — token round-trip skipped)"
     fi
-  else
-    say "✓ api reachable (SEED_DEMO_USERS disabled — token round-trip skipped)"
+    return 0
   fi
-else
-  say "✗ /auth/login unreachable — check: docker logs sleep-api --tail 20 (runbook §7)"
-  fail=1
-fi
+
+  # nothing structured — say why from the transport's own verdict:
+  case "$rc" in
+    7)
+      say "✗ /auth/login refused (curl rc 7): $container is down or restart-looping; state:"
+      say "      $(docker inspect --format '{{.State.Status}} restarts={{.RestartCount}} oom={{.State.OOMKilled}}' "$container" 2>/dev/null || echo '(inspect failed)')"
+      if docker logs "$container" 2>&1 | grep -q 'password authentication failed for user'; then
+        say "  (psycopg2 DSN mismatch — the postgres volume keeps the FIRST bootstrap's password;"
+        say "   fix: ./deploy/deploy-update.sh --repair-postgres-password)"
+      fi
+      ;;
+    28)
+      say "✗ /auth/login timed out (curl rc 28): the port accepts TCP but never answered in 5 s × 12 tries — see the log tail"
+      ;;
+    *)
+      say "✗ /auth/login unreachable (curl rc $rc)"
+      ;;
+  esac
+  say "  $container log tail:"
+  printf '%s\n' "$(docker logs "$container" --tail 6 2>&1 || true)" | sed 's/^/      /'
+  return 1
+}
+
+login_roundtrip || fail=1
 
 say ""
 if [ "$fail" = 0 ]; then
