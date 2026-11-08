@@ -49,6 +49,11 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        # No job here runs git (compose/docker/pip only) — do not leave the
+        # checkout token on disk for installation code to inherit
+        # (architecture-review hardening: credential persistence off).
+        with:
+          persist-credentials: false
 
       - uses: actions/setup-python@v5
         with:
@@ -81,6 +86,12 @@ jobs:
           # template sets those values — this catches BOTH bad YAML and
           # missing-variable typos in the files we deploy with.
           cp .env.example ci.env.development
+          # docker-compose.aws.yml ALSO references `env_file: .env.development`
+          # by name — that file must EXIST for `compose config` to validate it
+          # (--env-file only feeds interpolation variables; it does not satisfy
+          # an env_file: reference). A clean checkout has neither, so the
+          # service env file is materialized from the same template.
+          cp .env.example .env.development
           docker compose -f docker-compose.yml --env-file ci.env.development config --quiet
           docker compose -f docker-compose.aws.yml --env-file ci.env.development config --quiet
 
@@ -94,6 +105,11 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        # No job here runs git (compose/docker/pip only) — do not leave the
+        # checkout token on disk for installation code to inherit
+        # (architecture-review hardening: credential persistence off).
+        with:
+          persist-credentials: false
 
       - uses: docker/setup-buildx-action@v3
 
@@ -119,6 +135,11 @@ jobs:
       JWT_SECRET: c1111111111111111111111111111111111111111111111111111111111111111
     steps:
       - uses: actions/checkout@v4
+        # No job here runs git (compose/docker/pip only) — do not leave the
+        # checkout token on disk for installation code to inherit
+        # (architecture-review hardening: credential persistence off).
+        with:
+          persist-credentials: false
 
       - uses: actions/setup-python@v5
         with:

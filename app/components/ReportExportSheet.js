@@ -10,7 +10,9 @@ import { EXPORT_SHEET_TEXT } from '../config/displayText';
 //   ('share' opens the OS share sheet, 'save' downloads to the device).
 //   enabled=false greys the whole row and shows `reason` under the subtitle
 //   (e.g. nightly analysis not run yet); busy actions render their own
-//   spinner and freeze the rest of the row while the export runs.
+//   spinner and freeze EVERY row while any export runs — the screens hold
+//   one shared busyKey, so two exports racing the sheet (two spinners, two
+//   Android folder pickers) can never happen.
 export default function ReportExportSheet({ visible, onClose, rows }) {
   return (
     <Modal
@@ -35,7 +37,10 @@ export default function ReportExportSheet({ visible, onClose, rows }) {
 
           {rows.map(row => {
             const enabled = row.enabled ?? true;
-            const rowBusy = row.actions?.some(a => a.busy);
+            // anyBusy, not rowBusy: one running export freezes the WHOLE
+            // sheet. (The screens run exports through a single shared
+            // busyKey between both rows.)
+            const anyBusy = rows.some(r => r.actions?.some(a => a.busy));
             return (
               <View
                 key={row.key}
@@ -60,7 +65,8 @@ export default function ReportExportSheet({ visible, onClose, rows }) {
                 </View>
 
                 {/* One small button per delivery mode; the busy one swaps to a
-                    spinner and greys out the others until the export ends. */}
+                    spinner and every other action greys until the export ends
+                    (including actions in other rows — see anyBusy above). */}
                 <View style={styles.rowActions}>
                   {row.actions?.map(action => (
                     <TouchableOpacity
@@ -68,7 +74,7 @@ export default function ReportExportSheet({ visible, onClose, rows }) {
                       style={styles.actionBtn}
                       accessibilityLabel={action.label}
                       activeOpacity={0.75}
-                      disabled={!enabled || rowBusy || action.disabled}
+                      disabled={!enabled || anyBusy || action.disabled}
                       onPress={() => action.onPress?.()}
                     >
                       {action.busy

@@ -146,7 +146,7 @@ docs/                       ARCHITECTURE, DATA_MODEL, DATABASE, AUTH_API, MQTT_S
 | Patient — Home | Working | Live vitals, SpO2 sparkline, tier card |
 | Patient — Alerts | Working | Filterable event log |
 | Patient — Network | Working | Delivery measured from `seq` vs publisher `stats`; latency is estimated `RTT/2` via `echo.py` |
-| Patient — Report | Untested | Timeline chart + PDF export (`expo-print` / `expo-sharing`); export sheet offers Share + Save to device (`expo-file-system` SAF, Android: first save opens a one-time Downloads-folder grant then saves silently). On-device check pending |
+| Patient — Report | Untested | Timeline chart + PDF export (`expo-print` / `expo-sharing`); export sheet offers Share + Save to device (`expo-file-system` SAF, Android: first save opens a one-time Downloads-folder grant then saves silently — on Android 11+ the system picker may refuse to select the Downloads root, so select or create a subfolder inside it instead; the grant works identically). On-device check pending |
 | Doctor dashboards | Partial | Seeded roster with a live overlay, plus an Alerts tab and session PDF export for the live patient; one patient streams at a time (true multi-patient needs per-patient topics) |
 | MQTT client | Working | Per-install persisted client ID, `cleanSession: false`, `sleep/#` + `qos/pong` at QoS 2, exponential-backoff reconnect |
 | Python publisher | Working | Runs; owns session lifecycle + `seq`/`publishedAt`. HRV restored — the demo dataset's third vital was mislabeled `rr` and every reading fell back to 35 ms (Issue 3, resolved) |

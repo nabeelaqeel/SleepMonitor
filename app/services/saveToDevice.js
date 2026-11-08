@@ -62,11 +62,22 @@ async function requestSaveDirectory(dirHintKey) {
 // `uri` — the file:// URI of the temp PDF expo-print rendered.
 // `baseName` — extension-free name from pdfBaseName().
 // Resolves to the SAF content:// URI of the saved copy; the temp file is
-// deleted afterwards so the report does not linger in the app cache.
+// dropped in EVERY terminal state (saved / failed / picker cancelled) —
+// no report ever lingers in the app cache, and the callers re-render a
+// fresh PDF per attempt anyway.
 export async function savePdfToDevice({ uri, baseName, dirHintKey = 'Download' }) {
   if (!canSaveToDevice()) {
     throw new Error('savePdfToDevice is only available on Android.');
   }
+
+  // Read the source PDF BEFORE creating anything in the SAF folder: a
+  // missing/unreadable temp file (or a full disk during the read) then
+  // fails without leaving an empty .pdf in the user's folder and without
+  // touching the stored grant — the stale-grant catch below can safely
+  // treat every write failure as a GRANT problem, never a source problem.
+  const base64 = await FileSystem.readAsStringAsync(uri, {
+    encoding: EncodingType.Base64,
+  });
 
   // First save: open the picker. Refreshes only when the stored grant is gone.
   let dirUri = await AsyncStorage.getItem(SAF_DIR_KEY);
@@ -77,9 +88,6 @@ export async function savePdfToDevice({ uri, baseName, dirHintKey = 'Download' }
 
   const write = async target => {
     const fileUri = await SAF.createFileAsync(target, baseName, PDF_MIME);
-    const base64 = await FileSystem.readAsStringAsync(uri, {
-      encoding: EncodingType.Base64,
-    });
     await FileSystem.writeAsStringAsync(fileUri, base64, {
       encoding: EncodingType.Base64,
     });
@@ -88,8 +96,6 @@ export async function savePdfToDevice({ uri, baseName, dirHintKey = 'Download' }
 
   try {
     const savedUri = await write(dirUri);
-    // Temp PDF is now duplicated into the SAF folder — drop the cache copy.
-    await FileSystem.deleteAsync(uri, { idempotent: true });
     return savedUri;
   } catch (e) {
     // A stored path can go stale between saves (permission revoked, app
@@ -99,14 +105,16 @@ export async function savePdfToDevice({ uri, baseName, dirHintKey = 'Download' }
     await AsyncStorage.removeItem(SAF_DIR_KEY);
     const retryDir = await requestSaveDirectory(dirHintKey);
     try {
-      const savedUri = await write(retryDir);
-      // Temp PDF is now duplicated into the SAF folder — drop the cache copy.
-      await FileSystem.deleteAsync(uri, { idempotent: true });
-      return savedUri;
+      return await write(retryDir);
     } catch (e2) {
       if (e2 instanceof SaveCancelledError) throw e2;
       await AsyncStorage.removeItem(SAF_DIR_KEY);
       throw e2;
     }
+  } finally {
+    // Success: the copy now lives in SAF. Failure or a cancelled picker:
+    // the export sheet stays open and the next attempt renders a fresh
+    // PDF — either way the cache copy has no future, delete it.
+    await FileSystem.deleteAsync(uri, { idempotent: true });
   }
 }

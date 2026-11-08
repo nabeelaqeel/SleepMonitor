@@ -50,6 +50,15 @@ docker compose -f docker-compose.aws.yml --env-file .env.development \
 # Script form (deploys): ./deploy/deploy-update.sh --ai-demo — same profile,
 # added on top of the mode's profile (TEST keeps local-db), and sleep-ai-demo
 # joins the post-deploy container verification.
+#
+# ⚠ Existing deployments: --ai-demo does NOT write the patient id into
+# .env.development. If the file lacks AI_DEMO_PATIENT_ID, compose falls back
+# to the demo's built-in placeholder patient (demo-patient) — the container
+# looks healthy and verification passes, but the account you actually log
+# into never receives the band. Set AI_DEMO_PATIENT_ID to the login
+# account's patient UUID first (the seeded patient@sleep.com account is
+# 00000000-0000-0000-0000-000000000002), or use ./deploy/bootstrap.sh
+# --ai-demo, which appends the seeded value (existing keys are preserved).
 
 # OFF: drop the flag, then:
 docker compose -f docker-compose.aws.yml --env-file .env.development up -d

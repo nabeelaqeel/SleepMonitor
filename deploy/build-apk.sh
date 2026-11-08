@@ -68,7 +68,11 @@ mask_val() {
 
 # ── sanity: tooling + the Expo project present ───────────────
 [ -f "$APP/package.json" ] || die "app/package.json missing — wrong checkout?"
-[ -d "$APP/node_modules" ] || die "app/node_modules missing — run `npm install` in app/ first"
+[ -d "$APP/node_modules" ] || die "app/node_modules missing — run 'npm install' in app/ first"
+# app/android/ must exist BEFORE anything below touches it (the local.properties
+# write would die with a raw redirect error under set -e, and the gradlew
+# check further down would never be reached):
+[ -d "$ANDROID" ] || die "app/android/ missing — generate it with 'npx expo prebuild --platform android' first (⚠ see the header note about the debug keystore)"
 for tool in node python3 java; do
   command -v $tool >/dev/null 2>&1 || die "$tool not found on PATH — needed for this build"
 done
@@ -159,6 +163,10 @@ if [ "$DRY" = 1 ]; then
     say "   first run — recording the fingerprint, no invalidation yet"
   fi
 else
+  # The STAMP is written only after a successful, artifact-producing build:
+  # writing it up-front would record the new fingerprint even when Gradle
+  # failed after the bundler outputs were cleared, and the next run would
+  # then consider the (possibly stale) baked bundle valid.
   if [ -n "$PREV_FP" ] && [ "$PREV_FP" != "$CURRENT_FP" ]; then
     say "── baked EXPO_PUBLIC_* changed since the last build (…${PREV_FP:0:16} → …${CURRENT_FP:0:16})"
     say "   (env values are not gradle inputs — invalidating bundler outputs + metro cache:"
@@ -168,7 +176,6 @@ else
     rm -rf "$APP/node_modules/.cache"
     say "   ✓ bundler outputs and node_modules/.cache cleared — this assemble re-bakes your JS"
   fi
-  printf '%s\n' "$CURRENT_FP" > "$STAMP_FILE"
 fi
 
 # ── artifact naming + output dir ─────────────────────────────
@@ -206,6 +213,9 @@ run "${TO_RUN[@]}" || die "gradle build FAILED — the error above names the mis
 
 [ -f "$APK_SRC" ] || die "gradle reported success but $APK_SRC is absent — inspect app/android/app/build/outputs/"
 
+# fingerprint stamp: NOW (a real APK exists at $APK_SRC), not before Gradle ran
+printf '%s\n' "$CURRENT_FP" > "$STAMP_FILE"
+
 cp "$APK_SRC" "$OUT_DIR/$NAME"
 cp "$APK_SRC" "$OUT_DIR/SleepMonitor-latest.apk"   # stable name for adb install commands
 SIZE="$(du -h "$OUT_DIR/$NAME" | cut -f1)"
@@ -216,7 +226,11 @@ say "         also refreshed $OUT_DIR/SleepMonitor-latest.apk"
 # ── optional install over adb ────────────────────────────────
 if [ "$INSTALL" = 1 ]; then
   command -v adb >/dev/null 2>&1 || die "adb not on PATH — install/dk or add $SDK_ROOT/platform-tools"
-  state="$(adb get-state -s 2>/dev/null || true)"
+  # `-s <serial>` is adb's GLOBAL option and must precede the subcommand —
+  # `get-state -s` is invalid (and would leave $state empty under `|| true`);
+  # adb also reads ANDROID_SERIAL on its own, so the guard is only for
+  # disambiguating several connected devices:
+  state="$(adb ${ANDROID_SERIAL:+-s "$ANDROID_SERIAL"} get-state 2>/dev/null || true)"
   [ "$state" = "device" ] || die "no connected android device (adb: ${state:-none}) — plug in with USB debugging, or skip --install"
   say "── installing over adb (device: ${ANDROID_SERIAL:-default})"
   if ! apk_install_out="$(adb install -r "$OUT_DIR/$NAME" 2>&1)"; then
@@ -228,10 +242,13 @@ if [ "$INSTALL" = 1 ]; then
         say "   e.g. the EAS-built app, or a build from a regenerated keystore)"
         if [ "$ASSUME_YES" = 1 ]; then
           say "── --yes used: uninstalling $PACKAGE then installing"
-          run adb uninstall "$PACKAGE"
+          run adb uninstall "$PACKAGE" || die "adb uninstall failed — uninstall the current app on the device once by hand, then re-run --install"
         else
           read -r -p "    uninstall app \"$PACKAGE\" (deletes its app-local data; login will be re-requested) [y/N]? " reply
-          case "$reply" in [yY]*) run adb uninstall "$PACKAGE" ;; *) die "declined — refusing to uninstall without consent (use --yes to skip the ask in scripts)" ;; esac
+          case "$reply" in
+            [yY]*) run adb uninstall "$PACKAGE" || die "adb uninstall failed — remove the app once by hand, then re-run --install" ;;
+            *) die "declined — refusing to uninstall without consent (use --yes to skip the ask in scripts)" ;;
+          esac
         fi
         run adb install -r "$OUT_DIR/$NAME" || die "install failed even after uninstalling"
         ;;

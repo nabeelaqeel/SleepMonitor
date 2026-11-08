@@ -79,20 +79,33 @@ if [ -f .env.development ] && [ "$FORCE" != 1 ]; then
   MQPW="$(grep '^MQTT_PASSWORD=' .env.development | cut -d= -f2- || true)"
   [ -n "$MQPW" ] || die "existing .env.development has no MQTT_PASSWORD — regenerate with --force"
   # --ai-demo on a kept env: append-only addition of the demo publisher's
-  # target account (the same two keys ship in the template for fresh
-  # bootstraps). Idempotent — a second --ai-demo run appends nothing.
-  if [ "$AI_DEMO" = 1 ] && ! grep -q '^AI_DEMO_PATIENT_ID=' .env.development; then
+  # MISSING keys (the same pair ships in the template for fresh bootstraps).
+  # Idempotent — a second --ai-demo run appends nothing. Key-scoped on
+  # purpose: appending the whole pair whenever only PATIENT_ID was missing
+  # would clobber an already-configured AI_DEMO_INTERVAL (e.g. a faster
+  # 15 s demo beat) with the 60 s default.
+  if [ "$AI_DEMO" = 1 ]; then
+    need_patient=1;  grep -q '^AI_DEMO_PATIENT_ID=' .env.development && need_patient=0
+    need_interval=1; grep -q '^AI_DEMO_INTERVAL='   .env.development && need_interval=0
+    need_list=""
+    [ "$need_patient" = 1 ]  && need_list="AI_DEMO_PATIENT_ID"
+    [ "$need_interval" = 1 ] && need_list="${need_list:+$need_list / }AI_DEMO_INTERVAL"
     if [ "$DRY" = 1 ]; then
-      say "[dry-run] would append AI_DEMO_PATIENT_ID + AI_DEMO_INTERVAL to .env.development"
-    else
-      cat >> .env.development <<'SM_ENV_APPEND'
-
-# AI demo band publisher (compose profile ai-demo) — bootstrap --ai-demo added.
-# Must equal the app login's UUID (the seeded patient@sleep.com account).
-AI_DEMO_PATIENT_ID=00000000-0000-0000-0000-000000000002
-AI_DEMO_INTERVAL=60
-SM_ENV_APPEND
-      ok "AI_DEMO_PATIENT_ID/AI_DEMO_INTERVAL appended to .env.development"
+      if [ -n "$need_list" ]; then
+        say "[dry-run] would append $need_list to .env.development"
+      fi
+    elif [ -n "$need_list" ]; then
+      {
+        printf '\n# AI demo band publisher (compose profile ai-demo) — bootstrap --ai-demo added.\n'
+        if [ "$need_patient" = 1 ]; then
+          printf "# Must equal the app login's UUID (the seeded patient@sleep.com account).\n"
+          printf 'AI_DEMO_PATIENT_ID=00000000-0000-0000-0000-000000000002\n'
+        fi
+        if [ "$need_interval" = 1 ]; then
+          printf 'AI_DEMO_INTERVAL=60\n'
+        fi
+      } >> .env.development
+      ok "$need_list appended to .env.development"
     fi
   fi
 else
@@ -291,13 +304,16 @@ fi
 # ── 7. start + verify (single implementation lives in deploy-update.sh) ──
 UP_FLAGS=()
 [ "$AI_DEMO" = 1 ] && UP_FLAGS+=(--ai-demo)
+# "${UP_FLAGS[@]}" on an EMPTY array errors under set -u on Bash 4.3 and
+# older — the `[@]+"…[@]"` guard expands to nothing when empty and to the
+# quoted list when non-empty, so both prints and both exec paths stay safe.
 if [ "$NO_START" = 1 ]; then
   say "── start skipped (--no-start): ./deploy/deploy-update.sh --skip-pull${UP_FLAGS:+ --ai-demo} whenever you want it"
 elif [ "$DRY" = 1 ]; then
   say "[dry-run] SM_BOOTSTRAP_DRY=1 ./deploy/deploy-update.sh --skip-pull${UP_FLAGS:+ --ai-demo} (compose up + verify)"
-  SM_BOOTSTRAP_DRY=1 ./deploy/deploy-update.sh --skip-pull "${UP_FLAGS[@]}"
+  SM_BOOTSTRAP_DRY=1 ./deploy/deploy-update.sh --skip-pull ${UP_FLAGS[@]+"${UP_FLAGS[@]}"}
 else
-  ./deploy/deploy-update.sh --skip-pull "${UP_FLAGS[@]}"
+  ./deploy/deploy-update.sh --skip-pull ${UP_FLAGS[@]+"${UP_FLAGS[@]}"}
 fi
 
 # ── 8. handoff: the values the *phone* side needs ─────────────

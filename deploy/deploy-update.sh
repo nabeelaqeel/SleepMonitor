@@ -41,7 +41,7 @@ for arg in "$@"; do
     --allow-dirty) ALLOW_DIRTY=1 ;;
     --ai-demo)    AI_DEMO=1 ;;
     --repair-postgres-password) REPAIR_PG=1 ;;
-    -h|--help)    sed -n '2,14p' "$0"; exit 0 ;;
+    -h|--help)    sed -n '2,15p' "$0"; exit 0 ;;
     *) echo "unknown flag: $arg (see header)"; exit 2 ;;
   esac
 done
@@ -287,10 +287,12 @@ verify_broker() {
   # --pwfile (verified). docker -i streams the two option lines, so no argv
   # / -e / inspect surface ever holds the value. .env values are line-based,
   # so the fed line is exactly one: whole-line value, taken verbatim.
+  # -R drops retained messages: a retained sleep/recommendation would make a
+  # silenced sleep-publisher look like live data flow on first (-C 1) read.
   data="$(printf '%s\n%s\n' "-u sm" "-P $mqpw" \
           | docker run --rm -i --network "container:$container" "$image" \
           timeout 6 mosquitto_sub -o /dev/stdin -h localhost -p 1883 -t 'sleep/#' \
-          -C 1 -W 5 2>/dev/null || true)"
+          -R -C 1 -W 5 2>/dev/null || true)"
   if [ -n "$data" ]; then
     say "✓ MQTT data flowing (sample: ${data:0:56}…)"
   else
@@ -323,6 +325,10 @@ login_roundtrip() {
   case "$seed" in 1|true|yes|"") seeded=1 ;; *) seeded=0 ;; esac
 
   for _ in $(seq 1 12); do
+    # every attempt starts verdict-clean: an early failure's rc must not
+    # survive into the final diagnostic ("rc 7 refused" from a stale curl
+    # would misname the transport cause of a later round)
+    resp=""; rc=0
     resp="$(curl -sS --max-time 5 -X POST "http://localhost:$port/auth/login" \
               -H 'Content-Type: application/json' \
               -d '{"email":"patient@sleep.com","password":"1234"}' 2>/dev/null)" || rc=$?

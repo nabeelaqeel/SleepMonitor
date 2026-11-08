@@ -106,6 +106,7 @@ export default function PatientDetailScreen({ route }) {
   const patternAvailable = !!recommendation?.band;
 
   function runExport(key, task) {
+    if (busyKey) return; // one export at a time — the shared busyKey would race otherwise
     setBusyKey(key);
     // The export sheet stays open so the tapped action shows its spinner;
     // on save the task itself may open the OS folder picker first. It closes
