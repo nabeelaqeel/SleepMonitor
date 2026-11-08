@@ -24,7 +24,13 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
 from api.db import DEMO_SEEDING_ENABLED, ensure_setup, get_user_by_email
-from api.security import create_token, decode_token, get_dummy_hash, hash_password, verify_password
+from api.security import (
+    create_token,
+    decode_token,
+    get_dummy_hash,
+    hash_password,
+    verify_password,
+)
 
 logging.basicConfig(
     level=logging.INFO,

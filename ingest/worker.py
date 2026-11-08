@@ -28,21 +28,20 @@ import signal
 import sys
 import threading
 import time
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 import paho.mqtt.client as mqtt
-from dotenv import load_dotenv
-from paho.mqtt.packettypes import PacketTypes
-from paho.mqtt.properties import Properties
-
 from db import (
     connect,
     ensure_user,
-    upsert_session,
-    insert_readings,
-    insert_alerts,
     finalize_session,
+    insert_alerts,
+    insert_readings,
+    upsert_session,
 )
+from dotenv import load_dotenv
+from paho.mqtt.packettypes import PacketTypes
+from paho.mqtt.properties import Properties
 
 load_dotenv(".env.development")
 
@@ -78,8 +77,8 @@ _seq = 0  # running counter for logging only
 
 def to_dt(ms) -> datetime:
     if ms is None:
-        return datetime.now(timezone.utc)
-    return datetime.fromtimestamp(ms / 1000.0, tz=timezone.utc)
+        return datetime.now(UTC)
+    return datetime.fromtimestamp(ms / 1000.0, tz=UTC)
 
 
 # ── MQTT callbacks (network thread — enqueue only) ────────────
@@ -248,8 +247,10 @@ def writer_loop(conn):
                     stats["missing"], stats["critical"], stats["important"],
                 )
 
-        if readings or alerts:
-            if (len(readings) + len(alerts) >= FLUSH_MAX) or (time.time() - last_flush >= FLUSH_INTERVAL):
+        if (readings or alerts) and (
+            len(readings) + len(alerts) >= FLUSH_MAX
+            or time.time() - last_flush >= FLUSH_INTERVAL
+        ):
                 flush(conn, readings, alerts)
                 readings.clear(); alerts.clear()
                 last_flush = time.time()

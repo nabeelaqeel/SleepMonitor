@@ -24,7 +24,6 @@ Replace classify() with a trained scikit-learn model call when available:
 
 from __future__ import annotations
 
-
 # ── Tier thresholds — edit these ──────────────────────────────
 SPO2_CRITICAL       = 90.0   # SpO2 below this                → Critical
 HR_CRITICAL_LOW     = 40.0   # HR below this                  → Critical

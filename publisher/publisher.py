@@ -16,13 +16,12 @@ import signal
 import sys
 import time
 import uuid
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
-import pandas as pd
 import paho.mqtt.client as mqtt
+import pandas as pd
 from dotenv import load_dotenv
-
 from tier_rules import classify
 
 # Anchor the env file to the repo root (two levels above this file) so the
@@ -158,7 +157,7 @@ def load_csv(path: str | Path) -> pd.DataFrame:
 
 def now_iso() -> str:
     """Return the wall-clock time formatted 'HH:MM AM/PM' for payload timestamps."""
-    return datetime.now(timezone.utc).strftime("%I:%M %p")
+    return datetime.now(UTC).strftime("%I:%M %p")
 
 
 def now_ms() -> int:
@@ -258,7 +257,6 @@ def publish_background_stats(client: mqtt.Client) -> None:
 
 def run() -> None:
     """Load the CSV and replay it at PUBLISH_INTERVAL seconds, looping until signalled, then publish session/end."""
-    global _shutdown
 
     def handle_signal(sig, frame):
         """Set the shutdown flag on SIGINT/SIGTERM so the replay loop unwinds cleanly."""

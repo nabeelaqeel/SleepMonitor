@@ -38,6 +38,12 @@ yarn-error.*
 .env.development
 .env.staging
 .env.production
+# CI's local expansion of .env.example (same file the workflows write)
+ci.env.development
+
+# Python tool caches
+.pytest_cache/
+.ruff_cache/
 
 # AWS broker credential file — generated on the server, never committed
 # (mosquitto_passwd -c /config/passwd — see the author-side deployment runbook)
@@ -68,6 +74,9 @@ evaluation_results.json
 # generated native folders (the Expo project now lives in app/)
 app/ios
 app/android
+
+# local APK saves from deploy/build-apk.sh — artifacts, never for the repo
+app/builds/
 
 # AI module artifacts (kept local, never committed)
 ai/models/rf_phase2.joblib

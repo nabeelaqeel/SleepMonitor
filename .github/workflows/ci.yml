@@ -1,0 +1,147 @@
+# =============================================================
+# Sleep Monitor — CI
+#
+# Three independent jobs, all triggered on every push (all branches) and every
+# PR. Runs in parallel — fastest signal, no shared state:
+#
+#   checks      pip resolution parity + ruff + compose interpolation
+#   docker      the one shared image builds (api/ingest/publisher/echo/ai-demo)
+#   unit-tests  DB-free python unit tests — tests/ (API smoke) + ai/tests +
+#               benchmark/tests (pre-existing suites, no DB or broker needed)
+#
+# NOT here (deliberate): postgres+mosquitto integration stack, AWS deploy —
+# CI never touches the AWS server.
+#
+# MD/docs-only pushes are skipped to keep the run list meaningful.
+# =============================================================
+
+name: CI
+
+on:
+  push:
+    paths-ignore:
+      - "docs/**"
+      - "notes/**"
+      - "graphify-out/**"
+      - "**.md"
+  pull_request:
+    paths-ignore:
+      - "docs/**"
+      - "notes/**"
+      - "graphify-out/**"
+      - "**.md"
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # ── 1. Lint + dependency resolution + compose interpolation ──
+  # Installing ALL four requirements files into ONE venv mirrors the root
+  # Dockerfile — it is the check that catches pin drift between services
+  # (e.g. publisher pins psycopg2-binary==2.9.10 while ai floats >=2.9).
+  checks:
+    name: deps + lint + compose config
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: |
+            api/requirements.txt
+            ingest/requirements.txt
+            publisher/requirements.txt
+            ai/requirements.txt
+
+      - name: Resolve every requirements file together (Dockerfile parity)
+        run: |
+          # Pinned: like all lint deps, a future ruff release could turn CI red
+          # with no code change — bump this deliberately after checking output.
+          pip install ruff==0.17.4
+          pip install \
+            -r api/requirements.txt \
+            -r ingest/requirements.txt \
+            -r publisher/requirements.txt \
+            -r ai/requirements.txt
+
+      - name: Ruff (api, ingest, publisher, tests)
+        run: ruff check api ingest publisher tests
+
+      - name: Compose files parse and interpolate
+        run: |
+          # .env.example is the CI-safe template; the real .env.development
+          # never leaves the server. The ${VAR:?} guards resolve because the
+          # template sets those values — this catches BOTH bad YAML and
+          # missing-variable typos in the files we deploy with.
+          cp .env.example ci.env.development
+          docker compose -f docker-compose.yml --env-file ci.env.development config --quiet
+          docker compose -f docker-compose.aws.yml --env-file ci.env.development config --quiet
+
+  # ── 2. The ONE image every Python service shares builds ──
+  # Built from repo root exactly like the server does. Cache export via GHA
+  # (mode=max keeps every layer) — after the first run, unchanged
+  # requirements/ code layers are cache hits and this job drops to ~1-2 min.
+  # No push, no load: the image is built purely as a correctness check.
+  docker-image:
+    name: docker image builds
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: docker/setup-buildx-action@v3
+
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: false
+          load: false
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+  # ── 3. DB-free unit tests ──
+  # Plain TestClient without entering the context manager — the lifespan
+  # handler (ensure_setup → Postgres) never runs. One `pytest` run collects
+  # ALL suites: tests/ (API smoke), ai/tests, benchmark/tests — every one of
+  # them imports ok without postgres or mosquitto running.
+  # JWT_SECRET is a valid fixed secret: CI only, never a deployment value.
+  unit-tests:
+    name: python unit tests (no DB)
+    runs-on: ubuntu-latest
+    env:
+      # 64-char hex, no "change_me" — passes api/config.py hardening
+      JWT_SECRET: c1111111111111111111111111111111111111111111111111111111111111111
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: |
+            api/requirements.txt
+            ingest/requirements.txt
+            publisher/requirements.txt
+            ai/requirements.txt
+
+      # ai/tests and benchmark/tests import ai.* (sklearn, pandas, paho) and
+      # run_benchmark — so this venv must mirror the full service installs,
+      # same four files as the `checks` job, plus pytest and the TestClient
+      # transport (httpx2, required by starlette.testclient)
+      - name: Install all requirements + test-only deps
+        run: pip install -r api/requirements.txt -r ingest/requirements.txt -r publisher/requirements.txt -r ai/requirements.txt pytest httpx2
+
+      - name: Env file present (config.load_dotenv resolves it)
+        run: cp .env.example .env.development
+
+      # `python -m pytest` (not bare pytest) so the repo root is on sys.path
+      # and `import api...` / `import run_benchmark` resolve without
+      # __init__.py or a package install
+      - name: Run all unit test suites
+        run: python -m pytest -q

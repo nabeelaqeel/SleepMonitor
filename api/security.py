@@ -9,7 +9,7 @@ default is for local development only.
 from __future__ import annotations
 
 import os
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 import bcrypt
 from jose import JWTError, jwt
@@ -53,7 +53,7 @@ def verify_password(plain: str, hashed: str) -> bool:
 
 def create_token(user_id: str, role: str) -> str:
     """Issue a signed JWT identifying the logged-in user."""
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     payload = {
         "sub": user_id,
         "role": role,
