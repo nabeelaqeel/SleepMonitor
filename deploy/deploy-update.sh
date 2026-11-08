@@ -50,6 +50,20 @@ say()  { printf '%s\n' "$*"; }
 run()  { if [ "$DRY" = 1 ]; then say "[dry-run] $*"; else "$@"; fi; }
 die()  { printf '\n✗ %s\n' "$*" >&2; exit 1; }
 
+# DSN userinfo → raw bytes (URI %XX decode). The api's SQLAlchemy client
+# unquotes the DSN password, so every value tested or patched against the
+# volume must be the DECODED form. '+' stays LITERAL (RFC 3986 userinfo
+# grammar — no x-www-form-urlencoded); invalid sequences ("%zz", trailing
+# "%q") pass through untouched; a bare '\' survives the round-trip (it is
+# doubled first, so printf %b cannot reinterpret the password's own bytes
+# as \n/\t/... escape sequences).
+decode_percent() {
+  local s
+  s="$(printf '%s' "$1" | sed -e 's/\\/\\\\/g' \
+                 -e 's/%\([0-9A-Fa-f][0-9A-Fa-f]\)/\\x\1/g')"
+  printf '%b' "$s"
+}
+
 # ── sanity: a real checkout with a generated env ─────────────
 [ -f docker-compose.aws.yml ] || die "docker-compose.aws.yml missing — run from the clone root"
 if [ ! -f .env.development ]; then
@@ -87,10 +101,13 @@ say "── mode: $MODE (profile: ${PROFILE[*]:-none})"
 # the phone was configured from). Instead the volume's role password becomes
 # the CURRENT DSN password: rows, MQTT creds and the phone config all stay
 # valid. ALTER runs on the pg container's socket (trust inside the container,
-# by design of postgres:16-alpine) — the pw is never echoed and never has to
-# cross the network path the coherence check replays below.
-# Bootstrap-generated passwords are hex (no sed/SQL metacharacters); a
-# hand-edited DSN carrying quotes needs escaping before this recipe.
+# by design of postgres:16-alpine) — the pw is never echoed, never rides any
+# argv (the SQL reaches psql via stdin), and never crosses the network path
+# the coherence check replays below.
+# The extracted DSN password is percent-decoded first — the api replays the
+# DSN with %XX unquoted, so the volume must store the decoded bytes — and the
+# SQL literal is ' -doubled: even a hand-edited password carrying quotes /
+# semicolons / $ ` \ bytes cannot terminate or extend the ALTER statement.
 if [ "$REPAIR_PG" = 1 ]; then
   if [ "$DRY" = 1 ]; then
     say "[dry-run] would ALTER sleep_user to the .env.development DSN password (inside sleep-postgres)"
@@ -100,8 +117,10 @@ if [ "$REPAIR_PG" = 1 ]; then
       || die "--repair-postgres-password needs sleep-postgres running — compose up first, then re-run"
     dbpw="$(sed -n 's#^DATABASE_URL=postgresql://sleep_user:\([^@]*\)@postgres:5432/sleep_monitor.*#\1#p' .env.development)"
     [ -n "$dbpw" ] || die "no TEST-shape DATABASE_URL password in .env.development — nothing to repair"
-    docker exec sleep-postgres psql -U sleep_user -d sleep_monitor \
-      -c "ALTER USER sleep_user PASSWORD '$dbpw';"
+    dbpw="$(decode_percent "$dbpw")"
+    q="'"; r="''"   # ' doubling inline (${dbpw//'/''}) misparses on bash 5.2+
+    printf "ALTER USER sleep_user PASSWORD '%s';\n" "${dbpw//$q/$r}" \
+      | docker exec -i sleep-postgres psql -U sleep_user -d sleep_monitor
     say "✔ postgres now accepts the .env.development DSN password (volume data untouched)"
   fi
 fi
@@ -156,14 +175,19 @@ postgres_dsn_coherence() {
     say "⚠ DATABASE_URL is not the expected TEST shape — DSN coherence check skipped"
     return 0
   fi
+  # the api replays the DSN with %XX unquoted — probe the DECODED value
+  # ('+' stays literal: the userinfo grammar has no form-encoding):
+  dbpw="$(decode_percent "$dbpw")"
   pg_net="$(docker inspect sleep-postgres --format '{{range $k,$_ := .NetworkSettings.Networks}}{{$k}}{{end}}' 2>/dev/null || true)"
   if [ -z "$pg_net" ]; then
     say "⚠ sleep-postgres has no compose network — DSN coherence check skipped"
     return 0
   fi
-  if docker run --rm --network "$pg_net" postgres:16-alpine \
-       env PGPASSWORD="$dbpw" psql -h postgres -U sleep_user -d sleep_monitor \
-       -tAc 'SELECT 1' >/dev/null 2>&1; then
+  # the pw crosses by stdin only — the injected sh reads it straight into the
+  # probe's own PGPASSWORD env; no argv, -e flag or inspect surface carries it:
+  if printf '%s\n' "$dbpw" | docker run --rm -i --network "$pg_net" postgres:16-alpine \
+       sh -c 'IFS= read -r pw || true; PGPASSWORD="$pw" psql -h postgres -U sleep_user -d sleep_monitor -tAc "SELECT 1"' \
+       >/dev/null 2>&1; then
     say "✓ .env.development DSN accepted by the postgres volume (the api's auth path)"
     return 0
   fi
@@ -257,9 +281,16 @@ verify_broker() {
   # (c) live MQTT data inside the broker's netns (no host-port coupling:
   #     the netns sees the in-container 1883 directly).
   mqpw="$(sed -n 's/^MQTT_PASSWORD=//p' .env.development)"
-  data="$(docker run --rm --network "container:$container" "$image" \
-          timeout 6 mosquitto_sub -h localhost -p 1883 -t 'sleep/#' \
-          -u sm -P "$mqpw" -C 1 -W 5 2>/dev/null || true)"
+  # creds travel by stdin as the sub's config file — `-o` is mosquitto
+  # 2.1's documented no-argv auth path ("…without the need to show the
+  # username and password on the command line"), and the pinned sub has NO
+  # --pwfile (verified). docker -i streams the two option lines, so no argv
+  # / -e / inspect surface ever holds the value. .env values are line-based,
+  # so the fed line is exactly one: whole-line value, taken verbatim.
+  data="$(printf '%s\n%s\n' "-u sm" "-P $mqpw" \
+          | docker run --rm -i --network "container:$container" "$image" \
+          timeout 6 mosquitto_sub -o /dev/stdin -h localhost -p 1883 -t 'sleep/#' \
+          -C 1 -W 5 2>/dev/null || true)"
   if [ -n "$data" ]; then
     say "✓ MQTT data flowing (sample: ${data:0:56}…)"
   else
