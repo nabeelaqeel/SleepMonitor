@@ -10,6 +10,7 @@ from ai.mqtt import publish
 
 class PublishTestCase(unittest.TestCase):
     def test_publishes_one_message_with_expected_qos_and_retain(self):
+        """One publish lands with the exact topic, JSON body, qos and retain flags, bracketed by a full connect/loop/disconnect cycle."""
         client = MagicMock()
         with patch("ai.mqtt.build_client", return_value=client):
             publish("sleep/recommendation", {"band": "monitor"}, qos=1, retain=False)
@@ -26,6 +27,7 @@ class PublishTestCase(unittest.TestCase):
         client.loop_stop.assert_called_once()
 
     def test_unpublished_message_raises_and_cleans_up(self):
+        """Publish that never receives a broker ack inside the timeout raises RuntimeError AND still tears down loop + connection."""
         client = MagicMock()
         info = MagicMock()
         info.is_published.return_value = False

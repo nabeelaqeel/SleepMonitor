@@ -12,11 +12,13 @@ from ai.recommend import recommendation_payload
 
 class SessionToNightlyFeaturesTestCase(unittest.TestCase):
     def test_maps_heart_rate_from_postgres_column(self):
+        """The adapter accepts the DB-style column name heart_rate and fills hr_median from it."""
         readings = [{"spo2": 95.0, "heart_rate": 58.0, "hrv": 38.0, "motion": 0.2}]
         nightly = session_to_nightly_features(readings)
         self.assertEqual(nightly["hr_median"], 58.0)
 
     def test_maps_the_four_key_signals(self):
+        """App-payload key names (spo2/heartRate/hrv/motion) map through, and medians of the four signals are present alongside the id fields."""
         readings = [
             {"spo2": 95.0, "heartRate": 60.0, "hrv": 42.0, "motion": 0.1},
             {"spo2": 97.0, "heartRate": 62.0, "hrv": 38.0, "motion": 0.3},
@@ -31,17 +33,20 @@ class SessionToNightlyFeaturesTestCase(unittest.TestCase):
         self.assertIn("activity_mean", nightly)
 
     def test_empty_readings_report_error(self):
+        """Feature computation on an empty session yields an error entry, not silently zeroed medians."""
         nightly = session_to_nightly_features([])
         self.assertTrue(nightly.get("error"))
 
 
 class GetRecommendationTestCase(unittest.TestCase):
     def test_empty_readings_report_error(self):
+        """End-to-end get_recommendation on zero readings: nightly carries the error, band stays None — nothing false-positive."""
         result = get_recommendation([], session_id="empty", patient_id="p")
         self.assertTrue(result["nightly"].get("error"))
         self.assertIsNone(result["band"])
 
     def test_short_session_is_not_interpreted(self):
+        """A session shorter than min_tst_h produces band None with a duration error instead of a band guess."""
         readings = [
             {"timestamp": "2026-11-04T01:00:00Z", "spo2": 97, "heartRate": 60, "hrv": 40, "motion": 0.1},
             {"timestamp": "2026-11-04T01:59:00Z", "spo2": 97, "heartRate": 60, "hrv": 40, "motion": 0.1},
@@ -57,6 +62,7 @@ class GetRecommendationTestCase(unittest.TestCase):
 
 class RecommendationPayloadTestCase(unittest.TestCase):
     def test_payload_only_exposes_needed_fields(self):
+        """recommendation_payload filters the internal result down to the app-facing keys only — extra/private fields are dropped."""
         result = {
             "session_id": "abc",
             "patient_id": "pd",

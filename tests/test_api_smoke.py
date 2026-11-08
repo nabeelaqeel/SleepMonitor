@@ -24,6 +24,7 @@ client = TestClient(app)
 
 
 def test_health_probe_ok():
+    """/auth/health returns 200 with the status+service identity body."""
     r = client.get("/auth/health")
     assert r.status_code == 200
     body = r.json()
@@ -32,6 +33,7 @@ def test_health_probe_ok():
 
 
 def test_verify_requires_bearer_header():
+    """A request without the Authorization header gets 401 whose detail names Bearer (no info leak)."""
     r = client.get("/auth/verify")
     assert r.status_code == 401
     assert "Bearer" in r.json()["detail"]

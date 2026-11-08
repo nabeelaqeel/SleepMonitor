@@ -13,6 +13,7 @@ TEST_DSN = "postgresql://user:password@localhost:5432/test"
 
 class LatestSessionForPatientTestCase(unittest.TestCase):
     def test_returns_latest_session_id(self):
+        """With a DB row present the loader returns that session id (mocked psycopg2 connect)."""
         cursor = MagicMock()
         cursor.fetchone.return_value = ("abc",)
         conn = MagicMock()
@@ -27,6 +28,7 @@ class LatestSessionForPatientTestCase(unittest.TestCase):
         self.assertEqual(session_id, "abc")
 
     def test_raises_when_no_session_exists(self):
+        """No DB row → RuntimeError from the loader rather than a silent None (mocked psycopg2)."""
         cursor = MagicMock()
         cursor.fetchone.return_value = None
         conn = MagicMock()

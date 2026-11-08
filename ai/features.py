@@ -82,6 +82,7 @@ def aggregate_nightly(epochs: pd.DataFrame, cfg: FeatureConfig | None = None) ->
     out["sleep_minutes"] = round(n * cfg.epoch_seconds / 60.0, 2) if n else np.nan
 
     def _valid(values: pd.Series, lo: float, hi: float) -> np.ndarray:
+        """Series to floats, trimmed to finite values inside [lo, hi]."""
         arr = pd.to_numeric(values, errors="coerce").to_numpy(dtype=float)
         return arr[np.isfinite(arr) & (arr >= lo) & (arr <= hi)]
 

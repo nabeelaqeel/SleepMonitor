@@ -42,6 +42,7 @@ log = logging.getLogger("api.main")
 
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
+    """One-shot startup: ensure the schema / seed users exist, then hold serving until shutdown."""
     ensure_setup(hash_password)
     log.info(
         "Database ready (demo seeding %s)",
@@ -67,11 +68,13 @@ class LoginRequest(BaseModel):
 
 @app.get("/auth/health")
 def health():
+    """Liveness probe — proves the process answers; opens nothing near the DB."""
     return {"status": "ok", "service": "sleep-monitor-api"}
 
 
 @app.post("/auth/login")
 def login(req: LoginRequest):
+    """Verify email+password and return a 12 h JWT plus the non-sensitive user fields. Unknown emails verify against a dummy hash so the 401 path burns the same bcrypt cost for every address."""
     user = get_user_by_email(req.email)
     # Timing-equaliser: unknown emails verify against a dummy hash of an
     # in-memory random value. verify_password runs for BOTH cases (no

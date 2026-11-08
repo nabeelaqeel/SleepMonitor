@@ -25,10 +25,12 @@ class FakeTc:
     """Fake `subprocess.run` for tc show/delete only."""
 
     def __init__(self, show_outputs):
+        """Queue the scripted `tc qdisc show` outputs and record every command seen."""
         self.show_outputs = list(show_outputs)
         self.calls = []
 
     def __call__(self, command, **kwargs):
+        """Serve show/delete results from the script; replay exhaustion or an unexpected command raises instead of guessing."""
         self.calls.append(list(command))
         if command == rb.NETEM_SHOW_CMD:
             if not self.show_outputs:
@@ -42,21 +44,25 @@ class FakeTc:
 
 class NetemGuardTests(unittest.TestCase):
     def setUp(self):
+        """Reset run_benchmark's abort flag and netem-applied marker per test."""
         rb._abort.clear()
         rb._netem_applied = False
 
     def tearDown(self):
+        """Same reset after the test so module state never leaks between suites."""
         rb._abort.clear()
         rb._netem_applied = False
 
     @contextmanager
     def run_tc(self, fake):
+        """Patch subprocess.run with the fake tc driver and capture the guard's stdout for assertion."""
         output = io.StringIO()
         with patch.object(rb.subprocess, "run", side_effect=fake), \
                 redirect_stdout(output):
             yield output
 
     def test_clear_retry_succeeds_but_run_is_dirty(self):
+        """A leftover qdisc that clears on retry succeeds exactly once but still marks the run dirty and does NOT abort the matrix."""
         fake = FakeTc([NETEM_QDISC, CLEAN_QDISC])
         rb._netem_applied = True
         with self.run_tc(fake):
@@ -70,6 +76,7 @@ class NetemGuardTests(unittest.TestCase):
             "a leftover qdisc must trigger exactly one retry")
 
     def test_clear_still_present_aborts_matrix(self):
+        """A netem qdisc that survives the retry raises NetemClearError and sets the abort flag."""
         fake = FakeTc([NETEM_QDISC, NETEM_QDISC])
         rb._netem_applied = True
         with self.run_tc(fake):
@@ -81,6 +88,7 @@ class NetemGuardTests(unittest.TestCase):
         self.assertEqual(fake.calls.count(rb.NETEM_CLEAR_CMD), 2)
 
     def test_pre_run_leftover_aborts_matrix(self):
+        """Leftover netem before a run aborts the matrix after exactly one show call; the run is refused."""
         fake = FakeTc([NETEM_QDISC])
         with self.run_tc(fake):
             allowed = rb.check_no_netem_before_run("A-clean-r01", "clean")
@@ -90,6 +98,7 @@ class NetemGuardTests(unittest.TestCase):
         self.assertEqual(fake.calls, [rb.NETEM_SHOW_CMD])
 
     def test_pre_run_clean_allows_run(self):
+        """Clean interface at run start allows the run and leaves the abort flag untouched."""
         fake = FakeTc([CLEAN_QDISC])
         with self.run_tc(fake):
             allowed = rb.check_no_netem_before_run("A-netem-r01", "netem")

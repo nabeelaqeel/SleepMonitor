@@ -147,6 +147,14 @@ say "── (exported — these exact values will be baked into the APK)"
 # the exact exported values is the validity signal — when it moves, the
 # bundler's outputs AND its caches are force-invalidated so the new values
 # re-bake; when it matches, none of this runs and rebuilds stay cheap.
+invalidate_bundle_outputs() {
+  say "   (env values are not gradle inputs — invalidating bundler outputs + metro cache:"
+  say "    without this, the previously baked JS bundle ships again)"
+  rm -rf "$ANDROID/app/build/generated/assets/createBundleReleaseJsAndAssets"
+  rm -rf "$ANDROID/app/build/intermediates/sourcemaps/react"
+  rm -rf "$APP/node_modules/.cache"
+  say "   ✓ bundler outputs and node_modules/.cache cleared — this assemble re-bakes your JS"
+}
 STAMP_FILE="$ANDROID/.baked-env-stamp"
 CURRENT_FP="$(for key in $(printf '%s\n' "${!BAKED[@]}" | sort); do
                 printf '%s=%s\n' "$key" "${BAKED[$key]}"
@@ -155,26 +163,30 @@ PREV_FP="$(cat "$STAMP_FILE" 2>/dev/null || true)"
 
 if [ "$DRY" = 1 ]; then
   say "── baked-env fingerprint: ${CURRENT_FP:0:16}…"
-  if [ -n "$PREV_FP" ] && [ "$PREV_FP" != "$CURRENT_FP" ]; then
+  if [ -z "$PREV_FP" ]; then
+    say "   no stamp yet — the real run invalidates the JS bundle BEFORE building:"
+    say "   existing outputs here may have been baked with different env values"
+  elif [ "$PREV_FP" != "$CURRENT_FP" ]; then
     say "   differs from the last build — the real run will invalidate the JS bundle so the new endpoints re-bake"
-  elif [ -n "$PREV_FP" ]; then
-    say "   matches the last build — no JS invalidation needed"
   else
-    say "   first run — recording the fingerprint, no invalidation yet"
+    say "   matches the last build — no JS invalidation needed"
   fi
 else
   # The STAMP is written only after a successful, artifact-producing build:
   # writing it up-front would record the new fingerprint even when Gradle
   # failed after the bundler outputs were cleared, and the next run would
   # then consider the (possibly stale) baked bundle valid.
-  if [ -n "$PREV_FP" ] && [ "$PREV_FP" != "$CURRENT_FP" ]; then
-    say "── baked EXPO_PUBLIC_* changed since the last build (…${PREV_FP:0:16} → …${CURRENT_FP:0:16})"
-    say "   (env values are not gradle inputs — invalidating bundler outputs + metro cache:"
-    say "    without this, the previously baked JS bundle ships again)"
-    rm -rf "$ANDROID/app/build/generated/assets/createBundleReleaseJsAndAssets"
-    rm -rf "$ANDROID/app/build/intermediates/sourcemaps/react"
-    rm -rf "$APP/node_modules/.cache"
-    say "   ✓ bundler outputs and node_modules/.cache cleared — this assemble re-bakes your JS"
+  if [ "$PREV_FP" != "$CURRENT_FP" ]; then
+    if [ -z "$PREV_FP" ]; then
+      # No stamp does NOT mean a clean state: this android dir may pre-date
+      # this script (EAS/hand builds, a stamp lost with app/android being
+      # regenerated). Its bundle could carry OTHER values — invalidate it,
+      # same recipe as the fingerprint-changed case.
+      say "── no fingerprint stamp on this app/android — invalidating defensively before the first tracked build"
+    else
+      say "── baked EXPO_PUBLIC_* changed since the last build (…${PREV_FP:0:16} → …${CURRENT_FP:0:16})"
+    fi
+    invalidate_bundle_outputs
   fi
 fi
 

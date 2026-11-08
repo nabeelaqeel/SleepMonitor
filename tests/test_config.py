@@ -24,6 +24,7 @@ PLACEHOLDER_SECRET = "change_me_random_hex_at_least_32_characters_long"
 
 
 def test_placeholder_jwt_secret_refused():
+    """Booting api.config with the .env.example placeholder JWT_SECRET must abort in a subprocess, erroring at JWT_SECRET."""
     env = {**os.environ, "JWT_SECRET": PLACEHOLDER_SECRET}
     result = subprocess.run(
         [sys.executable, "-c", "import api.config"],
@@ -39,6 +40,7 @@ def test_placeholder_jwt_secret_refused():
 
 
 def test_short_jwt_secret_refused():
+    """Booting api.config with a below-minimum-length JWT_SECRET must abort in a subprocess, erroring at JWT_SECRET."""
     env = {**os.environ, "JWT_SECRET": "too_short"}
     result = subprocess.run(
         [sys.executable, "-c", "import api.config"],

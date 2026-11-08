@@ -70,51 +70,57 @@ export async function savePdfToDevice({ uri, baseName, dirHintKey = 'Download' }
     throw new Error('savePdfToDevice is only available on Android.');
   }
 
-  // Read the source PDF BEFORE creating anything in the SAF folder: a
-  // missing/unreadable temp file (or a full disk during the read) then
-  // fails without leaving an empty .pdf in the user's folder and without
-  // touching the stored grant — the stale-grant catch below can safely
-  // treat every write failure as a GRANT problem, never a source problem.
-  const base64 = await FileSystem.readAsStringAsync(uri, {
-    encoding: EncodingType.Base64,
-  });
-
-  // First save: open the picker. Refreshes only when the stored grant is gone.
-  let dirUri = await AsyncStorage.getItem(SAF_DIR_KEY);
-  const isFresh = !dirUri;
-  if (!dirUri) {
-    dirUri = await requestSaveDirectory(dirHintKey);
-  }
-
-  const write = async target => {
-    const fileUri = await SAF.createFileAsync(target, baseName, PDF_MIME);
-    await FileSystem.writeAsStringAsync(fileUri, base64, {
+  // From the first byte read to the last write attempt, every exit path
+  // (source-read failure, a cancelled first-picker, save failure, success)
+  // runs the same finally below, so the temp PDF outlives the call in no
+  // branch. The read stays FIRST: a missing/unreadable file or a full disk
+  // fails before creating an empty .pdf in SAF and before touching the
+  // stored grant — the stale-grant catch below can safely treat every
+  // WRITE failure as a GRANT problem, never a source problem.
+  let base64;
+  try {
+    base64 = await FileSystem.readAsStringAsync(uri, {
       encoding: EncodingType.Base64,
     });
-    return fileUri;
-  };
 
-  try {
-    const savedUri = await write(dirUri);
-    return savedUri;
-  } catch (e) {
-    // A stored path can go stale between saves (permission revoked, app
-    // data cleared). Ask again exactly once; a brand-new picker rejection
-    // still propagates the original error.
-    if (isFresh) throw e;
-    await AsyncStorage.removeItem(SAF_DIR_KEY);
-    const retryDir = await requestSaveDirectory(dirHintKey);
+    // First save: open the picker. Refreshes only when the stored grant is gone.
+    let dirUri = await AsyncStorage.getItem(SAF_DIR_KEY);
+    const isFresh = !dirUri;
+    if (!dirUri) {
+      dirUri = await requestSaveDirectory(dirHintKey);
+    }
+
+    const write = async target => {
+      const fileUri = await SAF.createFileAsync(target, baseName, PDF_MIME);
+      await FileSystem.writeAsStringAsync(fileUri, base64, {
+        encoding: EncodingType.Base64,
+      });
+      return fileUri;
+    };
+
     try {
-      return await write(retryDir);
-    } catch (e2) {
-      if (e2 instanceof SaveCancelledError) throw e2;
+      const savedUri = await write(dirUri);
+      return savedUri;
+    } catch (e) {
+      // A stored path can go stale between saves (permission revoked, app
+      // data cleared). Ask again exactly once; a brand-new picker rejection
+      // still propagates the original error.
+      if (isFresh) throw e;
       await AsyncStorage.removeItem(SAF_DIR_KEY);
-      throw e2;
+      const retryDir = await requestSaveDirectory(dirHintKey);
+      try {
+        return await write(retryDir);
+      } catch (e2) {
+        if (e2 instanceof SaveCancelledError) throw e2;
+        await AsyncStorage.removeItem(SAF_DIR_KEY);
+        throw e2;
+      }
     }
   } finally {
-    // Success: the copy now lives in SAF. Failure or a cancelled picker:
-    // the export sheet stays open and the next attempt renders a fresh
-    // PDF — either way the cache copy has no future, delete it.
+    // EVERY exit path lands here once: a successful save (the copy now
+    // lives in SAF), a save failure after the stale-grant retry, a source
+    // read failure, or a first-picker cancellation (incl. closing it) —
+    // either way this temp copy has no future, delete it.
     await FileSystem.deleteAsync(uri, { idempotent: true });
   }
 }
