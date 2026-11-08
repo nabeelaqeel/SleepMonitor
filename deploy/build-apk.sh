@@ -99,6 +99,18 @@ if [ -n "$ENV_FILE" ]; then
     line="${line%$'\r'}"
     case "$line" in ''|\#*) continue ;; esac
     key="${line%%=*}"; value="${line#*=}"
+    # dotenv files routinely quote values — strip EXACTLY ONE matching outer
+    # pair so `EXPO_PUBLIC_API_URL="http://…"` bakes the bare URL instead of
+    # literal quotes (which would poison the frozen endpoint + credentials).
+    # Unquoted values pass through untouched.
+    if [ "${#value}" -ge 2 ]; then
+      fc="${value:0:1}"; lc="${value: -1}"
+      if [ "$fc" = "$lc" ]; then
+        case "$fc" in
+          \"|\') value="${value:1:${#value}-2}" ;;
+        esac
+      fi
+    fi
     case "$key" in EXPO_PUBLIC_*) BAKED[$key]="$value" ;; esac
   done < "$ENV_FILE"
 else

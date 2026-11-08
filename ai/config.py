@@ -58,7 +58,7 @@ class Phase2Config:
 
 
 def load_config(path: Path | str | None = None) -> Phase2Config:
-    """Parse the phase-2 YAML into Phase2Config; every key is optional and falls back to the defaults above, labels revert to healthy/monitor/see_doctor when three-class labels are absent."""
+    """Parse the phase-2 YAML into Phase2Config; the `features`, `runtime` and `labels.min_tst_h` keys are optional and fall back to the defaults above. `labels.three_class` is currently ignored: the labels are always healthy/monitor/see_doctor."""
     path = Path(path) if path else CONFIG_PATH
     with path.open() as f:
         raw = yaml.safe_load(f)

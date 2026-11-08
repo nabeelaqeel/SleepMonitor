@@ -52,3 +52,4 @@ def test_short_jwt_secret_refused():
         env=env,
     )
     assert result.returncode != 0, "32-char-minimum JWT_SECRET must abort startup"
+    assert "JWT_SECRET" in result.stderr, "failure must point at JWT_SECRET"

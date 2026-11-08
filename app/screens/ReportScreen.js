@@ -1,6 +1,6 @@
 import {
   View, Text, StyleSheet,
-  ScrollView, TouchableOpacity, ActivityIndicator, ToastAndroid,
+  ScrollView, TouchableOpacity, ActivityIndicator, ToastAndroid, Alert,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
@@ -70,6 +70,9 @@ export default function ReportScreen() {
       // Closing the folder picker is a normal "no", not a failure.
       if (e instanceof SaveCancelledError) return;
       console.error(`PDF export failed (${key}):`, e);
+      // The sheet going back to idle must not be the only signal: without
+      // an alert the user cannot tell that nothing was saved or shared.
+      Alert.alert('Export failed', 'The PDF export did not complete — nothing was saved or shared. Please try again.');
     }).finally(() => setBusyKey(null));
   }
 

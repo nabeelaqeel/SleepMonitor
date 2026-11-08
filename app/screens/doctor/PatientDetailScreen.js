@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { View, Text, ScrollView, TouchableOpacity, ActivityIndicator, StyleSheet, ToastAndroid } from 'react-native';
+import { View, Text, ScrollView, TouchableOpacity, ActivityIndicator, StyleSheet, ToastAndroid, Alert } from 'react-native';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
 import VitalCard from '../../components/VitalCard';
 import ReportExportSheet from '../../components/ReportExportSheet';
@@ -116,6 +116,9 @@ export default function PatientDetailScreen({ route }) {
       // Closing the folder picker is a normal "no", not a failure.
       if (e instanceof SaveCancelledError) return;
       console.error(`PDF export failed (${key}):`, e);
+      // The sheet going back to idle must not be the only signal: without
+      // an alert the user cannot tell that nothing was saved or shared.
+      Alert.alert('Export failed', 'The PDF export did not complete — nothing was saved or shared. Please try again.');
     }).finally(() => setBusyKey(null));
   }
 

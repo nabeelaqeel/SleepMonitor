@@ -338,7 +338,7 @@ def markdown(stock_hash, patched_hash, qos_rows, gate_rows, tiers,
 
 
 def main(argv=None):
-    """CLI: load both calibration bundles, enforce config coherence (every shared key must match apart from socketpair), write per_qos/gate/per_tier CSVs + gate.md, print the report, exit 1 on FAIL and 2 on INCONCLUSIVE."""
+    """CLI: load both calibration bundles, enforce config coherence (socketpair must be stock/af_unix and an explicit list of config keys must match), write per_qos/gate/per_tier CSVs + gate.md, print the report, exit 1 on FAIL and 2 on INCONCLUSIVE."""
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--stock-dir",
                         default=str(BENCH_DIR / "calibration_v2/bc_netem/stock"))

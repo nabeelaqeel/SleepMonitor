@@ -169,7 +169,7 @@ fi
 # where postgres:16-alpine is trust-auth (accepts ANY password; verified
 # empirically) — only the network path discriminates.
 postgres_dsn_coherence() {
-  local dbpw="" pg_net=""
+  local dbpw="" pg_net="" probe_out=""
   dbpw="$(sed -n 's#^DATABASE_URL=postgresql://sleep_user:\([^@]*\)@postgres:5432/sleep_monitor.*#\1#p' .env.development)"
   if [ -z "$dbpw" ]; then
     say "⚠ DATABASE_URL is not the expected TEST shape — DSN coherence check skipped"
@@ -184,12 +184,20 @@ postgres_dsn_coherence() {
     return 0
   fi
   # the pw crosses by stdin only — the injected sh reads it straight into the
-  # probe's own PGPASSWORD env; no argv, -e flag or inspect surface carries it:
-  if printf '%s\n' "$dbpw" | docker run --rm -i --network "$pg_net" postgres:16-alpine \
+  # probe's own PGPASSWORD env; no argv, -e flag or inspect surface carries it
+  # (and psql never echoes PGPASSWORD). stderr stays CAPTURED: a non-zero
+  # probe can be an image-pull/daemon/DNS/refused failure — those must not be
+  # mislabelled as credential rejections, only the auth failure says "repair":
+  probe_out="$(printf '%s\n' "$dbpw" | docker run --rm -i --network "$pg_net" postgres:16-alpine \
        sh -c 'IFS= read -r pw || true; PGPASSWORD="$pw" psql -h postgres -U sleep_user -d sleep_monitor -tAc "SELECT 1"' \
-       >/dev/null 2>&1; then
+       2>&1)" && {
     say "✓ .env.development DSN accepted by the postgres volume (the api's auth path)"
     return 0
+  }
+  if ! grep -q 'password authentication failed' <<<"$probe_out"; then
+    say "✗ DSN coherence probe failed for a reason other than the password (daemon/image/network — --repair-postgres-password CANNOT fix these):"
+    printf '%s\n' "$probe_out" | tail -5 | sed 's/^/      /'
+    return 1
   fi
   say "✗ postgres REJECTED the .env.development DSN password — the postgres_data volume keeps the password of the bootstrap that FIRST initialized it;"
   say "  the api will crash-loop on psycopg2 'password authentication failed'. Data-preserving fix (rows + MQTT creds unchanged):"
