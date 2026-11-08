@@ -305,7 +305,9 @@ SleepMonitor/
 │   │   └── SleepContext.js           # Global MQTT state — useSleep() hook
 │   ├── services/
 │   │   ├── mqttService.js            # Paho WebSocket MQTT client + publish()
-│   │   └── exportSessionReport.js    # Session PDF builder + share sheet (patient + doctor)
+│   │   ├── exportSessionReport.js    # Session PDF builder + native share (patient + doctor)
+│   │   ├── exportPatternReport.js    # Nightly pattern PDF builder + native share
+│   │   └── saveToDevice.js           # SAF download of a built PDF (Android, one-time folder grant)
 │   ├── data/
 │   │   └── patients.js               # Seeded roster; one entry carries a patientId
 │   ├── navigation/

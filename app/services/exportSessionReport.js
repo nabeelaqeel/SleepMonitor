@@ -1,14 +1,17 @@
 import * as Print from 'expo-print';
 import * as Sharing from 'expo-sharing';
 import { DISCLAIMER } from '../config/displayText';
+import { pdfBaseName } from './saveToDevice';
 
-// Builds the sleep-session report as an HTML document, renders it to a PDF
-// and opens the OS share sheet.
+// Builds the sleep-session report as an HTML document and renders it to a PDF.
 //
+// buildSessionReportPdf() returns the temp file URI + export name so the
+// callers choose delivery themselves: sharing to WhatsApp/mail via
+// exportSessionReport(), or a silent download via services/saveToDevice.
 // Shared by the patient's Report tab and the doctor's patient detail screen:
 // both export the same live session, but the doctor's copy names the patient
 // it belongs to through the optional patientName / patientId.
-export async function exportSessionReport({
+export async function buildSessionReportPdf({
   sessionStats,
   currentData,
   sleepTimeline,
@@ -156,6 +159,16 @@ ${sleepTimeline.length > 0 ? `
 </html>`;
 
   const { uri } = await Print.printToFileAsync({ html, base64: false });
+  return { uri, name: pdfBaseName('SessionReport') };
+}
+
+// Renders the report and hands it to the OS share sheet (WhatsApp, mail, …).
+export async function exportSessionReport(args) {
+  const { uri } = await buildSessionReportPdf(args);
+  await shareSessionReport(uri);
+}
+
+export async function shareSessionReport(uri) {
   await Sharing.shareAsync(uri, {
     mimeType: 'application/pdf',
     dialogTitle: 'Share Sleep Report',

@@ -15,6 +15,7 @@
     "@react-navigation/native-stack": "^7.14.11",
     "expo": "~54.0.37",
     "expo-build-properties": "~1.0.10",
+    "expo-file-system": "~19.0.24",
     "expo-print": "~15.0.8",
     "expo-secure-store": "~15.0.8",
     "expo-sharing": "~14.0.8",

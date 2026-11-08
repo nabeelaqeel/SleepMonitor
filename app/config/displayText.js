@@ -132,11 +132,18 @@ export const DISCLAIMER = {
 export const ACK_STORAGE_KEY = 'disclaimer_ack_v1';
 
 // ── Export picker sheet ──────────────────────────────────────────────────────
-// Copy for the two-option sheet the Report tab and the doctor's patient
-// detail screen show when the user taps "Export PDF".
+// Copy for the export sheet the Report tab and the doctor's patient detail
+// screen show when the user taps "Export PDF". Each report row carries a
+// trailing Share / Save pair; Save is Android-only (iOS saves through the
+// share sheet's native "Save to Files").
 export const EXPORT_SHEET_TEXT = {
   title:  'Export report',
   cancel: 'Cancel',
+  actions: {
+    share: 'Share',
+    save:  'Save to device',
+  },
+  saveToast: 'Report saved to your device',
   session: {
     title:       'Live session report',
     subtitle:    'What’s streaming now — tier counts, QoS delivery, timeline',

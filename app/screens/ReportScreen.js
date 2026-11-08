@@ -1,20 +1,21 @@
 import {
   View, Text, StyleSheet,
-  ScrollView, TouchableOpacity, ActivityIndicator,
+  ScrollView, TouchableOpacity, ActivityIndicator, ToastAndroid,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
 import { useState } from 'react';
 import { useSleep } from '../context/SleepContext';
-import { exportSessionReport } from '../services/exportSessionReport';
-import { exportPatternReport } from '../services/exportPatternReport';
+import { buildSessionReportPdf, exportSessionReport } from '../services/exportSessionReport';
+import { buildPatternReportPdf, exportPatternReport } from '../services/exportPatternReport';
+import { canSaveToDevice, savePdfToDevice, SaveCancelledError } from '../services/saveToDevice';
 import ReportExportSheet from '../components/ReportExportSheet';
 import { tierShortLabel, topicDisplayLabel, EXPORT_SHEET_TEXT } from '../config/displayText';
 
 export default function ReportScreen() {
   const { sessionStats, currentData, sleepTimeline, aiRecommendation } = useSleep();
   const [exportPickerOpen, setExportPickerOpen] = useState(false);
-  const [busyKey, setBusyKey] = useState(null); // 'session' | 'pattern' | null
+  const [busyKey, setBusyKey] = useState(null); // '<report>-<share|save>' | null
 
   const total = sessionStats.total || 1;
 
@@ -58,25 +59,61 @@ export default function ReportScreen() {
   // payload with an actual band has arrived for this patient.
   const patternAvailable = !!aiRecommendation?.band;
 
-  async function handleExportPdf() {
-    setExportPickerOpen(true);
-  }
-
   function runExport(key, task) {
-    setExportPickerOpen(false);
     setBusyKey(key);
-    task().catch(e => {
+    // The export sheet stays open so the tapped action shows its spinner;
+    // on save the task itself may open the OS folder picker first. It closes
+    // itself once the delivery finished (share dialog closed / file saved),
+    // and stays for errors or a cancelled folder picker so the user can retry.
+    task().then(() => setExportPickerOpen(false)).catch(e => {
+      // Closing the folder picker is a normal "no", not a failure.
+      if (e instanceof SaveCancelledError) return;
       console.error(`PDF export failed (${key}):`, e);
     }).finally(() => setBusyKey(null));
   }
 
-  const handleExportSession = () =>
-    runExport('session', () =>
-      exportSessionReport({ sessionStats, currentData, sleepTimeline }));
+  // Builds the PDF, downloads it through SAF and confirms with a toast.
+  const saveToDevice = task => async () => {
+    const { uri, name } = await task();
+    await savePdfToDevice({ uri, baseName: name });
+    ToastAndroid.show(EXPORT_SHEET_TEXT.saveToast, ToastAndroid.SHORT);
+  };
 
-  const handleExportPattern = () =>
-    runExport('pattern', () =>
-      exportPatternReport({ payload: aiRecommendation }));
+  const openExportSheet = () => setExportPickerOpen(true);
+
+  const sessionArgs = { sessionStats, currentData, sleepTimeline };
+
+  const handleShareSession = () =>
+    runExport('session-share', () => exportSessionReport(sessionArgs));
+
+  const handleSaveSession = () =>
+    runExport('session-save', saveToDevice(() => buildSessionReportPdf(sessionArgs)));
+
+  const handleSharePattern = () =>
+    runExport('pattern-share', () => exportPatternReport({ payload: aiRecommendation }));
+
+  const handleSavePattern = () =>
+    runExport('pattern-save', saveToDevice(() => buildPatternReportPdf({ payload: aiRecommendation })));
+
+  // Trailing per-row delivery buttons: Share opens the OS share sheet (all
+  // platforms), Save downloads into the granted device folder (Android only —
+  // iOS users save through the share sheet's native "Save to Files").
+  const deliveryActions = (key, shareOnPress, saveOnPress) => [
+    {
+      key: 'share',
+      icon: 'share-variant',
+      label: EXPORT_SHEET_TEXT.actions.share,
+      busy: busyKey === `${key}-share`,
+      onPress: shareOnPress,
+    },
+    ...(canSaveToDevice() ? [{
+      key: 'save',
+      icon: 'download',
+      label: EXPORT_SHEET_TEXT.actions.save,
+      busy: busyKey === `${key}-save`,
+      onPress: saveOnPress,
+    }] : []),
+  ];
 
   const exportRows = [
     {
@@ -85,8 +122,7 @@ export default function ReportScreen() {
       title: EXPORT_SHEET_TEXT.session.title,
       subtitle: EXPORT_SHEET_TEXT.session.subtitle,
       enabled: true,
-      busy: busyKey === 'session',
-      onPress: handleExportSession,
+      actions: deliveryActions('session', handleShareSession, handleSaveSession),
     },
     {
       key: 'pattern',
@@ -95,8 +131,7 @@ export default function ReportScreen() {
       subtitle: EXPORT_SHEET_TEXT.pattern.subtitle,
       enabled: patternAvailable,
       reason: EXPORT_SHEET_TEXT.pattern.unavailable,
-      busy: busyKey === 'pattern',
-      onPress: handleExportPattern,
+      actions: deliveryActions('pattern', handleSharePattern, handleSavePattern),
     },
   ];
 
@@ -115,7 +150,7 @@ export default function ReportScreen() {
           </View>
           <TouchableOpacity
             style={[styles.exportBtn, busyKey && styles.exportBtnDisabled]}
-            onPress={handleExportPdf}
+            onPress={openExportSheet}
             disabled={!!busyKey}
             activeOpacity={0.75}
           >
