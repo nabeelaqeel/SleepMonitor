@@ -120,7 +120,12 @@ export async function savePdfToDevice({ uri, baseName, dirHintKey = 'Download' }
     // EVERY exit path lands here once: a successful save (the copy now
     // lives in SAF), a save failure after the stale-grant retry, a source
     // read failure, or a first-picker cancellation (incl. closing it) —
-    // either way this temp copy has no future, delete it.
-    await FileSystem.deleteAsync(uri, { idempotent: true });
+    // either way this temp copy has no future, delete it. cleanup may fail
+    // (cache I/O error), but must never change the call's outcome — a
+    // swallowed failure keeps the saved-success return intact (and the
+    // retry from writing a second copy) and never masks the real cause.
+    await FileSystem.deleteAsync(uri, { idempotent: true }).catch(e => {
+      console.warn('temp report cleanup failed (ignored):', e);
+    });
   }
 }
