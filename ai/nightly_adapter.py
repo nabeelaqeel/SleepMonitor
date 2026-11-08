@@ -114,6 +114,7 @@ def _unavailable_result(
     patient_id: str | None = None,
     nightly: dict,
 ) -> dict:
+    """Uniform unavailable-result shape: band=None plus the nightly error context other code still reads."""
     return {
         "band": None,
         "probabilities": {},

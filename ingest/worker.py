@@ -28,21 +28,20 @@ import signal
 import sys
 import threading
 import time
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 import paho.mqtt.client as mqtt
-from dotenv import load_dotenv
-from paho.mqtt.packettypes import PacketTypes
-from paho.mqtt.properties import Properties
-
 from db import (
     connect,
     ensure_user,
-    upsert_session,
-    insert_readings,
-    insert_alerts,
     finalize_session,
+    insert_alerts,
+    insert_readings,
+    upsert_session,
 )
+from dotenv import load_dotenv
+from paho.mqtt.packettypes import PacketTypes
+from paho.mqtt.properties import Properties
 
 load_dotenv(".env.development")
 
@@ -77,14 +76,16 @@ _seq = 0  # running counter for logging only
 
 
 def to_dt(ms) -> datetime:
+    """Epoch milliseconds to an aware UTC datetime; None (payload with no timestamp) falls back to 'now'."""
     if ms is None:
-        return datetime.now(timezone.utc)
-    return datetime.fromtimestamp(ms / 1000.0, tz=timezone.utc)
+        return datetime.now(UTC)
+    return datetime.fromtimestamp(ms / 1000.0, tz=UTC)
 
 
 # ── MQTT callbacks (network thread — enqueue only) ────────────
 
 def on_connect(client, userdata, connect_flags, reason_code, properties=None):
+    """MQTT connect callback (CallbackAPI v2): refuse-on-failure exits the process; on success subscribe to sleep/# (QoS 2 readings/signals) and session/# (QoS 1)."""
     if reason_code.is_failure:
         log.error("Connection refused — %s", reason_code)
         sys.exit(1)
@@ -95,6 +96,7 @@ def on_connect(client, userdata, connect_flags, reason_code, properties=None):
 
 
 def on_message(client, userdata, msg):
+    """Network-thread callback: parse/validate the payload and enqueue work only. Session topics yield start/end items; sleep/# readings are persisted rows (+ alert rows for Critical/Important tiers); seq-less sleep/background statistics are skipped."""
     topic = msg.topic
     try:
         data = json.loads(msg.payload.decode())
@@ -156,6 +158,7 @@ def on_message(client, userdata, msg):
 # ── MQTT client setup ─────────────────────────────────────────
 
 def build_client() -> mqtt.Client:
+    """Assemble the v5 client under a persistent client id and clean_start=False with the 12 h session expiry, retrying broker connect for a bounded startup window."""
     client = mqtt.Client(
         mqtt.CallbackAPIVersion.VERSION2,
         client_id=CLIENT_ID,
@@ -188,6 +191,7 @@ def build_client() -> mqtt.Client:
 # ── DB writer (main thread) ───────────────────────────────────
 
 def flush(conn, readings, alerts):
+    """Commit any stale reading/alert batches and log inserted vs offered counts."""
     if readings:
         n = insert_readings(conn, readings)
         log.info("Flushed %d/%d readings", n, len(readings))
@@ -197,6 +201,7 @@ def flush(conn, readings, alerts):
 
 
 def writer_loop(conn):
+    """Main-thread drain: batch queued rows into the DB, restoring FK targets on first sight per session, flush at size or time thresholds, and finalize on session/end. Keeps draining after stop until the queue empties."""
     global _seq
     readings: list[tuple] = []
     alerts: list[tuple] = []
@@ -248,8 +253,10 @@ def writer_loop(conn):
                     stats["missing"], stats["critical"], stats["important"],
                 )
 
-        if readings or alerts:
-            if (len(readings) + len(alerts) >= FLUSH_MAX) or (time.time() - last_flush >= FLUSH_INTERVAL):
+        if (readings or alerts) and (
+            len(readings) + len(alerts) >= FLUSH_MAX
+            or time.time() - last_flush >= FLUSH_INTERVAL
+        ):
                 flush(conn, readings, alerts)
                 readings.clear(); alerts.clear()
                 last_flush = time.time()
@@ -258,6 +265,7 @@ def writer_loop(conn):
 
 
 def main() -> None:
+    """Bootstrap the connection, MQTT client and signal handlers, then run the writer loop until drained and cleaned up."""
     conn = connect(DATABASE_URL)
     ensure_user(conn, PATIENT_UUID)
 
@@ -265,6 +273,7 @@ def main() -> None:
     client.loop_start()
 
     def handle_signal(sig, frame):
+        """SIGTERM/SIGINT handler: request a clean stop; the running session is deliberately left open for the next worker."""
         log.info("Signal %s received — shutting down (session stays open)", sig)
         _stop.set()
 

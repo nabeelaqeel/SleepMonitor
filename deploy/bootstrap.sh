@@ -20,6 +20,8 @@
 #   ./deploy/bootstrap.sh --force              # regenerate .env.development + passwd
 #   ./deploy/bootstrap.sh --rotate-mqtt-password
 #   ./deploy/bootstrap.sh --no-start           # generate + passwd only
+#   ./deploy/bootstrap.sh --ai-demo            # also start the AI demo band
+#                                              #   publisher (compose profile ai-demo)
 #   ./deploy/bootstrap.sh --dry-run            # print every action, write nothing
 #   ./deploy/bootstrap.sh --ip 54.10.20.30     # override the printed broker IP
 #
@@ -31,16 +33,17 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
 
-DRY=0 FORCE=0 ROTATE=0 DEMO=0 NO_START=0 IP_OVERRIDE=""
+DRY=0 FORCE=0 ROTATE=0 DEMO=0 NO_START=0 AI_DEMO=0 IP_OVERRIDE=""
 while [ $# -gt 0 ]; do
   case "$1" in
     --force)FORCE=1 ;;
     --rotate-mqtt-password) ROTATE=1 ;;
     --demo) DEMO=1 ;;
     --no-start) NO_START=1 ;;
+    --ai-demo) AI_DEMO=1 ;;
     --dry-run) DRY=1 ;;
     --ip) IP_OVERRIDE="${2:?--ip needs a value}"; shift ;;
-    -h|--help) sed -n '2,26p' "$0"; exit 0 ;;
+    -h|--help) sed -n '2,28p' "$0"; exit 0 ;;
     *) echo "unknown flag: $1 (see header)"; exit 2 ;;
   esac
   shift
@@ -75,6 +78,36 @@ if [ -f .env.development ] && [ "$FORCE" != 1 ]; then
   say "── .env.development exists — keeping it (--force regenerates ALL secrets)"
   MQPW="$(grep '^MQTT_PASSWORD=' .env.development | cut -d= -f2- || true)"
   [ -n "$MQPW" ] || die "existing .env.development has no MQTT_PASSWORD — regenerate with --force"
+  # --ai-demo on a kept env: append-only addition of the demo publisher's
+  # MISSING keys (the same pair ships in the template for fresh bootstraps).
+  # Idempotent — a second --ai-demo run appends nothing. Key-scoped on
+  # purpose: appending the whole pair whenever only PATIENT_ID was missing
+  # would clobber an already-configured AI_DEMO_INTERVAL (e.g. a faster
+  # 15 s demo beat) with the 60 s default.
+  if [ "$AI_DEMO" = 1 ]; then
+    need_patient=1;  grep -q '^AI_DEMO_PATIENT_ID=' .env.development && need_patient=0
+    need_interval=1; grep -q '^AI_DEMO_INTERVAL='   .env.development && need_interval=0
+    need_list=""
+    [ "$need_patient" = 1 ]  && need_list="AI_DEMO_PATIENT_ID"
+    [ "$need_interval" = 1 ] && need_list="${need_list:+$need_list / }AI_DEMO_INTERVAL"
+    if [ "$DRY" = 1 ]; then
+      if [ -n "$need_list" ]; then
+        say "[dry-run] would append $need_list to .env.development"
+      fi
+    elif [ -n "$need_list" ]; then
+      {
+        printf '\n# AI demo band publisher (compose profile ai-demo) — bootstrap --ai-demo added.\n'
+        if [ "$need_patient" = 1 ]; then
+          printf "# Must equal the app login's UUID (the seeded patient@sleep.com account).\n"
+          printf 'AI_DEMO_PATIENT_ID=00000000-0000-0000-0000-000000000002\n'
+        fi
+        if [ "$need_interval" = 1 ]; then
+          printf 'AI_DEMO_INTERVAL=60\n'
+        fi
+      } >> .env.development
+      ok "$need_list appended to .env.development"
+    fi
+  fi
 else
   DB_PW="$(openssl rand -hex 12)"
   JWT_SECRET="$(openssl rand -hex 32)"
@@ -133,6 +166,12 @@ FLUSH_MAX=50
 PATIENT_ID=patient-001
 PATIENT_UUID=00000000-0000-0000-0000-000000000002
 DEVICE_ID=sleepband-001
+
+# AI demo band publisher (compose profile ai-demo — ./deploy/deploy-update.sh
+# --ai-demo starts it). AI_DEMO_PATIENT_ID must equal the app login's UUID —
+# PATIENT_UUID above, the seeded patient@sleep.com account.
+AI_DEMO_PATIENT_ID=00000000-0000-0000-0000-000000000002
+AI_DEMO_INTERVAL=60
 
 CSV_PATH=data/sleep_data_realistic.csv
 PUBLISH_INTERVAL=1.0
@@ -211,15 +250,17 @@ if [ -f mosquitto/passwd ] && [ "$FORCE" != 1 ] && [ "$ROTATE" != 1 ]; then
 else
   [ -n "$MQPW" ] || die "no MQTT_PASSWORD available to write into mosquitto/passwd"
   if [ "$DRY" = 1 ]; then
-    say "[dry-run] docker run --rm -v mosquitto eclipse-mosquitto:2 mosquitto_passwd -c -b /mosquitto/config/passwd sm <hidden>"
+    say "[dry-run] docker run --rm -v mosquitto eclipse-mosquitto:2.1.2-alpine mosquitto_passwd -c -b /mosquitto/config/passwd sm <hidden>"
     say "[dry-run] chown 1883:1883 + chmod 600 mosquitto/passwd (via a throwaway container, so no sudo)"
   else
-    docker run --rm -v "$PWD/mosquitto:/mosquitto/config" eclipse-mosquitto:2 \
+    # same pinned broker build as compose (passwd must stay in lockstep with
+    # the image that will read it — see the pin rationale in docker-compose.aws.yml):
+    docker run --rm -v "$PWD/mosquitto:/mosquitto/config" eclipse-mosquitto:2.1.2-alpine \
       mosquitto_passwd -c -b /mosquitto/config/passwd sm "$MQPW" >/dev/null
     # broker drops to its internal non-root user (uid 1883) and 2.1+ warns on
     # other ownership — validated recipe, done via container so it works on
     # the laptop (no sudoer requirement) AND the server (§2.9):
-    docker run --rm -v "$PWD/mosquitto:/mosquitto/config" eclipse-mosquitto:2 \
+    docker run --rm -v "$PWD/mosquitto:/mosquitto/config" eclipse-mosquitto:2.1.2-alpine \
       sh -c 'chown 1883:1883 /mosquitto/config/passwd && chmod 600 /mosquitto/config/passwd'
   fi
   if [ "$DRY" = 1 ]; then
@@ -261,13 +302,18 @@ if [ "$ROTATE" = 1 ] || [ "$FORCE" = 1 ]; then
 fi
 
 # ── 7. start + verify (single implementation lives in deploy-update.sh) ──
+UP_FLAGS=()
+[ "$AI_DEMO" = 1 ] && UP_FLAGS+=(--ai-demo)
+# "${UP_FLAGS[@]}" on an EMPTY array errors under set -u on Bash 4.3 and
+# older — the `[@]+"…[@]"` guard expands to nothing when empty and to the
+# quoted list when non-empty, so both prints and both exec paths stay safe.
 if [ "$NO_START" = 1 ]; then
-  say "── start skipped (--no-start): ./deploy/deploy-update.sh --skip-pull whenever you want it"
+  say "── start skipped (--no-start): ./deploy/deploy-update.sh --skip-pull${UP_FLAGS:+ --ai-demo} whenever you want it"
 elif [ "$DRY" = 1 ]; then
-  say "[dry-run] SM_BOOTSTRAP_DRY=1 ./deploy/deploy-update.sh --skip-pull (compose up + verify)"
-  SM_BOOTSTRAP_DRY=1 ./deploy/deploy-update.sh --skip-pull
+  say "[dry-run] SM_BOOTSTRAP_DRY=1 ./deploy/deploy-update.sh --skip-pull${UP_FLAGS:+ --ai-demo} (compose up + verify)"
+  SM_BOOTSTRAP_DRY=1 ./deploy/deploy-update.sh --skip-pull ${UP_FLAGS[@]+"${UP_FLAGS[@]}"}
 else
-  ./deploy/deploy-update.sh --skip-pull
+  ./deploy/deploy-update.sh --skip-pull ${UP_FLAGS[@]+"${UP_FLAGS[@]}"}
 fi
 
 # ── 8. handoff: the values the *phone* side needs ─────────────

@@ -8,7 +8,6 @@ a worker restart or MQTT redelivery.
 
 from __future__ import annotations
 
-import json
 import logging
 from datetime import datetime
 
@@ -19,6 +18,7 @@ log = logging.getLogger("ingest.db")
 
 
 def connect(dsn: str):
+    """Open one connection to the ingest DSN, transactions driven by the caller (autocommit off)."""
     conn = psycopg2.connect(dsn)
     conn.autocommit = False
     return conn
@@ -41,6 +41,7 @@ def ensure_user(conn, patient_uuid: str, email: str = "patient@sleep.com",
 
 def upsert_session(conn, session_id: str, patient_uuid: str,
                    device_id: str, started_at: datetime) -> None:
+    """Create the session row on first sight; ON CONFLICT keeps a replayed session/start harmless."""
     with conn.cursor() as cur:
         cur.execute(
             """
@@ -54,6 +55,7 @@ def upsert_session(conn, session_id: str, patient_uuid: str,
 
 
 def insert_readings(conn, rows: list[tuple]) -> int:
+    """Bulk-insert readings; (session_id, seq) conflicts are dropped so MQTT redelivery cannot duplicate a row. Returns how many rows actually inserted."""
     if not rows:
         return 0
     with conn.cursor() as cur:
@@ -75,6 +77,7 @@ def insert_readings(conn, rows: list[tuple]) -> int:
 
 
 def insert_alerts(conn, rows: list[tuple]) -> int:
+    """Bulk-insert the Critical/Important alert rows mirroring today's read batch; idempotent the same way. Returns actually-inserted count."""
     if not rows:
         return 0
     with conn.cursor() as cur:

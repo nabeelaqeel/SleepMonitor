@@ -202,7 +202,7 @@ Both navigators have their own `NavigationContainer` and mount exclusively (neve
 ### ReportScreen
 - **Reads:** `sessionStats`, `currentData`, `sleepTimeline`
 - **Key UI:** 3×2 summary card grid, per-tier bar rows (TierBar), stacked proportional bar, QoS transmission table, SpO2/HR timelines, "Export PDF" button. Percentage guard: `total` defaults to 1 to avoid division by zero.
-- **Export:** delegates to `services/exportSessionReport` (`expo-print` HTML → PDF → OS share sheet).
+- **Export:** "Export PDF" opens `components/ReportExportSheet`; each report row (live session / nightly pattern) carries a trailing Share + Save pair. Share delegates to `services/exportSessionReport` / `exportPatternReport` (`expo-print` HTML → PDF → OS share sheet). Save (Android) builds the same PDF and downloads it via `services/saveToDevice` (`expo-print` → SAF folder grant, persisted in `AsyncStorage` so later saves are silent).
 
 ### NetworkScreen
 - **Reads:** `networkStats`, `sessionStats`, `latencyStats`
@@ -223,7 +223,7 @@ Both navigators have their own `NavigationContainer` and mount exclusively (neve
 - **Reads:** `route.params.patient`, the same `patientSnapshots` overlay, plus `sessionStats`, `currentData` and `sleepTimeline` for the report export
 - **Live overlay:** when the route patient is streaming, vitals, tier (from the payload), critical count and the last message topic come from the live snapshot; otherwise the seeded record is shown with neutral (grey) values
 - **Tier:** payload tier when live (fallback `deriveTier(spo2)`); non-live records show a neutral "OFFLINE — no live session" banner instead of deriving a severity from the record
-- **Report export:** the "Export PDF" button calls `services/exportSessionReport`, which stamps the patient's name/ID into the PDF header; enabled only once this patient has streamed during this app run (otherwise disabled with "No session to export")
+- **Report export:** the "Export PDF" button opens `components/ReportExportSheet`; report builders stamp the patient's name/ID into the PDF header. Share/Save actions per row; session row enabled only once this patient has streamed during this app run (otherwise disabled with "No session to export")
 
 ### DoctorAlertsScreen (doctor)
 - **Reads:** `eventLog`, `sessionStats`, `patientSnapshots`

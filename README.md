@@ -182,9 +182,9 @@ cp .env.example .env.development
 # 2. Broker credential file — the stack's broker is LOCKED (allow_anonymous
 #    false), so it refuses to start without ./mosquitto/passwd:
 MQPW="$(grep '^MQTT_PASSWORD=' .env.development | cut -d= -f2-)"
-docker run --rm -v "$PWD/mosquitto:/mosquitto/config" eclipse-mosquitto:2 \
+docker run --rm -v "$PWD/mosquitto:/mosquitto/config" eclipse-mosquitto:2.1.2-alpine \
   mosquitto_passwd -c -b /mosquitto/config/passwd sm "$MQPW"
-docker run --rm -v "$PWD/mosquitto:/mosquitto/config" eclipse-mosquitto:2 \
+docker run --rm -v "$PWD/mosquitto:/mosquitto/config" eclipse-mosquitto:2.1.2-alpine \
   sh -c 'chown 1883:1883 /mosquitto/config/passwd && chmod 600 /mosquitto/config/passwd'
 
 # 3. App env (copy app/.env.example → app/.env.development): set
@@ -228,7 +228,7 @@ Authenticated tap of the live pipeline (the broker is locked, so anonymous
 
 ```bash
 MQPW="$(grep '^MQTT_PASSWORD=' .env.development | cut -d= -f2-)"
-docker run --rm --network host eclipse-mosquitto:2 \
+docker run --rm --network host eclipse-mosquitto:2.1.2-alpine \
   mosquitto_sub -h 127.0.0.1 -p 1883 -u sm -P "$MQPW" -t 'sleep/#' -v
 ```
 
@@ -305,7 +305,9 @@ SleepMonitor/
 │   │   └── SleepContext.js           # Global MQTT state — useSleep() hook
 │   ├── services/
 │   │   ├── mqttService.js            # Paho WebSocket MQTT client + publish()
-│   │   └── exportSessionReport.js    # Session PDF builder + share sheet (patient + doctor)
+│   │   ├── exportSessionReport.js    # Session PDF builder + native share (patient + doctor)
+│   │   ├── exportPatternReport.js    # Nightly pattern PDF builder + native share
+│   │   └── saveToDevice.js           # SAF download of a built PDF (Android, one-time folder grant)
 │   ├── data/
 │   │   └── patients.js               # Seeded roster; one entry carries a patientId
 │   ├── navigation/

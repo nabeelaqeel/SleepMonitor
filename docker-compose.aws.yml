@@ -17,7 +17,7 @@
 
 # Broker LOCKED mode: passwd file must exist BEFORE first start (§2.9):
 #   MQPW="$(grep '^MQTT_PASSWORD=' .env.development | cut -d= -f2-)"
-#   docker run --rm -v "$PWD/mosquitto:/mosquitto/config" eclipse-mosquitto:2 \
+#   docker run --rm -v "$PWD/mosquitto:/mosquitto/config" eclipse-mosquitto:2.1.2-alpine \
 #     mosquitto_passwd -c -b /mosquitto/config/passwd sm "$MQPW"
 #   sudo chown 1883:1883 mosquitto/passwd && sudo chmod 600 mosquitto/passwd
 #
@@ -47,7 +47,11 @@ x-python-common: &python-common
 
 services:
   broker:
-    image: eclipse-mosquitto:2
+    # Pinned: the :2 tag floated Debian↔Alpine mid-deployment (2026-11-06 it
+    # flipped to the 2.1.2-alpine build). 2.0.x builds cannot even parse this
+    # conf (duplicate per-listener password_file) — a future drift must not
+    # resurrect that race; bump the pin deliberately with mosquitto releases.
+    image: eclipse-mosquitto:2.1.2-alpine
     container_name: sleep-broker
     restart: unless-stopped
     ports:
@@ -126,6 +130,8 @@ services:
   #
   # ON:   docker compose -f docker-compose.aws.yml --env-file .env.development \
   #         --profile ai-demo up -d --build
+  #       (script form: ./deploy/deploy-update.sh --ai-demo — appends the
+  #       profile to the mode's profile and verifies sleep-ai-demo after)
   # OFF:  same command without the flag, then up -d — compose removes only
   #       this container.
   #

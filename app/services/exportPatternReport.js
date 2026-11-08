@@ -1,5 +1,6 @@
 import * as Print from 'expo-print';
 import * as Sharing from 'expo-sharing';
+import { pdfBaseName } from './saveToDevice';
 import {
   DISCLAIMER,
   aiBandLabel,
@@ -16,7 +17,8 @@ import {
 // payload predates renders as "Not available" rather than being invented.
 //
 // buildPatternReportHtml() is pure (no Expo APIs) so it can be exercised
-// without a device; exportPatternReport() renders + shares the PDF.
+// without a device; buildPatternReportPdf() renders it, and callers deliver
+// the file to share or saveToDevice like the session report does.
 
 // Axis bounds used ONLY to place metric bars on a plot. Mirror of the nightly
 // plausibility ranges in ai/config.py (hr 30–120 bpm, rmssd 5–200 ms,
@@ -384,12 +386,21 @@ ${disclaimerHtml}
 </html>`;
 }
 
-export async function exportPatternReport({ payload, patientName, patientId }) {
+export async function buildPatternReportPdf({ payload, patientName, patientId }) {
   if (!payload || !payload.band) {
     throw new Error('Nightly analysis is not available yet.');
   }
   const html = buildPatternReportHtml({ payload, patientName, patientId });
   const { uri } = await Print.printToFileAsync({ html, base64: false });
+  return { uri, name: pdfBaseName('PatternReport') };
+}
+
+export async function exportPatternReport(args) {
+  const { uri } = await buildPatternReportPdf(args);
+  await sharePatternReport(uri);
+}
+
+export async function sharePatternReport(uri) {
   await Sharing.shareAsync(uri, {
     mimeType: 'application/pdf',
     dialogTitle: 'Share Sleep Pattern Report',

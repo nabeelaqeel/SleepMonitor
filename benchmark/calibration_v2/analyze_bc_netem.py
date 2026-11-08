@@ -44,6 +44,7 @@ QOS_SOURCES = {
 
 
 def load_phase(directory, label):
+    """Load one side's three A/B/C runs: shape checks (exactly 3, ordered, netem scenario, delay-only, none idle-flagged), then concat per-run frames for analysis."""
     metas, cfg_hash = load_study(directory, label)
     if len(metas) != 3:
         die(f"{label}: expected 3 runs (A, B, C), found {len(metas)}")
@@ -72,6 +73,7 @@ def load_phase(directory, label):
 
 
 def qos_frame(frames, qos):
+    """Slice the frames down to the rows that carry this QoS class's traffic: QoS 0 ↔ experiment A, QoS 1 ↔ B/Important, QoS 2 ↔ C."""
     experiment, tier = QOS_SOURCES[qos]
     subset = frames[frames["experiment"] == experiment]
     if tier is not None:
@@ -80,6 +82,7 @@ def qos_frame(frames, qos):
 
 
 def stats(frames, qos):
+    """Delivery/latency/ack summary for one QoS class; dies when nothing was delivered (no median)."""
     subset = qos_frame(frames, qos)
     latency = subset["latency_ms"].dropna()
     ack = subset["ack_ms"].dropna()
@@ -95,6 +98,7 @@ def stats(frames, qos):
 
 
 def tier_table(stock_frames, patched_frames):
+    """Per-(experiment, tier) stock-vs-patched comparison rows: message counts, t1−t0 medians and their delta plus per-side ack medians."""
     rows = []
     for (experiment, tier) in sorted(
             stock_frames[["experiment", "tier"]].drop_duplicates().itertuples(index=False)):
@@ -122,12 +126,14 @@ def tier_table(stock_frames, patched_frames):
 
 
 def fmt_stat(value, messages, unit="ms"):
+    """Stat text 'value unit (n=…)', or an em-dash when the value is NaN or no samples."""
     if pd.isna(value) or messages is None:
         return "—"
     return f"{value:.2f} {unit} (n={int(messages)})"
 
 
 def build_qos_rows(stock_frames, patched_frames):
+    """One row per QoS class: delivered message counts both sides, t1−t0 medians both sides, the stock−patched offset and both on_publish ack medians."""
     rows = []
     for qos, (experiment, tier) in QOS_SOURCES.items():
         stock = stats(stock_frames, qos)
@@ -148,6 +154,7 @@ def build_qos_rows(stock_frames, patched_frames):
 
 
 def netem_guard_counts(metas):
+    """How many runs actually had the delay-only netem applied (guard metadata verified per run)."""
     ok = 0
     for meta in metas:
         netem = meta.get("netem") or {}
@@ -159,6 +166,7 @@ def netem_guard_counts(metas):
 
 def build_gate_rows(stock_metas, patched_metas, stock_frames,
                     patched_frames, qos_rows):
+    """Assemble the PASS/FAIL/INCONCLUSIVE gate rows: run-shape and netem guards, the stock 10 ms ack artifact, the patched 35–70 ms ack gap, patched ack < 2 ms, and per-QoS patched ≤ stock + 5 ms."""
     a_stock = stats(stock_frames, 0)
     a_patch = stats(patched_frames, 0)
     stock_ok, stock_n = netem_guard_counts(stock_metas)
@@ -256,6 +264,7 @@ def build_gate_rows(stock_metas, patched_metas, stock_frames,
 
 
 def overall_status(gate_rows):
+    """Roll-up verdict with severity precedence: any FAIL wins, then INCONCLUSIVE, otherwise PASS."""
     results = [row["result"] for row in gate_rows]
     if any(result == "FAIL" for result in results):
         return "FAIL"
@@ -266,6 +275,7 @@ def overall_status(gate_rows):
 
 def markdown(stock_hash, patched_hash, qos_rows, gate_rows, tiers,
              stock_runs, patched_runs):
+    """Render the full calibration report: header + config hashes, gate table, per-QoS offsets and per-tier detail."""
     complete = stock_runs == 3 and patched_runs == 3
     lines = [
         "# B/C netem calibration gate",
@@ -328,6 +338,7 @@ def markdown(stock_hash, patched_hash, qos_rows, gate_rows, tiers,
 
 
 def main(argv=None):
+    """CLI: load both calibration bundles, enforce config coherence (socketpair must be stock/af_unix and an explicit allowlist of run-methodology keys must match; other recorded keys, e.g. broker, are NOT compared), write per_qos/gate/per_tier CSVs + gate.md, print the report, exit 1 on FAIL and 2 on INCONCLUSIVE."""
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--stock-dir",
                         default=str(BENCH_DIR / "calibration_v2/bc_netem/stock"))

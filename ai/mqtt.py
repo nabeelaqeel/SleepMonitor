@@ -12,6 +12,7 @@ AI_CLIENT_ID_PREFIX = "sleep-ai-recommendation-"
 
 
 def build_client() -> mqtt.Client:
+    """CallbackAPI v2 client with a per-process client id; credentials from MQTT_USER / MQTT_PASSWORD when set."""
     client = mqtt.Client(
         mqtt.CallbackAPIVersion.VERSION2,
         client_id=AI_CLIENT_ID_PREFIX + str(os.getpid()),
@@ -33,6 +34,7 @@ def publish(
     host: str | None = None,
     port: int | None = None,
 ) -> None:
+    """Synchronous one-shot publish: connect, publish, wait within timeout (QoS 1/2: up to the broker ack — RuntimeError while unconfirmed), tear down either way. QoS 0 has NO ack in the protocol: "published" only means the client handed the message off, so delivery is unconfirmed. Host/port default to MQTT_HOST / MQTT_PORT env."""
     broker_host = host or os.getenv("MQTT_HOST", "localhost")
     broker_port = port if port is not None else int(os.getenv("MQTT_PORT", "1883"))
     client = build_client()

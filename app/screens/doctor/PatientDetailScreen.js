@@ -1,12 +1,13 @@
 import { useState } from 'react';
-import { View, Text, ScrollView, TouchableOpacity, ActivityIndicator, StyleSheet } from 'react-native';
+import { View, Text, ScrollView, TouchableOpacity, ActivityIndicator, StyleSheet, ToastAndroid, Alert } from 'react-native';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
 import VitalCard from '../../components/VitalCard';
 import ReportExportSheet from '../../components/ReportExportSheet';
 import { useSleep, PATIENT_LIVE_WINDOW_MS } from '../../context/SleepContext';
 import { useNow } from '../../hooks/useNow';
-import { exportSessionReport } from '../../services/exportSessionReport';
-import { exportPatternReport } from '../../services/exportPatternReport';
+import { buildSessionReportPdf, exportSessionReport } from '../../services/exportSessionReport';
+import { buildPatternReportPdf, exportPatternReport } from '../../services/exportPatternReport';
+import { canSaveToDevice, savePdfToDevice, SaveCancelledError } from '../../services/saveToDevice';
 import { tierLongLabel, tierShortLabel, OFFLINE_TIER_LABEL, topicDisplayLabel, EXPORT_SHEET_TEXT } from '../../config/displayText';
 
 const TIER_CONFIG = {
@@ -69,7 +70,7 @@ function MedicalHistoryItem({ record }) {
 export default function PatientDetailScreen({ route }) {
   const { patient } = route.params;
   const { patientSnapshots, sessionStats, currentData, sleepTimeline, aiRecommendations } = useSleep();
-  const [busyKey, setBusyKey] = useState(null); // 'session' | 'pattern' | null
+  const [busyKey, setBusyKey] = useState(null); // '<report>-<share|save>' | null
   const [exportPickerOpen, setExportPickerOpen] = useState(false);
   const now = useNow();
 
@@ -105,30 +106,78 @@ export default function PatientDetailScreen({ route }) {
   const patternAvailable = !!recommendation?.band;
 
   function runExport(key, task) {
-    setExportPickerOpen(false);
+    if (busyKey) return; // one export at a time — the shared busyKey would race otherwise
     setBusyKey(key);
-    task().catch(e => {
+    // The export sheet stays open so the tapped action shows its spinner;
+    // on save the task itself may open the OS folder picker first. It closes
+    // itself once the delivery finished (share dialog closed / file saved),
+    // and stays for errors or a cancelled folder picker so the user can retry.
+    task().then(() => setExportPickerOpen(false)).catch(e => {
+      // Closing the folder picker is a normal "no", not a failure.
+      if (e instanceof SaveCancelledError) return;
       console.error(`PDF export failed (${key}):`, e);
+      // The sheet going back to idle must not be the only signal: without
+      // an alert the user cannot tell that nothing was saved or shared.
+      Alert.alert('Export failed', 'The PDF export did not complete — nothing was saved or shared. Please try again.');
     }).finally(() => setBusyKey(null));
   }
 
-  const handleExportSession = () =>
-    runExport('session', () =>
-      exportSessionReport({
-        sessionStats,
-        currentData,
-        sleepTimeline,
-        patientName: patient.name,
-        patientId: patient.patientId,
-      }));
+  // Builds the PDF, downloads it through SAF and confirms with a toast.
+  const saveToDevice = task => async () => {
+    const { uri, name } = await task();
+    await savePdfToDevice({ uri, baseName: name });
+    ToastAndroid.show(EXPORT_SHEET_TEXT.saveToast, ToastAndroid.SHORT);
+  };
 
-  const handleExportPattern = () =>
-    runExport('pattern', () =>
-      exportPatternReport({
-        payload: recommendation,
-        patientName: patient.name,
-        patientId: patient.patientId,
-      }));
+  const openExportSheet = () => setExportPickerOpen(true);
+
+  const sessionArgs = {
+    sessionStats,
+    currentData,
+    sleepTimeline,
+    patientName: patient.name,
+    patientId: patient.patientId,
+  };
+
+  const handleShareSession = () =>
+    runExport('session-share', () => exportSessionReport(sessionArgs));
+
+  const handleSaveSession = () =>
+    runExport('session-save', saveToDevice(() => buildSessionReportPdf(sessionArgs)));
+
+  const handleSharePattern = () =>
+    runExport('pattern-share', () => exportPatternReport({
+      payload: recommendation,
+      patientName: patient.name,
+      patientId: patient.patientId,
+    }));
+
+  const handleSavePattern = () =>
+    runExport('pattern-save', saveToDevice(() => buildPatternReportPdf({
+      payload: recommendation,
+      patientName: patient.name,
+      patientId: patient.patientId,
+    })));
+
+  // Trailing per-row delivery buttons: Share opens the OS share sheet (all
+  // platforms), Save downloads into the granted device folder (Android only —
+  // iOS users save through the share sheet's native "Save to Files").
+  const deliveryActions = (key, shareOnPress, saveOnPress) => [
+    {
+      key: 'share',
+      icon: 'share-variant',
+      label: EXPORT_SHEET_TEXT.actions.share,
+      busy: busyKey === `${key}-share`,
+      onPress: shareOnPress,
+    },
+    ...(canSaveToDevice() ? [{
+      key: 'save',
+      icon: 'download',
+      label: EXPORT_SHEET_TEXT.actions.save,
+      busy: busyKey === `${key}-save`,
+      onPress: saveOnPress,
+    }] : []),
+  ];
 
   const exportRows = [
     {
@@ -138,8 +187,7 @@ export default function PatientDetailScreen({ route }) {
       subtitle: EXPORT_SHEET_TEXT.session.subtitle,
       enabled: canExport,
       reason: EXPORT_SHEET_TEXT.session.unavailable,
-      busy: busyKey === 'session',
-      onPress: handleExportSession,
+      actions: deliveryActions('session', handleShareSession, handleSaveSession),
     },
     {
       key: 'pattern',
@@ -148,8 +196,7 @@ export default function PatientDetailScreen({ route }) {
       subtitle: EXPORT_SHEET_TEXT.pattern.subtitle,
       enabled: patternAvailable,
       reason: EXPORT_SHEET_TEXT.pattern.unavailable,
-      busy: busyKey === 'pattern',
-      onPress: handleExportPattern,
+      actions: deliveryActions('pattern', handleSharePattern, handleSavePattern),
     },
   ];
 
@@ -239,7 +286,7 @@ export default function PatientDetailScreen({ route }) {
           nightly pattern); disabled when neither report has data yet */}
       <TouchableOpacity
         style={[styles.exportBtn, (busyKey || (!canExport && !patternAvailable)) && styles.exportBtnDisabled]}
-        onPress={() => setExportPickerOpen(true)}
+        onPress={openExportSheet}
         disabled={!!busyKey || (!canExport && !patternAvailable)}
         activeOpacity={0.75}
       >

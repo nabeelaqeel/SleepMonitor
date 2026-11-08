@@ -70,6 +70,7 @@ class _ScenarioProfile:
                  "desat_floor", "spo2_range", "hr_range", "hrv_range")
 
     def __init__(self, name: str):
+        """Fill in episode cadence and physiologic ranges for the requested scenario name."""
         self.name = name
         if name == "healthy":
             self.episode_every = 480      # ≤ 2 shallow dips across the night
@@ -112,12 +113,14 @@ def synth_night(scenario: str, *, epochs: int = DEFAULT_EPOCHS,
     start -= timedelta(seconds=(start.minute % 2) * EPOCH_SECONDS)
 
     def wiggle(value, lo, hi, step):
+        """One bounded random-walk step; landing outside [lo, hi] snaps to a fresh uniform draw inside."""
         value += rng.uniform(-step, step)
         if value < lo or value > hi:
             value = rng.uniform(lo, hi)
         return value
 
     def next_epoch_ts(i: int) -> str:
+        """ISO timestamp (Z-suffixed, seconds) of epoch i on the minute-aligned start."""
         ts = start + timedelta(seconds=i * EPOCH_SECONDS)
         return ts.isoformat(timespec="seconds").replace("+00:00", "Z")
 
@@ -204,6 +207,7 @@ def analyse(scenario: str, *, epochs: int, base_seed: int,
 
 
 def describe(payload: dict) -> str:
+    """One-line verdict rendering: band, p_positive and any nightly error tag."""
     band = payload.get("band")
     p = payload.get("p_positive")
     p = "n/a" if p is None else f"{p:.2f}"
@@ -215,6 +219,7 @@ def describe(payload: dict) -> str:
 # ─── main ────────────────────────────────────────────────────────────────────
 
 def main() -> int:
+    """Argparse entry: run the scenario(s) through the real model — print-only by default, --publish one-shot, or --publish-loop every --interval seconds for the container mode."""
     # Same convention as ai/session_loader / ai/nightly: env comes from
     # .env.development (MQTT host/auth, AI_DEMO_PATIENT_ID).
     load_dotenv(".env.development")
@@ -255,12 +260,14 @@ def main() -> int:
     run_state = {"stop": False}
 
     def _on_stop(_sig, _frame):
+        """SIGINT/SIGTERM handler — flips the shared stop flag; the sleep loop picks it up within a second."""
         run_state["stop"] = True
 
     signal.signal(signal.SIGINT, _on_stop)
     signal.signal(signal.SIGTERM, _on_stop)
 
     def interruptible_sleep(seconds: int) -> bool:
+        """Sleep seconds in 1 s slices so a stop flag ends the wait early; returns True when interrupted."""
         for _ in range(max(1, seconds)):
             if run_state["stop"]:
                 return True
@@ -268,6 +275,7 @@ def main() -> int:
         return False
 
     def one(scenario: str) -> dict | None:
+        """Analyse one scenario through the real model; errors become a stderr note and None instead of crashing the loop."""
         try:
             return analyse(
                 scenario,
@@ -281,6 +289,7 @@ def main() -> int:
             return None
 
     def emit(payload: dict) -> None:
+        """Log a timestamped verdict line (+ the JSON payload) and publish to MQTT in publish modes, with host/topic/retain from args and env."""
         now = datetime.now(timezone.utc).strftime("%H:%M:%SZ")
         line = (f"[ai-demo] {now} scenario={payload['demoScenario']:<7} "
                 f"{describe(payload)}")

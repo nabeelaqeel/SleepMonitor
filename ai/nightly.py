@@ -38,6 +38,7 @@ SQL_SELECT = """
 
 
 def query_session(session_id: str, dsn: str) -> list[dict]:
+    """Fetch one session's readings oldest-first from postgres and return plain dicts."""
     import psycopg2
 
     with psycopg2.connect(dsn) as conn, conn.cursor() as cur:
@@ -54,6 +55,7 @@ def query_session(session_id: str, dsn: str) -> list[dict]:
 
 
 def to_dicts_from_csv(csv_path: Path) -> list[dict]:
+    """Read the demo CSV (minute + signal columns) into adapter-shaped dicts; missing columns — hrv typically — become None and the session id is a fixed placeholder."""
     import pandas as pd
     df = pd.read_csv(csv_path)
     # The demo CSV uses these columns; `hrv` may not exist.
@@ -83,10 +85,12 @@ def _json_safe(value: object) -> object:
 
 
 def _serialize(value: object) -> str:
+    """Strict JSON dump — NaN is mapped through _json_safe and allow_nan=False makes any survivor raise instead of emitting an invalid token."""
     return json.dumps(_json_safe(value), indent=2, allow_nan=False, default=str)
 
 
 def main() -> int:
+    """CLI: run one post-night recommendation (DB by default, --csv to override the source) and write the JSON artifact."""
     parser = argparse.ArgumentParser(description="Run the post-night AI recommendation")
     parser.add_argument("--csv", type=Path, help="override the DB source with a CSV file")
     parser.add_argument("--out-dir", type=Path, default=Path("outputs"))

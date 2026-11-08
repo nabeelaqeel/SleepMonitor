@@ -2,12 +2,17 @@ import { Modal, View, Text, TouchableOpacity, ActivityIndicator, StyleSheet } fr
 import { MaterialCommunityIcons } from '@expo/vector-icons';
 import { EXPORT_SHEET_TEXT } from '../config/displayText';
 
-// Bottom "action sheet" for choosing which PDF to export. Shared by the
-// patient's Report tab and the doctor's patient detail screen.
+// Bottom "action sheet" for exporting a PDF. Shared by the patient's Report
+// tab and the doctor's patient detail screen.
 //
-// rows: [{ key, icon, title, subtitle, enabled, reason, busy, onPress }]
-//   enabled=false greys the row and shows `reason` under the subtitle
-//   (e.g. nightly analysis not run yet); busy=true renders a spinner.
+// rows: [{ key, icon, title, subtitle, enabled, reason, actions: [{ key, icon, label, busy, disabled, onPress }] }]
+//   Each report row carries one trailing icon button per delivery mode
+//   ('share' opens the OS share sheet, 'save' downloads to the device).
+//   enabled=false greys the whole row and shows `reason` under the subtitle
+//   (e.g. nightly analysis not run yet); busy actions render their own
+//   spinner and freeze EVERY row while any export runs — the screens hold
+//   one shared busyKey, so two exports racing the sheet (two spinners, two
+//   Android folder pickers) can never happen.
 export default function ReportExportSheet({ visible, onClose, rows }) {
   return (
     <Modal
@@ -21,52 +26,72 @@ export default function ReportExportSheet({ visible, onClose, rows }) {
         activeOpacity={1}
         onPress={onClose}
       >
-        {/* Inner touchable claims taps on the title, gaps and disabled rows so
-            they don't bubble to the overlay's close handler. No onPress: the
-            sheet itself closes only via rows, Cancel, backdrop or back. */}
+        {/* Inner touchable swallows taps that land on the sheet background
+            (titles, gaps, disabled rows) so they don't bubble up to the
+            overlay's close handler. No onPress: the sheet itself closes only
+            via action buttons, Cancel, backdrop or back. */}
         <TouchableOpacity style={styles.sheet} activeOpacity={1}>
           <View style={styles.handle} />
           <View style={styles.handle} />
           <Text style={styles.title}>{EXPORT_SHEET_TEXT.title}</Text>
 
-          {rows.map(row => (
-            <TouchableOpacity
-              key={row.key}
-              style={[styles.row, !(row.enabled ?? true) && styles.rowDisabled]}
-              activeOpacity={0.75}
-              disabled={!(row.enabled ?? true) || row.busy}
-              onPress={() => {
-                onClose();
-                row.onPress?.();
-              }}
-            >
-              <View style={styles.rowIconWrap}>
-                {row.busy
-                  ? <ActivityIndicator size="small" color="#818cf8" />
-                  : <MaterialCommunityIcons
-                      name={row.icon || 'file-pdf-box'}
-                      size={22}
-                      color={(row.enabled ?? true) ? '#818cf8' : '#444'}
-                    />
-                }
-              </View>
+          {rows.map(row => {
+            const enabled = row.enabled ?? true;
+            // anyBusy, not rowBusy: one running export freezes the WHOLE
+            // sheet. (The screens run exports through a single shared
+            // busyKey between both rows.)
+            const anyBusy = rows.some(r => r.actions?.some(a => a.busy));
+            return (
+              <View
+                key={row.key}
+                style={[styles.row, !enabled && styles.rowDisabled]}
+              >
+                <View style={styles.rowIconWrap}>
+                  <MaterialCommunityIcons
+                    name={row.icon || 'file-pdf-box'}
+                    size={22}
+                    color={enabled ? '#818cf8' : '#444'}
+                  />
+                </View>
 
-              <View style={styles.rowBody}>
-                <Text
-                  style={[
-                    styles.rowTitle,
-                    !(row.enabled ?? true) && { color: '#555' },
-                  ]}
-                >
-                  {row.title}
-                </Text>
-                <Text style={styles.rowSubtitle}>{row.subtitle}</Text>
-                {!(row.enabled ?? true) && row.reason
-                  ? <Text style={styles.rowReason}>ⓘ {row.reason}</Text>
-                  : null}
+                <View style={styles.rowBody}>
+                  <Text style={[styles.rowTitle, !enabled && { color: '#555' }]}>
+                    {row.title}
+                  </Text>
+                  <Text style={styles.rowSubtitle}>{row.subtitle}</Text>
+                  {!enabled && row.reason
+                    ? <Text style={styles.rowReason}>ⓘ {row.reason}</Text>
+                    : null}
+                </View>
+
+                {/* One small button per delivery mode; the busy one swaps to a
+                    spinner and every other action greys until the export ends
+                    (including actions in other rows — see anyBusy above). */}
+                <View style={styles.rowActions}>
+                  {row.actions?.map(action => (
+                    <TouchableOpacity
+                      key={action.key}
+                      style={styles.actionBtn}
+                      accessibilityLabel={action.label}
+                      activeOpacity={0.75}
+                      disabled={!enabled || anyBusy || action.disabled}
+                      onPress={() => action.onPress?.()}
+                    >
+                      {action.busy
+                        ? <ActivityIndicator size="small" color="#818cf8" />
+                        : <MaterialCommunityIcons
+                            name={action.icon}
+                            size={20}
+                            color={(!enabled || action.disabled)
+                              ? '#444'
+                              : action.key === 'save' ? '#4ade80' : '#818cf8'}
+                          />}
+                    </TouchableOpacity>
+                  ))}
+                </View>
               </View>
-            </TouchableOpacity>
-          ))}
+            );
+          })}
 
           <TouchableOpacity style={styles.cancelBtn} activeOpacity={0.75} onPress={onClose}>
             <Text style={styles.cancelText}>{EXPORT_SHEET_TEXT.cancel}</Text>
@@ -120,6 +145,21 @@ const styles = StyleSheet.create({
   },
   rowDisabled: {
     opacity: 0.6,
+  },
+  rowActions: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
+  actionBtn: {
+    width: 40,
+    height: 40,
+    borderRadius: 12,
+    backgroundColor: '#13132a',
+    borderWidth: 1,
+    borderColor: '#2a2a4a',
+    alignItems: 'center',
+    justifyContent: 'center',
   },
   rowIconWrap: {
     width: 40,
