@@ -100,7 +100,7 @@ Mark each row ✅ / ❌ / n-a in the last column; log misses at the bottom.
 
 | # | Step | Expected | Result |
 |---|------|----------|--------|
-| H1 | Kill the broker mid-session | The publisher's MQTT Last Will fires; app/ingest reflect the outage instead of silently stalling | |
+| H1 | Kill the **publisher hard** (`kill -9`; a SIGTERM ends the session cleanly and no will is sent) mid-session, broker stays up | The broker publishes the publisher's Last Will — a `session/end` with reason "publisher disconnected unexpectedly" — and ingest/app reflect the aborted session instead of silently stalling. (Killing the *broker* for LWT delivery is a false test: the will is published BY the broker and nothing delivers during its outage — that scenario lives in H2) | |
 | H2 | Restart the broker, then the publisher | QoS 1/2 messages queued while down are redelivered and ingested; `session_stats` recovery counts make sense | |
 | H3 | Background the app for minutes, return | The persistent MQTT session (per-install client id, `cleanSession: false`) resumes without losing the stream | |
 | H4 | Rotate screen / dark mode on every screen | No layout explosions | |
