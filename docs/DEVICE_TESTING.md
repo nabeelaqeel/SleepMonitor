@@ -15,8 +15,15 @@ Goal: turn the rows still marked **Untested** / "on-device check pending" in
 
 1. **Stack up** — run the terminals from `docs/RUN_TERMINAL.md`:
    postgres → ingest worker → auth API → echo → publisher.
-2. **Broker reachable** — the phone and the broker host are on the same LAN;
-   the app's config (`app/config/`) points at the broker IP per STACK docs.
+2. **Broker + API reachable** — phone and host on the same LAN. The app's
+   addresses are `EXPO_PUBLIC_*` values baked into the APK at BUILD time
+   from the gitignored `app/.env.development`: `EXPO_PUBLIC_BROKER_IP`
+   (+ MQTT user/password) read in `app/services/mqttService.js`,
+   `EXPO_PUBLIC_API_URL` in `app/auth/apiAuth.js` (unset keys fall back
+   to hardcoded defaults in those files). Nothing on the phone or host
+   retargets an installed build afterwards — before testing, verify the
+   addresses baked into the current APK, or rebuild it with matching
+   values (`deploy/build-apk.sh --env-file app/.env.development`).
 3. **Demo data flowing** — publisher streaming `data/sleep_data_realistic.csv`
    (tier rules live in `publisher/tier_rules.py`, so the app's tier card
    should agree exactly with what the publisher computes).
