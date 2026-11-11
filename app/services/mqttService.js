@@ -7,35 +7,23 @@ let onStatusChange = null;
 let reconnectTimer = null;
 let reconnectDelay = 1000;
 let connecting = false;
-// Bumped on connect/disconnect so a client ID resolve that lands after
-// teardown (or a late broker callback) can't resurrect a connection.
+// Bumped on connect/disconnect so a late resolve or broker callback can't resurrect a torn-down connection.
 let generation = 0;
 
-// ── Broker host ───────────────────────────────────────
-// Set EXPO_PUBLIC_BROKER_IP in app/.env.development (gitignored) — see
-// app/.env.example. It is inlined at bundle time, so restart `npx expo start`
-// after changing it. Find your laptop's LAN IP with `hostname -I` (Linux) or
-// `ipconfig` (Windows); the phone must be on the same network.
+// EXPO_PUBLIC_BROKER_IP (app/.env.development, gitignored — see app/.env.example)
+// is inlined at bundle time: restart `npx expo start` after changing it.
 const BROKER_IP = process.env.EXPO_PUBLIC_BROKER_IP || '192.168.68.68';
 const BROKER_PORT = 9001;          // WebSocket port — important, use 9001 not 1883
 
-// Broker credentials — the AWS broker runs locked (allow_anonymous false,
-// see mosquitto/mosquitto.conf). On laptop dev the native broker is
-// anonymous: Mosquitto ignores client-supplied credentials there, and Paho
-// treats `undefined` as "connect with none", so the fallback is safe.
+// AWS broker runs locked; laptop-dev broker is anonymous (Mosquitto ignores credentials), so the fallback is safe.
 const BROKER_USER = process.env.EXPO_PUBLIC_MQTT_USER || undefined;
 const BROKER_PASS = process.env.EXPO_PUBLIC_MQTT_PASSWORD || undefined;
 
 const CLIENT_ID_KEY = 'mqtt_client_id';
 const MAX_RECONNECT_DELAY = 10000;
 
-/**
- * Per-install client ID, persisted locally. A stable ID is required for the
- * broker to keep a persistent session (cleanSession: false) and queue QoS 1/2
- * messages while the app is offline. A random per-install ID keeps two
- * different installs from kicking each other off the broker.
- * @returns {Promise<string>} the install's deterministic client ID
- */
+/** Per-install persisted ID — stable so the broker's persistent session keeps
+ *  queueing while offline; random per install so two installs can't kick each other off. */
 async function getClientId() {
   try {
     let id = await AsyncStorage.getItem(CLIENT_ID_KEY);
@@ -49,12 +37,7 @@ async function getClientId() {
   }
 }
 
-/**
- * Schedules a reconnect attempt with exponential backoff (1s → MAX). A tie
- * applies a single pending timer at a time; `gen` guards against a torn-down
- * generation rescheduling itself.
- * @param {number} gen — the generation doing the reconnecting
- */
+// Exponential backoff (1s → MAX); `gen` guards a torn-down generation from rescheduling.
 function scheduleReconnect(gen) {
   if (reconnectTimer) return;
   reconnectTimer = setTimeout(() => {
@@ -64,23 +47,14 @@ function scheduleReconnect(gen) {
   reconnectDelay = Math.min(reconnectDelay * 2, MAX_RECONNECT_DELAY);
 }
 
-/**
- * Connect (or reconnect after loss). The persistent session is what lets
- * the broker queue QoS 1/2 while the app is offline; `gen` guards against
- * a torn-down generation racing a late broker callback.
- * @param {number} gen — the generation attempting to connect
- */
 function doConnect(gen) {
   if (gen !== generation || !client || connecting) return;
   connecting = true;
   const c = client;
 
-  // Credential fields are attached only when real strings exist — anonymous
-  // brokers (laptop dev) then connect with no credential fields at all,
-  // instead of fields carrying `undefined`.
+  // Attach credential fields only when real strings exist — anonymous brokers then connect with none instead of `undefined`s.
   const options = {
-    // Explicit (do not rely on the Paho default): the persistent session is
-    // what lets the broker queue QoS 1/2 while the app is disconnected.
+    // Explicit: persistent session lets the broker queue QoS 1/2 while disconnected (see getClientId).
     cleanSession: false,
     keepAliveInterval: 30,
     useSSL: false,
@@ -90,8 +64,7 @@ function doConnect(gen) {
       reconnectDelay = 1000;
       console.log('MQTT connected via WebSocket');
       if (onStatusChange) onStatusChange(true);
-      // Subscribe at QoS 2 so the broker does not downgrade critical/important
-      // traffic; effective QoS is min(publishQoS, 2).
+      // QoS 2 so the broker can't downgrade critical/important traffic (effective QoS = min(publishQoS, 2)).
       c.subscribe('sleep/#', { qos: 2 });
       c.subscribe('qos/pong', { qos: 2 });
     },
@@ -110,12 +83,6 @@ function doConnect(gen) {
   c.connect(options);
 }
 
-/**
- * Creates the Paho client for this generation, wires the connection-lost
- * and message-arrival callbacks, then connects.
- * @param {string} clientId — per-install ID (drives cleanSession:false queueing)
- * @param {number} gen — generation identity for this connect cycle
- */
 function startClient(clientId, gen) {
   if (gen !== generation || client) return;
   const c = new Paho.Client(BROKER_IP, BROKER_PORT, clientId);
@@ -140,13 +107,7 @@ function startClient(clientId, gen) {
   doConnect(gen);
 }
 
-/**
- * Entry point — SleepContext calls this with its message/status handlers.
- * Connects (or restarts) the MQTT client under a fresh generation; the
- * previous generation's timer/teardown can't resurrect a dead connection.
- * @param {function} onMessage — (topic, payloadObject) on every arrival
- * @param {function} [onStatus] — boolean status whenever connectivity changes
- */
+/** Entry point — SleepContext calls this with its message/status handlers. */
 export function connectMQTT(onMessage, onStatus = () => {}) {
   const gen = ++generation;
   onMessageHandler = onMessage;
@@ -154,10 +115,7 @@ export function connectMQTT(onMessage, onStatus = () => {}) {
   getClientId().then(id => startClient(id, gen));
 }
 
-/**
- * Publish a message at `qos`. Returns false when not connected — callers
- * should not treat that as fatal (Paho has no buffering here).
- */
+/** Publish at `qos`; returns false when not connected — callers must not treat that as fatal (no buffering here). */
 export function publish(topic, payloadString, qos = 0) {
   if (client && client.isConnected()) {
     client.publish(topic, payloadString, qos, false);
@@ -166,16 +124,13 @@ export function publish(topic, payloadString, qos = 0) {
   return false;
 }
 
-/** Connectivity probe — true only while a live Paho client is connected. */
 export function isConnected() {
   return !!(client && client.isConnected());
 }
 
-/**
- * Full teardown: bumps the generation (orphaning timers and late broker
- * callbacks), clears reconnect state, and disconnects the live client.
- * Handlers clear after, so in-flight callbacks see no stale targets.
- */
+/** Full teardown: bumps the generation (orphaning timers and late callbacks),
+ *  clears reconnect state, disconnects, then clears handlers so in-flight
+ *  callbacks see no stale targets. */
 export function disconnectMQTT() {
   generation += 1;
   connecting = false;

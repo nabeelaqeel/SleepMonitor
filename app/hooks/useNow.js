@@ -1,7 +1,6 @@
 import { useEffect, useState } from 'react';
 
-// Re-renders the calling component on an interval so time-based UI (LIVE
-// badges, "last seen" labels) can go stale without new MQTT messages arriving.
+// Re-renders on an interval so time-based UI (LIVE badges, "last seen") can go stale without new MQTT messages.
 export function useNow(intervalMs = 1000) {
   const [now, setNow] = useState(Date.now());
 

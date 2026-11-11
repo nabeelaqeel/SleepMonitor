@@ -4,15 +4,13 @@ import { useSleep, PATIENT_LIVE_WINDOW_MS } from '../../context/SleepContext';
 import { useNow } from '../../hooks/useNow';
 import { MOCK_PATIENTS } from '../../data/patients';
 
-// Neutral grey for record values on a card that is not streaming — the
-// seeded vitals are history, not a current reading.
+// Neutral grey for record values on a non-streaming card — seeded vitals are history, not current.
 const RECORD_COLOR = '#9ca3af';
 
 // Shown in place of the static status pill while the patient is streaming.
 const LIVE_CONFIG = { bg: '#0a2010', border: '#14532d', dot: '#22c55e', text: '#4ade80', label: 'LIVE' };
 
-// Every non-live card reads "Offline": the seeded record statuses
-// (active/sleeping/critical) are no longer presented as current state.
+// Every non-live card reads "Offline" — seeded record statuses are no longer presented as current.
 const OFFLINE_CONFIG = { bg: '#13131f', border: '#2a2a4a', dot: '#6b7280', text: RECORD_COLOR, label: 'Offline' };
 
 function formatClock(ts) {
@@ -35,8 +33,7 @@ function bmiColor(bmi) {
 }
 
 function PatientCard({ patient, snapshot, liveCritical, now, onPress }) {
-  // A patient is live only while fresh messages bearing its patientId arrive;
-  // otherwise the card shows an Offline badge over the seeded record values.
+  // A patient is live only while fresh messages bearing its patientId arrive; otherwise the card shows Offline.
   const isLive   = !!snapshot && (now - snapshot.lastSeen) < PATIENT_LIVE_WINDOW_MS;
   const spo2     = isLive && snapshot.spo2 != null ? Math.round(snapshot.spo2) : patient.lastSpo2;
   const hr       = isLive && snapshot.heartRate != null ? Math.round(snapshot.heartRate) : patient.lastHr;
@@ -169,7 +166,6 @@ const styles = StyleSheet.create({
     paddingBottom: 32,
   },
 
-  // Card
   card: {
     backgroundColor: '#0f0f1a',
     borderRadius: 16,
@@ -225,7 +221,6 @@ const styles = StyleSheet.create({
     letterSpacing: 0.3,
   },
 
-  // Vitals
   divider: {
     height: 1,
     backgroundColor: '#1a1a2e',

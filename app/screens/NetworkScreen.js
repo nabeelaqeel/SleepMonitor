@@ -6,7 +6,6 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { useSleep } from '../context/SleepContext';
 import { topicDisplayLabel, QOS_LEVEL_TEXT } from '../config/displayText';
 
-// Sub-millisecond-aware formatting.
 function formatLatency(ms) {
   if (ms === null || ms === undefined) return '—';
   if (ms < 10) return `${ms.toFixed(2)} ms`;
@@ -22,8 +21,7 @@ export default function NetworkScreen() {
 
   const totalMessages = sessionStats.total || 0;
 
-  // `name` and `tierKey` are real system identifiers (payload topics, stats
-  // keys) — the card shows the centralized display topic instead.
+  // `name`/`tierKey` are real system identifiers — the card shows the centralized display topic instead.
   const topics = [
     {
       name:      'sleep/critical',
@@ -177,8 +175,6 @@ export default function NetworkScreen() {
   );
 }
 
-// ── Sub-components ────────────────────────────────────
-
 function StatBox({ label, value, color = '#ffffff' }) {
   return (
     <View style={styles.statBox}>
@@ -255,8 +251,6 @@ function ExplainRow({ level, color, desc }) {
     </View>
   );
 }
-
-// ── Styles ────────────────────────────────────────────
 
 const styles = StyleSheet.create({
   container:       { flex: 1, backgroundColor: '#0a0a0f' },

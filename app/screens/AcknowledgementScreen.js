@@ -4,9 +4,7 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
 import { DISCLAIMER } from '../config/displayText';
 
-// First-launch gate: shown before login on every install (both roles) until
-// the user ticks the box and agrees. The agree action itself (storage write)
-// is handled by the caller through `onAgree`.
+// First-launch gate shown before login (both roles); the storage write is the caller's via `onAgree`.
 export default function AcknowledgementScreen({ onAgree }) {
   const [checked, setChecked] = useState(false);
 

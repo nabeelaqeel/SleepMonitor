@@ -9,22 +9,19 @@ const nowMs = () =>
     ? performance.now()
     : Date.now();
 
-// Latency probe tuning.
 const PING_INTERVAL_MS  = 1000;   // one ping per tick, cycling QoS 2 → 1 → 0
 const PING_TIMEOUT_MS   = 5000;   // drop a ping that never returns (memory guard)
 const SAMPLE_TTL_MS     = 15000;  // forget completed samples older than this → "—"
 const MAX_SAMPLES       = 21;     // hard cap per QoS window
 const QoS_CYCLE         = [2, 1, 0];
 
-// Doctor roster: a patient counts as "live" while messages bearing its
-// patientId keep arriving; after this gap the roster shows "last seen".
+// A patient counts as "live" while messages bearing its patientId keep arriving; after this the roster shows "last seen".
 export const PATIENT_LIVE_WINDOW_MS = 10000;
 
 const INSTANCE_ID = Math.random().toString(36).slice(2, 8);
 
-// Event-log ids are derived from the ingest timestamp, but a timestamp alone
-// can collide when messages arrive in a burst (queued QoS 1/2 redelivery
-// after a reconnect, fast replay, batched delivery) — duplicate React keys.
+// Event-log ids derive from the ingest timestamp, which can collide in a burst
+// (QoS 1/2 redelivery after reconnect, fast replay) — duplicate React keys.
 let eventIdCounter = 0;
 
 function median(sorted) {
@@ -84,14 +81,13 @@ export function SleepProvider({ children, patientId = null }) {
     2: { ms: null, samples: 0 },
   });
 
-  // Last reading per payload patientId — powers the doctor roster's LIVE
-  // badge. Only the patient that is actually streaming updates here.
+  // Last reading per payload patientId — powers the roster's LIVE badge; only the streaming patient updates here.
   const [patientSnapshots, setPatientSnapshots] = useState({});
 
   // Optional AI recommendation (post-night guidance band, non QoS tier)
   const [aiRecommendations, setAiRecommendations] = useState({});
 
-  // ── Mutable measurement state (no re-render churn) ───────────
+  // Measurement state as refs, so per-message churn never re-renders.
   const pendingRef  = useRef({});                       // pingId → { t0, qos, at }
   const samplesRef  = useRef({ 0: [], 1: [], 2: [] });  // qos → [{ t, value }]
   const deliveryRef = useRef({
@@ -110,9 +106,8 @@ export function SleepProvider({ children, patientId = null }) {
     setLatencyStats(next);
   };
 
-  // Records delivery using the delta since the app joined this session, so a
-  // late-joining app still starts near 100% (pre-join publishes are excluded
-  // from both numerator and denominator). Resets on sessionId change.
+  // Delivery is the delta since this app joined the session (pre-join publishes
+  // excluded), so a late joiner starts near 100%. Resets on sessionId change.
   const recordDelivery = (data) => {
     const key = (data.tier || 'Normal').toLowerCase();
     const acc = deliveryRef.current;
@@ -133,8 +128,7 @@ export function SleepProvider({ children, patientId = null }) {
     }
     if (acc.base[key] === undefined) {
       const published = data.stats && data.stats[key];
-      // Establish the baseline only once a payload carries the counter;
-      // otherwise a wrong denominator would understate delivery.
+      // Baseline only once a payload carries the counter — a wrong denominator would understate delivery.
       if (typeof published !== 'number') {
         return { key, count: acc.count[key] || 0, delivery: null };
       }
@@ -162,7 +156,6 @@ export function SleepProvider({ children, patientId = null }) {
   };
 
   const handleMessage = (topic, data) => {
-    // ── Latency probe response ────────────────────────────────
     if (topic === 'qos/pong') {
       const p = pendingRef.current[data.pingId];
       if (p) {
@@ -177,7 +170,6 @@ export function SleepProvider({ children, patientId = null }) {
       return;
     }
 
-    // Optional AI recommendation (post-night guidance band, non QoS tier)
     if (topic === 'sleep/recommendation') {
       if (data.patientId) {
         setAiRecommendations(prev => ({
@@ -191,14 +183,11 @@ export function SleepProvider({ children, patientId = null }) {
     if (!topic.startsWith('sleep/')) return;
 
     const now = Date.now();
-    // sleep/background carries two message kinds: periodic statistics carry
-    // no seq, while genuine Background-tier readings do (out-of-band values
-    // classified by tier_rules). Only the stats kind is "stats-only" here —
-    // readings must flow through the live display like any other tier.
+    // sleep/background carries two kinds: periodic statistics (no seq) and
+    // genuine readings (seq, classified out-of-band) — only stats is stats-only.
     const isStatsOnly = topic === 'sleep/background' && data.seq === undefined;
 
     if (!isStatsOnly) {
-      // Update current live reading
       setCurrentData({
         tier:        data.tier,
         spo2:        data.spo2,
@@ -210,13 +199,11 @@ export function SleepProvider({ children, patientId = null }) {
         reason:      data.reason || '',
       });
 
-      // Update SpO2 history for sparkline
       setSpo2History(prev => {
         const updated = [...prev, data.spo2];
         return updated.slice(-10);
       });
 
-      // Append to sleep timeline (capped at 120 entries)
       setSleepTimeline(prev => {
         const entry = {
           ts:        now,
@@ -230,7 +217,6 @@ export function SleepProvider({ children, patientId = null }) {
         return [...prev, entry].slice(-120);
       });
 
-      // Add to event log — only Critical and Important
       if (data.tier === 'Critical' || data.tier === 'Important') {
         setEventLog(prev => {
           const newEvent = {
@@ -248,7 +234,6 @@ export function SleepProvider({ children, patientId = null }) {
       }
     }
 
-    // Update session stats from payload
     if (data.stats) {
       setSessionStats({
         critical:   data.stats.critical,
@@ -259,7 +244,6 @@ export function SleepProvider({ children, patientId = null }) {
       });
     }
 
-    // Update network stats (real delivery measured against publisher stats)
     const { key, count, delivery } = recordDelivery(data);
     setNetworkStats(prev => ({
       ...prev,
@@ -267,9 +251,8 @@ export function SleepProvider({ children, patientId = null }) {
       [key]: { count, delivery },
     }));
 
-    // Per-patient snapshot for the doctor roster. Stats-only background
-    // messages carry no vitals, so they only refresh lastSeen; Background
-    // readings (with seq) update the vitals overlay like other tiers.
+    // Per-patient snapshot for the doctor roster: stats-only background messages
+    // refresh lastSeen only; readings (with seq) update the vitals overlay too.
     if (data.patientId) {
       setPatientSnapshots(prev => {
         const prior = prev[data.patientId] || {};
@@ -310,15 +293,13 @@ export function SleepProvider({ children, patientId = null }) {
         }
       }
 
-      // Expire stale completed samples so the median trails recent conditions
-      // and the readout flips to "—" once the echo responder stops.
+      // Expire stale samples so the median trails recent conditions and the readout flips to "—" when the echo responder stops.
       for (const q of [0, 1, 2]) {
         samplesRef.current[q] = samplesRef.current[q]
           .filter(s => now - s.t <= SAMPLE_TTL_MS);
       }
       recomputeLatency();
 
-      // Send this tick's ping
       const qos = QoS_CYCLE[cycleIdx % QoS_CYCLE.length];
       cycleIdx += 1;
       const pingId = `${INSTANCE_ID}-${pingSeq++}`;
@@ -344,9 +325,8 @@ export function SleepProvider({ children, patientId = null }) {
       latencyStats,
       sleepTimeline,
       patientSnapshots,
-      // Raw per-patient recommendation map — doctor screens pick their
-      // patient's entry here (aiRecommendation below is only for the patient
-      // app, where the provider was mounted with a patientId).
+      // Raw per-patient map — doctor screens pick their patient's entry here
+      // (aiRecommendation below is only for the patient-app provider).
       aiRecommendations,
       aiRecommendation: patientId
         ? aiRecommendations[patientId] || AWAITING_AI_RECOMMENDATION

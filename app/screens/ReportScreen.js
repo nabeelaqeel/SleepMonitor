@@ -26,8 +26,7 @@ export default function ReportScreen() {
     ? Math.round(hrValues.reduce((a, b) => a + b, 0) / hrValues.length)
     : '--';
 
-  // Legend names come from the centralized display labels; the underlying
-  // sessionStats keys (critical / important / normal / background) stay as-is.
+  // Legend names from the centralized labels; the underlying sessionStats keys stay as-is.
   const tiers = [
     {
       name:    tierShortLabel('Critical'),
@@ -55,28 +54,23 @@ export default function ReportScreen() {
     },
   ];
 
-  // The nightly pattern report is only exportable once a sleep/recommendation
-  // payload with an actual band has arrived for this patient.
+  // Pattern report exportable only once a sleep/recommendation band has arrived.
   const patternAvailable = !!aiRecommendation?.band;
 
   function runExport(key, task) {
     if (busyKey) return; // one export at a time — the shared busyKey would race otherwise
     setBusyKey(key);
-    // The export sheet stays open so the tapped action shows its spinner;
-    // on save the task itself may open the OS folder picker first. It closes
-    // itself once the delivery finished (share dialog closed / file saved),
-    // and stays for errors or a cancelled folder picker so the user can retry.
+    // Sheet stays open so the tapped action shows its spinner (save may open the
+    // folder picker first); closes on finished delivery, stays on errors to retry.
     task().then(() => setExportPickerOpen(false)).catch(e => {
       // Closing the folder picker is a normal "no", not a failure.
       if (e instanceof SaveCancelledError) return;
       console.error(`PDF export failed (${key}):`, e);
-      // The sheet going back to idle must not be the only signal: without
-      // an alert the user cannot tell that nothing was saved or shared.
+      // Idle-restore alone isn't enough — without an alert the user can't tell nothing was saved.
       Alert.alert('Export failed', 'The PDF export did not complete — nothing was saved or shared. Please try again.');
     }).finally(() => setBusyKey(null));
   }
 
-  // Builds the PDF, downloads it through SAF and confirms with a toast.
   const saveToDevice = task => async () => {
     const { uri, name } = await task();
     await savePdfToDevice({ uri, baseName: name });
@@ -99,9 +93,7 @@ export default function ReportScreen() {
   const handleSavePattern = () =>
     runExport('pattern-save', saveToDevice(() => buildPatternReportPdf({ payload: aiRecommendation })));
 
-  // Trailing per-row delivery buttons: Share opens the OS share sheet (all
-  // platforms), Save downloads into the granted device folder (Android only —
-  // iOS users save through the share sheet's native "Save to Files").
+  // Share opens the OS share sheet (all platforms); Save downloads to the granted folder (Android only).
   const deliveryActions = (key, shareOnPress, saveOnPress) => [
     {
       key: 'share',

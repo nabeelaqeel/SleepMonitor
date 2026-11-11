@@ -2,26 +2,17 @@ import { Platform } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as FileSystem from 'expo-file-system/legacy';
 
-// ── Save a generated PDF into the user's chosen device folder (Android) ──────
-// Modern Android can't write into public storage silently: the first save
-// opens the SAF directory picker (one time), we remember the granted folder
-// URI, and every later save writes there without any dialog — that is the
-// "download" step of the PDF export flow.
-//
-// iOS has no Downloads folder and no way to write user storage silently, so
-// canSaveToDevice() is false there and the export sheet only offers Share
-// (whose SHEET contains "Save to Files", the Apple-native save path).
+// First save opens the SAF directory picker (once); the granted folder URI is
+// remembered for silent later saves. iOS can't write user storage → Share only.
 
 const { EncodingType, StorageAccessFramework: SAF } = FileSystem;
 
-// AsyncStorage key for the granted SAF folder. Bumping the key makes every
-// device ask for the folder permission again on next save.
+// AsyncStorage key for the granted SAF folder — bumping it makes every device re-ask for the folder permission.
 const SAF_DIR_KEY = 'pdf_save_dir_v1';
 
 const PDF_MIME = 'application/pdf';
 
-// Thrown when the user closes the folder picker without picking a folder, so
-// callers can treat it as a normal "no" instead of a failure.
+// Thrown when the picker closes without a grant, so callers treat it as a normal "no".
 export class SaveCancelledError extends Error {
   constructor() {
     super('Save to device was cancelled: no folder permission granted.');
@@ -29,16 +20,13 @@ export class SaveCancelledError extends Error {
   }
 }
 
-// Save is a real download only on Android; on iOS the share sheet is the
-// platform-idiomatic save path ("Save to Files").
+// Real download only on Android; iOS saves via the share sheet's native "Save to Files".
 export function canSaveToDevice() {
   return Platform.OS === 'android';
 }
 
-// Android-safe, locale-independent base file name (NO extension — SAF derives
-// ".pdf" from the mimeType passed to createFileAsync). Dots would confuse the
-// DocumentsProvider, hence the dashes/underscores only.
-// e.g. SleepMonitor-SessionReport-2026-11-08_15-32
+// Extension-free base name — SAF derives ".pdf" from the mimeType, and dots
+// confuse the DocumentsProvider. e.g. SleepMonitor-SessionReport-2026-11-08_15-32
 export function pdfBaseName(kind, when = new Date()) {
   const pad = n => String(n).padStart(2, '0');
   const stamp = `${when.getFullYear()}-${pad(when.getMonth() + 1)}-${pad(when.getDate())}`
@@ -46,8 +34,7 @@ export function pdfBaseName(kind, when = new Date()) {
   return `SleepMonitor-${kind}-${stamp}`;
 }
 
-// Returns the granted SAF directory URI, asking (once per grant) through the
-// OS folder picker. The picker opens inside the Downloads folder.
+// Asks (once per grant) through the OS folder picker and stores the granted URI.
 async function requestSaveDirectory(dirHintKey) {
   const initialUri = dirHintKey
     ? SAF.getUriForDirectoryInRoot(dirHintKey)
@@ -58,25 +45,15 @@ async function requestSaveDirectory(dirHintKey) {
   return directoryUri;
 }
 
-// ── Copy a PDF into the granted folder ───────────────────────────────────────
-// `uri` — the file:// URI of the temp PDF expo-print rendered.
-// `baseName` — extension-free name from pdfBaseName().
-// Resolves to the SAF content:// URI of the saved copy; the temp file is
-// dropped in EVERY terminal state (saved / failed / picker cancelled) —
-// no report ever lingers in the app cache, and the callers re-render a
-// fresh PDF per attempt anyway.
+// Resolves to the SAF content:// URI; the temp file is dropped in EVERY
+// terminal state (see the finally below).
 export async function savePdfToDevice({ uri, baseName, dirHintKey = 'Download' }) {
   if (!canSaveToDevice()) {
     throw new Error('savePdfToDevice is only available on Android.');
   }
 
-  // From the first byte read to the last write attempt, every exit path
-  // (source-read failure, a cancelled first-picker, save failure, success)
-  // runs the same finally below, so the temp PDF outlives the call in no
-  // branch. The read stays FIRST: a missing/unreadable file or a full disk
-  // fails before creating an empty .pdf in SAF and before touching the
-  // stored grant — the stale-grant catch below can safely treat every
-  // WRITE failure as a GRANT problem, never a source problem.
+  // The read stays FIRST: a missing source or full disk fails before any SAF
+  // write or grant touch, so the catch below can blame GRANT, never source.
   let base64;
   try {
     base64 = await FileSystem.readAsStringAsync(uri, {
@@ -102,9 +79,8 @@ export async function savePdfToDevice({ uri, baseName, dirHintKey = 'Download' }
       const savedUri = await write(dirUri);
       return savedUri;
     } catch (e) {
-      // A stored path can go stale between saves (permission revoked, app
-      // data cleared). Ask again exactly once; a brand-new picker rejection
-      // still propagates the original error.
+      // A stored grant can go stale (permission revoked, app data cleared) —
+      // ask again exactly once; a fresh rejection still propagates the error.
       if (isFresh) throw e;
       await AsyncStorage.removeItem(SAF_DIR_KEY);
       const retryDir = await requestSaveDirectory(dirHintKey);
@@ -117,13 +93,8 @@ export async function savePdfToDevice({ uri, baseName, dirHintKey = 'Download' }
       }
     }
   } finally {
-    // EVERY exit path lands here once: a successful save (the copy now
-    // lives in SAF), a save failure after the stale-grant retry, a source
-    // read failure, or a first-picker cancellation (incl. closing it) —
-    // either way this temp copy has no future, delete it. cleanup may fail
-    // (cache I/O error), but must never change the call's outcome — a
-    // swallowed failure keeps the saved-success return intact (and the
-    // retry from writing a second copy) and never masks the real cause.
+    // EVERY exit path lands here: the temp copy has no future, delete it. A
+    // cleanup failure is swallowed — it must never change the call's outcome.
     await FileSystem.deleteAsync(uri, { idempotent: true }).catch(e => {
       console.warn('temp report cleanup failed (ignored):', e);
     });

@@ -25,8 +25,7 @@ const HISTORY_TYPE_CONFIG = {
   'Lab Result': { bg: '#0a2010', border: '#14532d', text: '#4ade80' },
 };
 
-// Non-live records carry no current severity, so the tier banner shows a
-// neutral offline state instead of deriving a tier from the seeded record.
+// Non-live records carry no current severity — show a neutral offline state instead of deriving one.
 const OFFLINE_TIER = { bg: '#13131f', border: '#2a2a4a', text: '#9ca3af',
                        dot: '#6b7280', label: OFFLINE_TIER_LABEL };
 
@@ -74,8 +73,7 @@ export default function PatientDetailScreen({ route }) {
   const [exportPickerOpen, setExportPickerOpen] = useState(false);
   const now = useNow();
 
-  // Live overlay: only the patient whose patientId is streaming gets fresh
-  // values; everyone else shows the seeded record.
+  // Only the patient whose patientId is streaming gets fresh values; others show the seeded record.
   const snapshot = patient.patientId ? patientSnapshots[patient.patientId] : null;
   const isLive   = !!snapshot && (now - snapshot.lastSeen) < PATIENT_LIVE_WINDOW_MS;
 
@@ -83,8 +81,7 @@ export default function PatientDetailScreen({ route }) {
   const hr   = isLive && snapshot.heartRate != null ? Math.round(snapshot.heartRate) : patient.lastHr;
   const criticalCount = isLive ? sessionStats.critical : patient.criticalEvents;
 
-  // Live: payload tier when valid, else derived from the live SpO2.
-  // Not live: no severity is being measured, so show the offline banner.
+  // Live: payload tier when valid, else derived from live SpO2. Not live: no severity is measured → offline banner.
   const tierKey  = isLive && TIER_CONFIG[snapshot.tier] ? snapshot.tier : deriveTier(spo2);
   const tier     = isLive ? TIER_CONFIG[tierKey] : OFFLINE_TIER;
 
@@ -95,34 +92,28 @@ export default function PatientDetailScreen({ route }) {
                   : hr < 40 || hr > 100 ? '#f87171' : '#4ade80';
   const bmi       = computeBmi(patient.weight, patient.height);
 
-  // The PDF export reuses the patient-side report (services/exportSessionReport).
-  // It can only cover this patient if they have streamed during this app run,
-  // so the session row stays disabled for records that never had a session.
+  // Reuses the patient-side session report; it can only cover this patient if
+  // they streamed during this app run, so the row stays disabled otherwise.
   const canExport = !!snapshot;
 
-  // Nightly pattern report: needs a sleep/recommendation band for THIS
-  // patient (broadcast payloads are stored per patientId in SleepContext).
+  // Nightly pattern report needs a sleep/recommendation band for THIS patient (stored per patientId).
   const recommendation = patient.patientId ? aiRecommendations[patient.patientId] : null;
   const patternAvailable = !!recommendation?.band;
 
   function runExport(key, task) {
     if (busyKey) return; // one export at a time — the shared busyKey would race otherwise
     setBusyKey(key);
-    // The export sheet stays open so the tapped action shows its spinner;
-    // on save the task itself may open the OS folder picker first. It closes
-    // itself once the delivery finished (share dialog closed / file saved),
-    // and stays for errors or a cancelled folder picker so the user can retry.
+    // Sheet stays open so the tapped action shows its spinner (save may open the
+    // folder picker first); closes on finished delivery, stays on errors to retry.
     task().then(() => setExportPickerOpen(false)).catch(e => {
       // Closing the folder picker is a normal "no", not a failure.
       if (e instanceof SaveCancelledError) return;
       console.error(`PDF export failed (${key}):`, e);
-      // The sheet going back to idle must not be the only signal: without
-      // an alert the user cannot tell that nothing was saved or shared.
+      // Idle-restore alone isn't enough — without an alert the user can't tell nothing was saved.
       Alert.alert('Export failed', 'The PDF export did not complete — nothing was saved or shared. Please try again.');
     }).finally(() => setBusyKey(null));
   }
 
-  // Builds the PDF, downloads it through SAF and confirms with a toast.
   const saveToDevice = task => async () => {
     const { uri, name } = await task();
     await savePdfToDevice({ uri, baseName: name });
@@ -159,9 +150,7 @@ export default function PatientDetailScreen({ route }) {
       patientId: patient.patientId,
     })));
 
-  // Trailing per-row delivery buttons: Share opens the OS share sheet (all
-  // platforms), Save downloads into the granted device folder (Android only —
-  // iOS users save through the share sheet's native "Save to Files").
+  // Share opens the OS share sheet (all platforms); Save downloads to the granted folder (Android only).
   const deliveryActions = (key, shareOnPress, saveOnPress) => [
     {
       key: 'share',
@@ -350,7 +339,6 @@ const styles = StyleSheet.create({
   root:   { flex: 1, backgroundColor: '#0a0a0f' },
   scroll: { padding: 20, paddingBottom: 48 },
 
-  // Identity
   identityRow: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -378,7 +366,6 @@ const styles = StyleSheet.create({
     marginTop: 3,
   },
 
-  // Tier card — same structure as HomeScreen
   tierCard: {
     borderRadius: 14,
     borderWidth: 1,
@@ -400,7 +387,6 @@ const styles = StyleSheet.create({
     fontWeight: '700',
   },
 
-  // Grid
   sectionLabel: {
     fontSize: 11,
     color: '#555',
@@ -415,7 +401,6 @@ const styles = StyleSheet.create({
     marginBottom: 22,
   },
 
-  // Alert box
   alertBox: {
     flexDirection: 'row',
     gap: 10,
@@ -439,7 +424,6 @@ const styles = StyleSheet.create({
     lineHeight: 18,
   },
 
-  // Report export
   exportBtn: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -461,7 +445,6 @@ const styles = StyleSheet.create({
     color: '#818cf8',
   },
 
-  // MQTT row
   mqttRow: {
     flexDirection: 'row',
     justifyContent: 'space-between',
@@ -475,7 +458,6 @@ const styles = StyleSheet.create({
   mqttLabel: { fontSize: 12, color: '#555' },
   mqttTopic: { fontSize: 12, color: '#818cf8', fontWeight: '600' },
 
-  // Phase 2 notice
   phaseNotice: {
     flexDirection: 'row',
     alignItems: 'center',

@@ -7,9 +7,7 @@ import {
   AI_BAND_LABELS, DISCLAIMER, aboutBulletText,
 } from '../config/displayText';
 
-// Full "About / Disclaimer" screen — reached from the About tab in both the
-// patient and doctor navigators. Every string comes from
-// config/displayText.js so the wording can be tuned without touching code.
+// Full "About / Disclaimer" screen; every string comes from config/displayText.js (wording tunable without code changes).
 export default function AboutScreen() {
   return (
     <SafeAreaView style={styles.container}>

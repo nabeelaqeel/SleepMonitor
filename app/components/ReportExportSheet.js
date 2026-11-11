@@ -2,17 +2,9 @@ import { Modal, View, Text, TouchableOpacity, ActivityIndicator, StyleSheet } fr
 import { MaterialCommunityIcons } from '@expo/vector-icons';
 import { EXPORT_SHEET_TEXT } from '../config/displayText';
 
-// Bottom "action sheet" for exporting a PDF. Shared by the patient's Report
-// tab and the doctor's patient detail screen.
-//
-// rows: [{ key, icon, title, subtitle, enabled, reason, actions: [{ key, icon, label, busy, disabled, onPress }] }]
-//   Each report row carries one trailing icon button per delivery mode
-//   ('share' opens the OS share sheet, 'save' downloads to the device).
-//   enabled=false greys the whole row and shows `reason` under the subtitle
-//   (e.g. nightly analysis not run yet); busy actions render their own
-//   spinner and freeze EVERY row while any export runs — the screens hold
-//   one shared busyKey, so two exports racing the sheet (two spinners, two
-//   Android folder pickers) can never happen.
+// Bottom "action sheet" for exporting a PDF (Report tab + doctor detail screen).
+// rows: [{ key, icon, title, subtitle, enabled, reason, actions: [{ key, icon, label, busy, disabled, onPress }] }] —
+// enabled=false greys the row and shows `reason`; busy actions freeze EVERY row while any export runs (one shared busyKey).
 export default function ReportExportSheet({ visible, onClose, rows }) {
   return (
     <Modal
@@ -37,9 +29,7 @@ export default function ReportExportSheet({ visible, onClose, rows }) {
 
           {rows.map(row => {
             const enabled = row.enabled ?? true;
-            // anyBusy, not rowBusy: one running export freezes the WHOLE
-            // sheet. (The screens run exports through a single shared
-            // busyKey between both rows.)
+            // anyBusy, not rowBusy: one running export freezes the WHOLE sheet.
             const anyBusy = rows.some(r => r.actions?.some(a => a.busy));
             return (
               <View

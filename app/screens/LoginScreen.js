@@ -24,9 +24,7 @@ export default function LoginScreen({ onLoginSuccess }) {
     setLoading(true);
 
     try {
-      // Real login: POST /auth/login against the FastAPI service (api/).
-      // Resolves with the DB user, null for bad credentials, throws on
-      // network/server errors.
+      // Real login: POST /auth/login (api/). Resolves with the DB user, null for bad credentials; throws otherwise.
       const user = await login(email, password);
 
       if (!user) {
@@ -156,7 +154,6 @@ const styles = StyleSheet.create({
     paddingHorizontal: 24,
   },
 
-  // Header
   header: {
     alignItems: 'center',
     marginBottom: 36,
@@ -185,7 +182,6 @@ const styles = StyleSheet.create({
     letterSpacing: 0.3,
   },
 
-  // Card
   card: {
     width: '100%',
     backgroundColor: '#0f0f1a',
@@ -201,7 +197,6 @@ const styles = StyleSheet.create({
     marginBottom: 24,
   },
 
-  // Input
   inputGroup: {
     marginBottom: 16,
   },
@@ -234,7 +229,6 @@ const styles = StyleSheet.create({
     padding: 4,
   },
 
-  // Error
   errorWrap: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -246,7 +240,6 @@ const styles = StyleSheet.create({
     fontSize: 13,
   },
 
-  // Button
   button: {
     backgroundColor: '#818cf8',
     borderRadius: 12,
@@ -265,7 +258,6 @@ const styles = StyleSheet.create({
     letterSpacing: 0.3,
   },
 
-  // Footer
   footer: {
     marginTop: 32,
     fontSize: 11,
