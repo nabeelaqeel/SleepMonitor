@@ -27,14 +27,9 @@ import { ACK_STORAGE_KEY } from './config/displayText';
 
 const Tab = createBottomTabNavigator();
 
-// ─── Patient: existing 4-tab navigator ───────────────────────────────────────
-
 function PatientNavigator({ onLogout }) {
-  // The app draws edge-to-edge, so lift the tab bar contents above the
-  // Android system nav bar when the phone uses 3-button navigation
-  // (insets.bottom ~48dp); gesture navigation has a tiny inset, keeping
-  // the bar near-compact there. Our tabBarStyle overrides bottom-tabs'
-  // own safe-area padding, so we have to feed the inset back in.
+  // Edge-to-edge: our tabBarStyle overrides bottom-tabs' safe-area padding, so
+  // feed the Android system-nav-bar inset back in (large with 3-button nav only).
   const { bottom } = useSafeAreaInsets();
 
   return (
@@ -87,15 +82,11 @@ function PatientNavigator({ onLogout }) {
   );
 }
 
-// ─── Root ─────────────────────────────────────────────────────────────────────
-
 export default function App() {
   const [user, setUser]       = useState(null);
   const [loading, setLoading] = useState(true);
   const [acked, setAcked]     = useState(false);
 
-  // Check for persisted session — and the first-launch disclaimer
-  // acknowledgement — on launch
   useEffect(() => {
     (async () => {
       const stored = await getStoredUser();
@@ -106,9 +97,8 @@ export default function App() {
     })();
   }, []);
 
-  // Re-validate the exp every minute for EVERY authenticated session —
-  // including one created after this screen mounted — and stop the watcher
-  // on logout/unmount (the effect's cleanup) so no stale callback can fire.
+  // Re-validate the exp every minute for EVERY authenticated session (including
+  // ones created after mount); the cleanup stops the watcher so no stale callback fires.
   useEffect(() => {
     if (!user) return undefined; // splash / logged-out — nothing to watch
     return startSessionWatch(() => setUser(null));
@@ -128,7 +118,6 @@ export default function App() {
     setAcked(true);
   }
 
-  // ── Startup splash ──
   if (loading) {
     return (
       <View style={styles.splash}>
@@ -138,8 +127,7 @@ export default function App() {
     );
   }
 
-  // ── First launch: research disclaimer acknowledgement, both roles ──
-  // Checked before login so nobody reaches data screens before agreeing.
+  // First launch: the disclaimer must be agreed before anyone reaches data screens (both roles).
   if (!acked) {
     return (
       <SafeAreaProvider>
@@ -148,7 +136,6 @@ export default function App() {
     );
   }
 
-  // ── Not logged in ──
   if (!user) {
     return (
       <SafeAreaProvider>
@@ -159,7 +146,6 @@ export default function App() {
     );
   }
 
-  // ── Logged in: Doctor ──
   if (user.role === 'doctor') {
     return (
       <SafeAreaProvider>
@@ -170,7 +156,6 @@ export default function App() {
     );
   }
 
-  // ── Logged in: Patient ──
   return (
     <SafeAreaProvider>
       <SleepProvider patientId={user.patientId || user.id}>
@@ -180,10 +165,7 @@ export default function App() {
   );
 }
 
-// ─── Styles ───────────────────────────────────────────────────────────────────
-
 const styles = StyleSheet.create({
-  // Startup splash
   splash: {
     flex: 1,
     backgroundColor: '#0a0a0f',
@@ -191,7 +173,6 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
   },
 
-  // Patient navigator — logout button in header
   logoutBtn: {
     flexDirection: 'row',
     alignItems: 'center',

@@ -10,29 +10,19 @@ import {
   PATTERN_REPORT_TEXT,
 } from '../config/displayText';
 
-// ── Sleep Pattern Report (nightly PDF export) ────────────────────────────────
-// Builds the research-prototype report from the trained-model payload the app
-// receives on `sleep/recommendation` (band, p_positive, nightly features +
-// per-channel coverage, recording window, model metadata). Anything the
-// payload predates renders as "Not available" rather than being invented.
-//
-// buildPatternReportHtml() is pure (no Expo APIs) so it can be exercised
-// without a device; buildPatternReportPdf() renders it, and callers deliver
-// the file to share or saveToDevice like the session report does.
+// Builds the research-prototype report from the sleep/recommendation payload;
+// anything the payload predates renders as "Not available" rather than being
+// invented. buildPatternReportHtml() is pure (no Expo APIs) for device-free tests.
 
-// Axis bounds used ONLY to place metric bars on a plot. Mirror of the nightly
-// plausibility ranges in ai/config.py (hr 30–120 bpm, rmssd 5–200 ms,
-// spo2 85–100%) — they never gate or re-classify anything phone-side.
+// Axis bounds used ONLY to place metric bars — mirror of ai/config.py; never gates or re-classifies.
 const METRIC_RANGES = {
   hr:    [30, 120],
   rmssd: [5, 200],
   spo2:  [85, 100],
 };
 
-// A finding line fires when a nightly feature lands beyond one of these
-// research-plausible thresholds (mirrors ai/config.py: desat_threshold_pct 90,
-// plus low-side observations for RMSSD). Observation thresholds, not clinical
-// cutoffs.
+// Findings fire beyond these research-plausible thresholds (mirrors ai/config.py)
+// — observations, not clinical cutoffs.
 const FINDING_THRESHOLDS = {
   desatFrac:   0.005, // ≥0.5% of readings below 90% SpO2
   spo2Min:     90,    // lowest SpO2 strictly below the desat threshold (exactly 90% does not fire)
@@ -44,8 +34,6 @@ const BAND_HERO = {
   monitor:    { icon: '⚠', color: '#d97706' },
   see_doctor: { icon: '❗', color: '#dc2626' },
 };
-
-// ── Small pure helpers ────────────────────────────────────────────────────────
 
 function escapeHtml(value) {
   return String(value ?? '')
@@ -61,7 +49,6 @@ function fmt(value, digits = 1) {
   return String(Number(value.toFixed(digits)));
 }
 
-// Stable short report id derived from the analysed session ("rpt-1a2b3c4d").
 function reportIdFrom(payload) {
   const src = typeof payload?.sessionId === 'string' && payload.sessionId
     ? payload.sessionId
@@ -77,8 +64,7 @@ function shortStamp(iso) {
   return { day, time, ms: d.getTime() };
 }
 
-// "23:01 → 05:47 (6h 46m)" — dates included only when the window crosses
-// midnight. Returns null when the payload predates the window field.
+// "23:01 → 05:47 (6h 46m)"; dates only when crossing midnight. Null when the payload predates the window.
 function windowText(payload) {
   const start = shortStamp(payload?.window?.start);
   const end = shortStamp(payload?.window?.end);
@@ -93,7 +79,6 @@ function windowText(payload) {
   return `${sameDay ? '' : `${start.day} `}${start.time} → ${sameDay ? '' : `${end.day} `}${end.time}${duration}`;
 }
 
-// Percentage chip per channel: "HR 98% ✓" (✓ good, ◐ partial, ✗ low).
 function coverageChip(label, coverage, flagNote = '') {
   if (typeof coverage !== 'number' || !Number.isFinite(coverage)) {
     return `<span class="chip"><b>${label}</b> ${PATTERN_REPORT_TEXT.na}</span>`;
@@ -103,9 +88,7 @@ function coverageChip(label, coverage, flagNote = '') {
   return `<span class="chip"><b>${label}</b> ${pct}% ${status}${flagNote}</span>`;
 }
 
-// One metric block: header line + an axis bar where the value sits inside the
-// research-plausible range (optional p5–p95-style spread shading), plus a
-// caption with the observed spread. Unavailable values show an empty track.
+// Metric block: header + axis bar (value in plausible range, optional spread) + caption.
 function metricBar({ label, unit, value, range, spreadRange = null, captionExtra = '' }) {
   const [lo, hi] = range;
   const pos = v => Math.min(100, Math.max(0, ((v - lo) / (hi - lo)) * 100));
@@ -135,8 +118,7 @@ function metricBar({ label, unit, value, range, spreadRange = null, captionExtra
     </div>`;
 }
 
-// Feature-value findings, in priority order. Only observation thresholds;
-// lines describe the data, never the direction of care.
+// Feature-value findings in priority order — describe the data, never a direction of care.
 function findingsLines(nightly) {
   const n = nightly || {};
   const lines = [];
@@ -159,8 +141,7 @@ function findingsLines(nightly) {
   return lines;
 }
 
-// Channel-quality bullets for the limitations section, from payload coverage
-// meta (older payloads have none → nothing extra to say).
+// Channel-quality bullets from payload coverage meta (older payloads have none → nothing).
 function limitationFlags(nightly) {
   const n = nightly || {};
   const T = PATTERN_REPORT_TEXT;
@@ -181,8 +162,6 @@ function limitationFlags(nightly) {
   return flags;
 }
 
-// ── HTML assembly ────────────────────────────────────────────────────────────
-
 export function buildPatternReportHtml({ payload, patientName, patientId }) {
   const T = PATTERN_REPORT_TEXT;
   const now = new Date().toLocaleString();
@@ -200,7 +179,6 @@ export function buildPatternReportHtml({ payload, patientName, patientId }) {
     ? `Garmin recording window ${escapeHtml(win)} · ${T.deviceModel}`
     : `${T.dataSourceFallback} · ${T.deviceModel}`;
 
-  // ── 1. Summary indicator (hero) ──
   const score = typeof payload?.p_positive === 'number' && Number.isFinite(payload.p_positive)
     ? payload.p_positive
     : null;
@@ -229,7 +207,6 @@ export function buildPatternReportHtml({ payload, patientName, patientId }) {
       </div>
     </div>`;
 
-  // ── 2. Sleep overview (payload features only) ──
   const dipsPct = (typeof n.spo2_below90_frac === 'number' && Number.isFinite(n.spo2_below90_frac))
     ? `${fmt(n.spo2_below90_frac * 100, 1)}%`
     : PATTERN_REPORT_TEXT.na;
@@ -273,7 +250,6 @@ export function buildPatternReportHtml({ payload, patientName, patientId }) {
       </div>
     </div>`;
 
-  // ── 3. Pattern findings ──
   const lines = findingsLines(n);
   const findingsHtml = `
     <h2>${T.sections.findings}</h2>
@@ -284,13 +260,11 @@ export function buildPatternReportHtml({ payload, patientName, patientId }) {
       <p class="footnote">${T.findingsNote}</p>
     </div>`;
 
-  // ── 4. Suggested next steps (tier-driven) ──
   const nextStep = patternNextStep(band) || T.na;
   const nextHtml = `
     <h2>${T.sections.nextSteps}</h2>
     <div class="card"><p class="nextStep">${escapeHtml(nextStep)}</p></div>`;
 
-  // ── 5. Limitations & data quality ──
   const flags = limitationFlags(n);
   const limitationsHtml = `
     <h2>${T.sections.limitations}</h2>
@@ -301,7 +275,6 @@ export function buildPatternReportHtml({ payload, patientName, patientId }) {
       </ul>
     </div>`;
 
-  // ── 6. Disclaimer (short line always visible, full block collapsible) ──
   const disclaimerHtml = `
     <h2>${T.sections.disclaimer}</h2>
     <div class="card">

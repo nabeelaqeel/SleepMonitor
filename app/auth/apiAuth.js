@@ -1,21 +1,6 @@
-// Database-backed authentication. `login()` calls the FastAPI service in
-// api/ (host venv), which bcrypt-verifies the password against
-// users.password_hash and issues a short-lived HS256 JWT.
-//
-// Storage and transport rules (see docs/AUTH_API.md):
-//  * the session user object (non-sensitive: id/email/name/role) lives in
-//    AsyncStorage under 'current_user', exactly as before;
-//  * the JWT lives in encrypted native storage (expo-secure-store =
-//    iOS Keychain / Android Keystore). SecureStore has no web build, so
-//    web previews fall back to AsyncStorage — same as the legacy flow;
-//  * restoring a session requires BOTH a stored user and an unexpired
-//    token; either one missing/stale clears both and forces a re-login;
-//  * credentials are never sent to a plain-HTTP endpoint unless it is a
-//    loopback/private-LAN address (the documented dev setup). HTTPS hosts
-//    are validated by the RN networking stack's certificate checks.
-//
-// Set EXPO_PUBLIC_API_URL in app/.env.development (gitignored) — the API
-// binds 0.0.0.0 on this host so devices on the same LAN can reach it.
+// Database-backed auth via the FastAPI service in api/ (bcrypt + short-lived
+// HS256 JWT). Storage/transport rules: docs/AUTH_API.md. Set EXPO_PUBLIC_API_URL
+// in app/.env.development (gitignored) so LAN devices can reach the API.
 
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Platform } from 'react-native';
@@ -28,7 +13,6 @@ const API_URL = process.env.EXPO_PUBLIC_API_URL || 'http://192.168.0.29:8000';
 const LOGIN_TIMEOUT_MS = 15000; // a hung server must not freeze the login button
 const VERIFY_TIMEOUT_MS = 5000; // session cross-check at restore; best-effort
 
-// ── Token storage: secure native store, AsyncStorage on web ────────────────
 const secureGetToken = () =>
   Platform.OS === 'web' ? AsyncStorage.getItem(TOKEN_KEY) : SecureStore.getItemAsync(TOKEN_KEY);
 const secureStoreToken = token =>
@@ -36,9 +20,7 @@ const secureStoreToken = token =>
 const secureDeleteToken = () =>
   Platform.OS === 'web' ? AsyncStorage.removeItem(TOKEN_KEY) : SecureStore.deleteItemAsync(TOKEN_KEY);
 
-/** Decode the JWT payload client-side; the HS256 signature can only be
- *  checked server-side, but an expired/absent `exp` never restores a
- *  session. Returns the payload object or null. */
+/** Client-side JWT decode — the signature is only checkable server-side; a stale/absent exp never restores a session. */
 function decodeTokenPayload(token) {
   if (typeof token !== 'string' || !token) return null;
   try {
@@ -52,10 +34,8 @@ function decodeTokenPayload(token) {
   }
 }
 
-// ── Endpoint transport guard ────────────────────────────────────────────────
-/** True only for complete dotted-quad IPv4 addresses inside the dev LAN
- *  blocklist (10/8, 192.168/16, 172.16/12). Prefix regexes on a hostname
- *  would let strings like "10.evil.com" masquerade as a LAN address. */
+/** True only for a complete dotted-quad IPv4 in the dev LAN blocklist — prefix
+ *  regexes would let "10.evil.com" masquerade as a LAN address. */
 function isPrivateIpv4(host) {
   if (!/^\d{1,3}(\.\d{1,3}){3}$/.test(host)) return false; // whole address only
   const octets = host.split('.').map(Number);
@@ -64,14 +44,9 @@ function isPrivateIpv4(host) {
   return a === 10 || (a === 192 && b === 168) || (a === 172 && b >= 16 && b <= 31);
 }
 
-/**
- * Transport guard, called before login and before each verify. Default-deny:
- * refuses to send credentials over plain HTTP to anything that is not
- * loopback or a dev LAN address. Two accepted escapes: HTTPS or private/
- * loopback targets as-is, and — for the demo deployment with no TLS
- * termination (README Known Limitations) — `EXPO_PUBLIC_ALLOW_PLAIN_HTTP=true`
- * flags the tradeoff explicitly instead of silently bagging it.
- */
+/** Transport guard before login and each verify: default-deny for plain HTTP
+ *  outside loopback/dev-LAN; escapes are HTTPS/LAN as-is or
+ *  EXPO_PUBLIC_ALLOW_PLAIN_HTTP=true (flagged demo tradeoff). */
 function assertSecureEndpoint() {
   let url;
   try {
@@ -95,18 +70,12 @@ function assertSecureEndpoint() {
   }
 }
 
-// ── Auth actions ────────────────────────────────────────────────────────────
-/**
- * Returns the user object on success, or null for bad credentials (the
- * screen shows its existing "Invalid email or password" message). Network
- * failures throw so the screen can display a distinct, honest message.
- */
+/** Returns the user, or null for bad credentials; network failures throw so the
+ *  screen can show a distinct, honest message. */
 export async function login(email, password) {
   assertSecureEndpoint();
 
-  // Bound the whole exchange — headers AND body — to LOGIN_TIMEOUT_MS: the
-  // timer stays armed until parsing completes (or fails), so a stalled
-  // response can never hang the flow past the timeout.
+  // Timer stays armed until parsing completes, so a stalled response can't hang past LOGIN_TIMEOUT_MS.
   const controller = new AbortController();
   const abortTimer = setTimeout(() => controller.abort(), LOGIN_TIMEOUT_MS);
 
@@ -146,8 +115,7 @@ export async function logout() {
   await secureDeleteToken();
 }
 
-/** Local-only session validation: user present AND token unexpired.
- *  Clears the stored pair on anything stale and returns null. */
+/** Local-only validation: user present AND token unexpired; clears the stored pair on anything stale. */
 export async function checkSession() {
   try {
     const raw = await AsyncStorage.getItem(STORAGE_KEY);
@@ -165,17 +133,13 @@ export async function checkSession() {
   return null;
 }
 
-/** Cross-check the restored session against the API's /auth/verify when the
- *  API is reachable: 'valid' (sub+role match the stored user), 'invalid'
- *  (401 or identity mismatch — caller clears), or 'unreachable' (kept, so
- *  offline restore still works — the API is only sometimes up on the LAN). */
+/** Cross-checks the restored session against /auth/verify: 'valid', 'invalid'
+ *  (caller clears), or 'unreachable' (kept — offline restore still works). */
 async function serverVerify(user, token) {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), VERIFY_TIMEOUT_MS);
   try {
-    // Same transport guard as login() — a plain-HTTP public host must not
-    // receive the bearer token during restore either. A guard throw lands
-    // in the catch and counts as 'unreachable' (session kept locally).
+    // Same guard as login(): a guard throw counts as 'unreachable' (session kept locally).
     assertSecureEndpoint();
     const res = await fetch(`${API_URL}/auth/verify`, {
       headers: { Authorization: `Bearer ${token}` },
@@ -209,9 +173,8 @@ export async function getStoredUser() {
   return user;
 }
 
-/** Re-validates the session every `intervalMs` while authenticated: when the
- *  JWT's `exp` passes, the stored pair is cleared and `onSessionEnd` fires so
- *  the UI can drop to the login screen. Returns a stop() handle. */
+/** Re-validates the session every intervalMs; when the JWT's exp passes, clears
+ *  the stored pair and fires onSessionEnd so the UI drops to login. */
 export function startSessionWatch(onSessionEnd, intervalMs = 60000) {
   const handle = setInterval(async () => {
     const user = await checkSession();

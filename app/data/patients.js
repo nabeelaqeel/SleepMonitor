@@ -1,14 +1,6 @@
-// Seeded roster for the doctor dashboard. Real patient records live on the
-// ingest side (Postgres); these entries keep the roster useful when no
-// session is streaming.
-//
-// The entry that carries a `patientId` is the one that can go LIVE: it
-// matches the publisher's PATIENT_ID, so SleepContext tracks its snapshots
-// and the roster/detail/alerts screens overlay live values on top of it.
-//
-// Each entry also carries a seeded `status` and last-record vitals. That
-// `status` documents the patient's record state only — the doctor UI no
-// longer presents it as current (cards show LIVE or Offline instead).
+// Seeded roster for the doctor dashboard (real records live on the ingest side,
+// Postgres). The `patientId` entry matches the publisher's PATIENT_ID — the only
+// one that can go LIVE. `status` documents record state only (UI shows LIVE/Offline).
 export const MOCK_PATIENTS = [
   {
     id: '2',

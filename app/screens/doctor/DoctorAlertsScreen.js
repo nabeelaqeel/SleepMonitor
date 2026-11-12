@@ -6,17 +6,14 @@ import { useNow } from '../../hooks/useNow';
 import { MOCK_PATIENTS } from '../../data/patients';
 import { alertSubtitleCounts } from '../../config/displayText';
 
-// The doctor's alert inbox. The app currently receives a single live stream,
-// so this list is that session's events, captioned with the patient they
-// belong to. When per-patient topics land (multi-patient), each card can
-// carry its own patient chip via EventLog's `patientLabel`.
+// The doctor's alert inbox. The app currently receives a single live stream, so
+// this list is that session's events, captioned with the owning patient.
 export default function DoctorAlertsScreen() {
   const { eventLog, sessionStats, patientSnapshots } = useSleep();
   const now = useNow();
 
-  // Work out which roster patient the stream belongs to: a fresh snapshot
-  // means live; otherwise fall back to the most recently seen patient so the
-  // caption still names the session after it ends.
+  // A fresh snapshot means live; otherwise fall back to the most recently seen
+  // patient so the caption still names the session after it ends.
   const ids    = Object.keys(patientSnapshots);
   const liveId = ids.find(id => (now - patientSnapshots[id].lastSeen) < PATIENT_LIVE_WINDOW_MS) || null;
   const lastId = ids.length

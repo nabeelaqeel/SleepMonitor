@@ -19,9 +19,8 @@ const TIER_CONFIG = {
   Background: { bg: '#1a1a1a', text: '#9ca3af', border: '#374151',
                 label: tierLongLabel('Background'),  dot: '#6b7280' },
 };
-// Code identifiers — the band keys ('healthy'/'monitor'/'see_doctor'), the
-// tier keys above, `currentData.tier` comparisons and `sleep/<tier>` topics —
-// stay untouched. User-facing wording lives in config/displayText.js.
+// Code identifiers (band/tier keys, currentData.tier comparisons, sleep/<tier>
+// topics) stay untouched — user-facing wording lives in config/displayText.js.
 
 export default function HomeScreen() {
   const { currentData, spo2History, aiRecommendation } = useSleep();

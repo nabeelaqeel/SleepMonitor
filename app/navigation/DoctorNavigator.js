@@ -13,8 +13,6 @@ import AboutScreen         from '../screens/AboutScreen';
 const Tab   = createBottomTabNavigator();
 const Stack = createNativeStackNavigator();
 
-// ─── Patients tab: roster → detail stack ─────────────────────────────────────
-
 function PatientsStack({ onLogout }) {
   return (
     <Stack.Navigator
@@ -47,19 +45,15 @@ function PatientsStack({ onLogout }) {
   );
 }
 
-// ─── Navigator: two tabs, matching the patient-side tab bar styling ──────────
-
 export default function DoctorNavigator({ onLogout }) {
-  // Same edge-to-edge handling as PatientNavigator in App.js: keep the tab
-  // bar contents clear of the Android system nav bar on 3-button phones.
+  // Same edge-to-edge inset handling as PatientNavigator in App.js.
   const { bottom } = useSafeAreaInsets();
 
   return (
     <NavigationContainer>
       <Tab.Navigator
         screenOptions={{
-          // The Patients stack renders its own headers; the Alerts screen
-          // renders its own in-screen header, so the tab navigator stays bare.
+          // Both tabs render their own headers, so the navigator stays bare.
           headerShown: false,
           tabBarStyle: {
             backgroundColor: '#0a0a0f',

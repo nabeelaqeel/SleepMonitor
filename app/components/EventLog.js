@@ -12,16 +12,12 @@ const TIER_STYLE = {
   Background: { border: '#6b7280', badge: '#1a1a1a', badgeText: '#9ca3af' },
 };
 
-// Filter pills display the centralized short labels, but filtering still
-// compares raw code identifiers ('Critical' / 'Important') — never renamed.
+// Filter pills show centralized labels, but filtering compares raw identifiers ('Critical'/'Important') — never renamed.
 const FILTERS = ['All', 'Critical', 'Important'];
 
-// Shared event log — used by the patient's Alerts tab and the doctor's
-// Alerts tab. `emptyMessage` is shown when no events have arrived at all;
-// the "nothing matches the current filter" case is handled internally.
-//
-// `patientLabel` is reserved for genuinely multi-patient streams (per-patient
-// topics). When provided, every card shows a chip naming the patient.
+// Shared event log — patient's and doctor's Alerts tabs. `emptyMessage` shows
+// when no events arrived; the "no match for filter" case is handled internally.
+// `patientLabel` is for multi-patient streams: cards then show a patient chip.
 export default function EventLog({
   events,
   emptyMessage = 'Waiting for data from classifier...',
