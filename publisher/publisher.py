@@ -5,6 +5,9 @@ and publishes each reading as a JSON payload to the Mosquitto broker,
 simulating a live sensor stream.
 
 Configuration is via environment variables (see .env.development).
+PATIENT_ID forms the MQTT client_id (sleep-publisher-<PATIENT_ID>) and,
+with DEVICE_ID, identifies every payload — parallel instances must set
+distinct values (publisher/start_sim_device.sh does this per watch).
 """
 
 from __future__ import annotations
@@ -43,8 +46,10 @@ MQTT_PASSWORD    = os.getenv("MQTT_PASSWORD", "changeme")
 CSV_PATH         = os.getenv("CSV_PATH", "data/sleep_data_realistic.csv")
 PUBLISH_INTERVAL = float(os.getenv("PUBLISH_INTERVAL", "1.0"))
 LOOP_CSV         = os.getenv("LOOP_CSV", "true").lower() == "true"
-PATIENT_ID       = os.getenv("PATIENT_ID", "patient-001")
-DEVICE_ID        = os.getenv("DEVICE_ID", "sleepband-001")
+_DEFAULT_PATIENT_ID = "patient-001"
+_DEFAULT_DEVICE_ID  = "sleepband-001"
+PATIENT_ID       = os.getenv("PATIENT_ID", _DEFAULT_PATIENT_ID)
+DEVICE_ID        = os.getenv("DEVICE_ID", _DEFAULT_DEVICE_ID)
 STATS_INTERVAL   = int(os.getenv("STATS_INTERVAL", "10"))  # publish background stats every N rows
 
 # ── Session identity ──────────────────────────────────────────
@@ -211,6 +216,7 @@ def publish_reading(client: mqtt.Client, row: pd.Series, row_idx: int) -> None:
     payload = json.dumps({
         "sessionId":   SESSION_ID,
         "patientId":   PATIENT_ID,
+        "deviceId":    DEVICE_ID,
         "seq":         seq,
         "publishedAt": now_ms(),
         "tier":        tier,
@@ -236,6 +242,7 @@ def publish_background_stats(client: mqtt.Client) -> None:
     payload = json.dumps({
         "sessionId": SESSION_ID,
         "patientId": PATIENT_ID,
+        "deviceId":  DEVICE_ID,
         "publishedAt": now_ms(),
         "tier":      "Background",
         "spo2":      0,
@@ -256,7 +263,14 @@ def publish_background_stats(client: mqtt.Client) -> None:
 # ── Main loop ─────────────────────────────────────────────────
 
 def run() -> None:
-    """Load the CSV and replay it at PUBLISH_INTERVAL seconds, looping until signalled, then publish session/end."""
+    """Load the CSV and replay it at PUBLISH_INTERVAL seconds, looping until signalled, then publish session/end.
+
+    Identity recap: PATIENT_ID forms the MQTT client_id
+    (sleep-publisher-<PATIENT_ID>) and all three identity fields flow into
+    every payload — parallel demo watches must each set a distinct
+    PATIENT_ID + DEVICE_ID or they collide on the broker and mis-bind in
+    the device registry.
+    """
 
     def handle_signal(sig, frame):
         """Set the shutdown flag on SIGINT/SIGTERM so the replay loop unwinds cleanly."""
@@ -266,6 +280,23 @@ def run() -> None:
 
     signal.signal(signal.SIGTERM, handle_signal)
     signal.signal(signal.SIGINT,  handle_signal)
+
+    log.info(
+        "Instance identity — patient=%s device=%s session=%s "
+        "(client_id sleep-publisher-%s is the per-instance uniqueness boundary)",
+        PATIENT_ID, DEVICE_ID, SESSION_ID, PATIENT_ID,
+    )
+    # A custom DEVICE_ID alongside the default patient is the tell-tale of a
+    # second parallel instance: both publishers would share one client_id and
+    # repeatedly evict each other from the broker.
+    if PATIENT_ID == _DEFAULT_PATIENT_ID and DEVICE_ID != _DEFAULT_DEVICE_ID:
+        log.warning(
+            "PATIENT_ID is still the default '%s' while DEVICE_ID is custom "
+            "('%s') — if this is a second parallel instance, export a distinct "
+            "PATIENT_ID too, or both publishers share client_id "
+            "sleep-publisher-%s and evict each other",
+            _DEFAULT_PATIENT_ID, DEVICE_ID, PATIENT_ID,
+        )
 
     df     = load_csv(CSV_PATH)
     client = build_client()

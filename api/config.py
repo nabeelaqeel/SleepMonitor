@@ -44,3 +44,7 @@ if len(JWT_SECRET) < 32 or JWT_SECRET.lower() in _JWT_SECRET_PLACEHOLDERS:
 DEMO_SEEDING_ENABLED = os.getenv("SEED_DEMO_USERS", "true").strip().lower() in (
     "1", "true", "yes",
 )
+
+# Google sign-in is opt-in: unset keeps the LAN demo fully offline —
+# /auth/google then answers 503 instead of ever touching Google's servers.
+GOOGLE_CLIENT_ID = os.getenv("GOOGLE_CLIENT_ID", "").strip()

@@ -16,6 +16,10 @@ Design notes
   means the broker queues QoS 1/2 messages while the worker is down.
 * Reads/inserts are idempotent on (session_id, seq), so redelivery and
   restarts are safe.
+* Attribution: the payload's deviceId is resolved to a bound patient via
+  the devices registry ONCE per session (never per reading). Unbound or
+  missing deviceId falls back to PATIENT_UUID so the single-watch demo
+  keeps working unchanged.
 """
 
 from __future__ import annotations
@@ -33,10 +37,12 @@ from datetime import UTC, datetime
 import paho.mqtt.client as mqtt
 from db import (
     connect,
+    ensure_registry,
     ensure_user,
     finalize_session,
     insert_alerts,
     insert_readings,
+    resolve_patient,
     upsert_session,
 )
 from dotenv import load_dotenv
@@ -117,12 +123,17 @@ def on_message(client, userdata, msg):
                 "device_id":  data.get("deviceId", DEVICE_ID),
             })
         elif data.get("event") == "end":
-            q.put({
+            end_item = {
                 "kind":     "session_end",
                 "session_id": sid,
                 "ended_at": to_dt(data.get("endedAt")),
                 "expected": data.get("totalReadings"),
-            })
+            }
+            # Only present when the payload carries it — the Last-Will
+            # recovery path otherwise resolves via the DEVICE_ID config.
+            if data.get("deviceId"):
+                end_item["device_id"] = data["deviceId"]
+            q.put(end_item)
         return
 
     # ── sleep/background now carries two message types: Background-tier
@@ -145,7 +156,14 @@ def on_message(client, userdata, msg):
         tier, data.get("qos", 0),
     )
 
-    item = {"kind": "reading", "row": reading, "session_id": sid}
+    item = {
+        "kind":       "reading",
+        "row":        reading,
+        "session_id": sid,
+        # Attribution is decided by the writer via the registry — the
+        # parse-time PATIENT_UUID placeholder is swapped when bound.
+        "device_id":  data.get("deviceId", DEVICE_ID),
+    }
     if tier in ("Critical", "Important"):
         item["alert_row"] = (
             sid, PATIENT_UUID, int(seq), tier,
@@ -200,12 +218,42 @@ def flush(conn, readings, alerts):
         log.info("Flushed %d/%d alerts", n, len(alerts))
 
 
+def resolve_session_patient(conn, session_id: str, device_id: str,
+                            cache: dict, warned: set) -> str:
+    """Resolve a session's patient via the device registry, once per session.
+
+    Unbound or missing deviceId falls back to PATIENT_UUID so the
+    single-watch demo keeps working; the warning fires once per device,
+    not per message.
+    """
+    if session_id in cache:
+        return cache[session_id]
+    patient = resolve_patient(conn, device_id, PATIENT_UUID)
+    if patient == PATIENT_UUID and device_id not in warned:
+        warned.add(device_id)
+        log.warning(
+            "Device %s is not bound in the registry — attributing session %s "
+            "to the demo patient %s", device_id, session_id, PATIENT_UUID,
+        )
+    cache[session_id] = patient
+    return patient
+
+
+def _attribute(row: tuple, patient: str) -> tuple:
+    """Swap the session's resolved patient into a row (patient rides index 1)."""
+    if row[1] == patient:
+        return row
+    return (row[0], patient, *row[2:])
+
+
 def writer_loop(conn):
     """Main-thread drain: batch queued rows into the DB, restoring FK targets on first sight per session, flush at size or time thresholds, and finalize on session/end. Keeps draining after stop until the queue empties."""
     global _seq
     readings: list[tuple] = []
     alerts: list[tuple] = []
     seen_sessions: set[str] = set()
+    session_patients: dict[str, str] = {}
+    warned_unbound: set[str] = set()
     last_flush = time.time()
 
     while not _stop.is_set() or not q.empty():
@@ -219,29 +267,48 @@ def writer_loop(conn):
 
             if kind == "reading":
                 sid = item["session_id"]
+                patient = resolve_session_patient(
+                    conn, sid, item["device_id"], session_patients, warned_unbound,
+                )
                 # Guarantee the FK target exists even if we joined mid-session.
                 if sid not in seen_sessions:
                     upsert_session(
-                        conn, sid, PATIENT_UUID,
-                        DEVICE_ID, to_dt(item["row"][3]),
+                        conn, sid, patient,
+                        item["device_id"], to_dt(item["row"][3]),
                     )
                     seen_sessions.add(sid)
-                readings.append(item["row"])
+                readings.append(_attribute(item["row"], patient))
                 if "alert_row" in item:
-                    alerts.append(item["alert_row"])
+                    alerts.append(_attribute(item["alert_row"], patient))
                 _seq += 1
 
             elif kind == "session_start":
                 flush(conn, readings, alerts); readings.clear(); alerts.clear()
+                patient = resolve_session_patient(
+                    conn, item["session_id"], item["device_id"],
+                    session_patients, warned_unbound,
+                )
                 upsert_session(
-                    conn, item["session_id"], PATIENT_UUID,
+                    conn, item["session_id"], patient,
                     item["device_id"], item["started_at"],
                 )
                 seen_sessions.add(item["session_id"])
-                log.info("Session %s started", item["session_id"])
+                log.info("Session %s started (patient %s)", item["session_id"], patient)
 
             elif kind == "session_end":
                 flush(conn, readings, alerts); readings.clear(); alerts.clear()
+                sid = item["session_id"]
+                if sid not in seen_sessions:
+                    # Last-Will recovery: recreate the session row so the
+                    # stats FK has a target; started_at is unknowable, so
+                    # ended_at stands in. Attribution resolves from the
+                    # Will's deviceId (or the DEVICE_ID config).
+                    device_id = item.get("device_id", DEVICE_ID)
+                    patient = resolve_session_patient(
+                        conn, sid, device_id, session_patients, warned_unbound,
+                    )
+                    upsert_session(conn, sid, patient, device_id, item["ended_at"])
+                    seen_sessions.add(sid)
                 stats = finalize_session(
                     conn, item["session_id"], item["ended_at"],
                     declared_total=item.get("expected"),
@@ -267,6 +334,7 @@ def writer_loop(conn):
 def main() -> None:
     """Bootstrap the connection, MQTT client and signal handlers, then run the writer loop until drained and cleaned up."""
     conn = connect(DATABASE_URL)
+    ensure_registry(conn)
     ensure_user(conn, PATIENT_UUID)
 
     client = build_client()

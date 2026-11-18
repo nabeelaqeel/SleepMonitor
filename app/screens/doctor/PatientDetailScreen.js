@@ -3,8 +3,9 @@ import { View, Text, ScrollView, TouchableOpacity, ActivityIndicator, StyleSheet
 import { MaterialCommunityIcons } from '@expo/vector-icons';
 import VitalCard from '../../components/VitalCard';
 import ReportExportSheet from '../../components/ReportExportSheet';
-import { useSleep, PATIENT_LIVE_WINDOW_MS } from '../../context/SleepContext';
+import { useSleep } from '../../context/SleepContext';
 import { useNow } from '../../hooks/useNow';
+import { pickLiveDevice } from './rosterLive';
 import { buildSessionReportPdf, exportSessionReport } from '../../services/exportSessionReport';
 import { buildPatternReportPdf, exportPatternReport } from '../../services/exportPatternReport';
 import { canSaveToDevice, savePdfToDevice, SaveCancelledError } from '../../services/saveToDevice';
@@ -68,15 +69,17 @@ function MedicalHistoryItem({ record }) {
 
 export default function PatientDetailScreen({ route }) {
   const { patient } = route.params;
-  const { patientSnapshots, sessionStats, currentData, sleepTimeline, aiRecommendations } = useSleep();
+  const { deviceSnapshots, sessionStats, currentData, sleepTimeline, aiRecommendations } = useSleep();
   const [busyKey, setBusyKey] = useState(null); // '<report>-<share|save>' | null
   const [exportPickerOpen, setExportPickerOpen] = useState(false);
   const now = useNow();
 
-  // Only the patient whose patientId is streaming gets fresh values; others show the seeded record.
-  const snapshot = patient.patientId ? patientSnapshots[patient.patientId] : null;
-  const isLive   = !!snapshot && (now - snapshot.lastSeen) < PATIENT_LIVE_WINDOW_MS;
+  // Same registry join as the roster card: any bound device streaming makes the
+  // detail header live; the freshest snapshot overlays its vitals.
+  const snapshot = pickLiveDevice(patient, deviceSnapshots, now);
+  const isLive   = !!snapshot;
 
+  // Roster rows can carry null readings — '--' beats "undefined%" on the cards.
   const spo2 = isLive && snapshot.spo2 != null ? Math.round(snapshot.spo2) : patient.lastSpo2;
   const hr   = isLive && snapshot.heartRate != null ? Math.round(snapshot.heartRate) : patient.lastHr;
   const criticalCount = isLive ? sessionStats.critical : patient.criticalEvents;
@@ -86,11 +89,15 @@ export default function PatientDetailScreen({ route }) {
   const tier     = isLive ? TIER_CONFIG[tierKey] : OFFLINE_TIER;
 
   const spo2Color = !isLive ? RECORD_COLOR
+                  : spo2 == null ? RECORD_COLOR
                   : spo2 < 90 ? '#f87171'
                   : spo2 < 95 ? '#fbbf24' : '#4ade80';
   const hrColor   = !isLive ? RECORD_COLOR
+                  : hr == null ? RECORD_COLOR
                   : hr < 40 || hr > 100 ? '#f87171' : '#4ade80';
-  const bmi       = computeBmi(patient.weight, patient.height);
+  // Roster rows carry no weight/height — BMI renders '—' instead of NaN.
+  const hasBodyMetrics = patient.weight != null && patient.height != null;
+  const bmi       = hasBodyMetrics ? computeBmi(patient.weight, patient.height) : null;
 
   // Reuses the patient-side session report; it can only cover this patient if
   // they streamed during this app run, so the row stays disabled otherwise.
@@ -202,9 +209,21 @@ export default function PatientDetailScreen({ route }) {
         </View>
         <View>
           <Text style={styles.patientName}>{patient.name}</Text>
-          <Text style={styles.patientMeta}>Age {patient.age} · ID #{patient.id}{patient.patientId ? ` · ${patient.patientId}` : ''}</Text>
+          <Text style={styles.patientMeta}>ID #{patient.id}{patient.email ? ` · ${patient.email}` : ''}{patient.patientId ? ` · ${patient.patientId}` : ''}</Text>
         </View>
       </View>
+
+      {/* Bound devices — registry state, not inferred from readings */}
+      {(patient.devices || []).length > 0 && (
+        <View style={styles.deviceChips}>
+          {patient.devices.map(d => (
+            <View key={d.device_id} style={styles.deviceChip}>
+              <MaterialCommunityIcons name="watch-variant" size={13} color="#818cf8" />
+              <Text style={styles.deviceChipText}>{d.display_name || d.device_id}</Text>
+            </View>
+          ))}
+        </View>
+      )}
 
       {/* Tier status card — mirrors HomeScreen */}
       <View style={[styles.tierCard, { backgroundColor: tier.bg, borderColor: tier.border }]}>
@@ -229,7 +248,7 @@ export default function PatientDetailScreen({ route }) {
         />
         <VitalCard
           label={`${tierShortLabel('Critical')} Events`}
-          value={`${criticalCount}`}
+          value={criticalCount == null ? '--' : `${criticalCount}`}
           color={!isLive ? RECORD_COLOR : criticalCount > 0 ? '#f87171' : '#4ade80'}
         />
         <VitalCard
@@ -239,21 +258,24 @@ export default function PatientDetailScreen({ route }) {
         />
       </View>
 
-      {/* Physical metrics */}
+      {/* Physical metrics — roster rows carry none, so each renders '—' */}
       <Text style={styles.sectionLabel}>Physical metrics</Text>
       <View style={styles.grid}>
-        <VitalCard label="Age"    value={`${patient.age} yrs`}   color="#9ca3af" />
-        <VitalCard label="Weight" value={`${patient.weight} kg`}  color="#9ca3af" />
-        <VitalCard label="Height" value={`${patient.height} cm`}  color="#9ca3af" />
-        <VitalCard label="BMI"    value={bmi}                     color={isLive ? bmiColor(bmi) : RECORD_COLOR} />
+        <VitalCard label="Age"    value={patient.age != null ? `${patient.age} yrs` : '—'}   color="#9ca3af" />
+        <VitalCard label="Weight" value={patient.weight != null ? `${patient.weight} kg` : '—'}  color="#9ca3af" />
+        <VitalCard label="Height" value={patient.height != null ? `${patient.height} cm` : '—'}  color="#9ca3af" />
+        <VitalCard label="BMI"    value={bmi == null ? '—' : bmi}  color={bmi == null ? '#9ca3af' : isLive ? bmiColor(bmi) : RECORD_COLOR} />
       </View>
 
-      {/* Medical history */}
+      {/* Medical history — the roster does not include history records */}
       <Text style={styles.sectionLabel}>Medical history</Text>
       <View style={{ marginBottom: 22 }}>
         {(patient.medicalHistory || []).map(r => (
           <MedicalHistoryItem key={r.id} record={r} />
         ))}
+        {(patient.medicalHistory || []).length === 0 && (
+          <Text style={styles.historyEmpty}>No medical history on record</Text>
+        )}
       </View>
 
       {/* Critical events callout */}
@@ -321,7 +343,9 @@ export default function PatientDetailScreen({ route }) {
             ? 'Streaming live from the MQTT broker'
             : patient.patientId
               ? 'No live session — showing the last recorded readings'
-              : 'Static demo record — no device assigned'}
+              : (patient.devices || []).length > 0
+                ? 'No live session — readings come from the bound watch'
+                : 'No device bound yet — ask the patient to connect a watch'}
         </Text>
       </View>
 
@@ -364,6 +388,33 @@ const styles = StyleSheet.create({
     fontSize: 12,
     color: '#555',
     marginTop: 3,
+  },
+  deviceChips: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 8,
+    marginBottom: 16,
+  },
+  deviceChip: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 5,
+    backgroundColor: '#13132a',
+    borderRadius: 20,
+    borderWidth: 1,
+    borderColor: '#2a2a4a',
+    paddingHorizontal: 10,
+    paddingVertical: 5,
+  },
+  deviceChipText: {
+    fontSize: 11,
+    color: '#818cf8',
+    fontWeight: '500',
+  },
+  historyEmpty: {
+    fontSize: 13,
+    color: '#555',
+    fontStyle: 'italic',
   },
 
   tierCard: {

@@ -8,6 +8,11 @@
 #   ./deploy/deploy-update.sh --ai-demo       # also run the AI demo band publisher
 #                                             #   (compose profile ai-demo; sleep-ai-demo
 #                                             #   joins the verified container list)
+#   ./deploy/deploy-update.sh --branch <name> # fetch + checkout <name> (branch or
+#                                             #   tag — detached HEAD) instead of
+#                                             #   git pull, then compose up + verify
+#   ./deploy/deploy-update.sh --force-branch  # with --branch: override the
+#                                             #   .deployment-role production guard
 #   ./deploy/deploy-update.sh --repair-postgres-password
 #                                             # TEST: point the postgres volume's
 #                                             #   stored password at .env.development's
@@ -35,20 +40,35 @@ SKIP_PULL=0
 ALLOW_DIRTY=0
 REPAIR_PG=0
 AI_DEMO=0
-for arg in "$@"; do
-  case "$arg" in
+BRANCH=""
+FORCE_BRANCH=0
+while [ $# -gt 0 ]; do
+  case "$1" in
     --skip-pull)  SKIP_PULL=1 ;;
     --allow-dirty) ALLOW_DIRTY=1 ;;
     --ai-demo)    AI_DEMO=1 ;;
     --repair-postgres-password) REPAIR_PG=1 ;;
-    -h|--help)    sed -n '2,15p' "$0"; exit 0 ;;
-    *) echo "unknown flag: $arg (see header)"; exit 2 ;;
+    --force-branch) FORCE_BRANCH=1 ;;
+    --branch)
+      if [ $# -lt 2 ] || [ -z "$2" ]; then
+        echo "--branch needs a value (branch or tag name — see header)"; exit 2
+      fi
+      case "$2" in -*) echo "--branch takes a branch/tag name, not an option"; exit 2 ;; esac
+      BRANCH="$2"; shift ;;
+    -h|--help)    sed -n '2,20p' "$0"; exit 0 ;;
+    *) echo "unknown flag: $1 (see header)"; exit 2 ;;
   esac
+  shift
 done
 
 say()  { printf '%s\n' "$*"; }
 run()  { if [ "$DRY" = 1 ]; then say "[dry-run] $*"; else "$@"; fi; }
 die()  { printf '\n✗ %s\n' "$*" >&2; exit 1; }
+
+# --force-branch exists only to relax the role guard; alone it would be a
+# silent no-op, which hides a mis-typed or forgotten --branch:
+[ "$FORCE_BRANCH" = 1 ] && [ -z "$BRANCH" ] && \
+  say "⚠ --force-branch ignored (only meaningful with --branch)"
 
 # DSN userinfo → raw bytes (URI %XX decode). The api's SQLAlchemy client
 # unquotes the DSN password, so every value tested or patched against the
@@ -125,13 +145,62 @@ if [ "$REPAIR_PG" = 1 ]; then
   fi
 fi
 
+# ── deployment-role guard (--branch × .deployment-role) ──────
+# Each server states its role in .deployment-role (repo root — gitignored,
+# per-server state, never repo content). `production` allows --branch only
+# for main and for tags (rollback redeploys); feature branches belong on
+# staging. Absent — or any other value — reads as staging: restricting a box
+# is an explicit act, and the refusal below names the file that un-restricts
+# it. The tag probe is read-only rev-parse, so the guard also runs in dry-run.
+branch_role_guard() {
+  [ "$FORCE_BRANCH" = 1 ] && return 0
+  [ -f .deployment-role ] || return 0
+  local role
+  role="$(tr -d '[:space:]' < .deployment-role)"
+  [ "$role" = "production" ] || return 0
+  [ "$BRANCH" = "main" ] && return 0
+  if git rev-parse -q --verify "refs/tags/$BRANCH" >/dev/null 2>&1; then
+    return 0
+  fi
+  die "--branch $BRANCH refused: .deployment-role marks this server production —
+  production deploys main, or a tag for rollback; feature branches belong on staging.
+  Intending this anyway? edit .deployment-role in the repo root to 'staging' (or
+  remove the file), or re-run with --force-branch for a one-shot override."
+}
+
 # ── git step ─────────────────────────────────────────────────
 if [ "$SKIP_PULL" = 1 ]; then
   say "── git: skipped (--skip-pull)"
+  [ -n "$BRANCH" ] && say "⚠ --branch $BRANCH ignored (--skip-pull skips the git step)"
 elif [ ! -d .git ]; then
   # tarball/Option-B deployments (git archive) have no .git — the pull step is
   # meaningless there, so it is GENUINELY skipped instead of failing later:
   say "⚠ not a git checkout — skipping the pull entirely"
+  [ -n "$BRANCH" ] && say "⚠ --branch $BRANCH ignored (no .git to checkout)"
+elif [ -n "$BRANCH" ]; then
+  # --branch: fetch, then checkout the NAMED ref — git checkout accepts a
+  # branch or a tag alike, so the same flag serves feature deploys (staging)
+  # and rollback redeploys (a tag, which lands on detached HEAD — said below).
+  if [ "$DRY" = 1 ]; then
+    branch_role_guard
+    say "[dry-run] git fetch origin --tags + dirty check + git checkout $BRANCH (a tag name deploys as detached HEAD)"
+  else
+    git fetch origin --tags --quiet 2>/dev/null || say "⚠ git fetch failed (offline): continuing with local refs"
+    if [ -n "$(git status --porcelain)" ] && [ "$ALLOW_DIRTY" = 0 ]; then
+      say "Uncommitted changes:" >&2
+      git status --short >&2
+      die "uncommitted work would collide with the checkout — commit/push first, or re-run with --allow-dirty"
+    fi
+    # the guard reads fetched refs, so it must follow the fetch — a just-pushed
+    # tag is otherwise invisible and a legitimate rollback would be refused:
+    branch_role_guard
+    git checkout "$BRANCH" || die "git checkout $BRANCH failed — no such branch or tag on this server; see: git branch -a (and git tag -l for tags)"
+    if git symbolic-ref -q HEAD >/dev/null 2>&1; then
+      say "── git: on branch $(git rev-parse --abbrev-ref HEAD)"
+    else
+      say "── git: detached HEAD at $(git rev-parse --short HEAD) — $BRANCH is a tag (rollback deploy); checkout main before the next plain deploy"
+    fi
+  fi
 else
   if [ "$DRY" = 1 ]; then
     say "[dry-run] git fetch + dirty check + git pull --ff-only"

@@ -39,6 +39,37 @@ def ensure_user(conn, patient_uuid: str, email: str = "patient@sleep.com",
     conn.commit()
 
 
+def ensure_registry(conn) -> None:
+    """Create the devices registry when missing — existing DBs predate it.
+
+    Same idempotent pattern as the API's ensure_setup(): fresh DBs get
+    the table from postgres/init, older ones from this DDL.
+    """
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            CREATE TABLE IF NOT EXISTS devices (
+                device_id    VARCHAR(100) PRIMARY KEY,
+                patient_id   UUID NOT NULL REFERENCES users(user_id) ON DELETE CASCADE,
+                display_name VARCHAR(100),
+                created_at   TIMESTAMPTZ NOT NULL DEFAULT NOW()
+            )
+            """
+        )
+    conn.commit()
+
+
+def resolve_patient(conn, device_id: str, fallback: str) -> str:
+    """deviceId → the bound patient's UUID; `fallback` when unbound."""
+    with conn.cursor() as cur:
+        cur.execute(
+            "SELECT patient_id::text FROM devices WHERE device_id = %s",
+            (device_id,),
+        )
+        row = cur.fetchone()
+    return row[0] if row else fallback
+
+
 def upsert_session(conn, session_id: str, patient_uuid: str,
                    device_id: str, started_at: datetime) -> None:
     """Create the session row on first sight; ON CONFLICT keeps a replayed session/start harmless."""

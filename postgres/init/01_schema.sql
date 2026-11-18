@@ -18,6 +18,9 @@ CREATE TABLE users (
     -- hash of the demo password on startup (SQL cannot compute bcrypt),
     -- so the API must run at least once before anyone can log in.
     password_hash VARCHAR(255) DEFAULT '',
+    -- Doctor-only pairing code, minted by the auth API on registration
+    -- (patients keep NULL). Patients post it to /auth/link-doctor.
+    pairing_code  VARCHAR(12) UNIQUE,
     created_at    TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
@@ -27,6 +30,18 @@ CREATE TABLE doctor_patients (
     patient_id  UUID NOT NULL REFERENCES users(user_id) ON DELETE CASCADE,
     assigned_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     PRIMARY KEY (doctor_id, patient_id)
+);
+
+-- ── Device registry ───────────────────────────────────────────
+-- Maps each watch's deviceId to the patient it belongs to, so N
+-- simulated watches attribute their sessions/readings/alerts to the
+-- right user. Unbound devices fall back to PATIENT_UUID (the
+-- single-watch demo); the ingest worker resolves on session/start.
+CREATE TABLE devices (
+    device_id    VARCHAR(100) PRIMARY KEY,
+    patient_id   UUID NOT NULL REFERENCES users(user_id) ON DELETE CASCADE,
+    display_name VARCHAR(100),
+    created_at   TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
 -- ── Sleep sessions ─────────────────────────────────────────────

@@ -20,6 +20,7 @@ import AcknowledgementScreen   from './screens/AcknowledgementScreen';
 import DoctorNavigator from './navigation/DoctorNavigator';
 
 import HomeScreen    from './screens/HomeScreen';
+import DeviceScreen  from './screens/DeviceScreen';
 import AlertsScreen  from './screens/AlertsScreen';
 import ReportScreen  from './screens/ReportScreen';
 import NetworkScreen from './screens/NetworkScreen';
@@ -59,6 +60,9 @@ function PatientNavigator({ onLogout }) {
       >
         <Tab.Screen name="Home" component={HomeScreen}
           options={{ tabBarIcon: ({ color, size }) => <MaterialCommunityIcons name="home" color={color} size={size} /> }}
+        />
+        <Tab.Screen name="Device" component={DeviceScreen}
+          options={{ title: 'My Device', tabBarIcon: ({ color, size }) => <MaterialCommunityIcons name="watch-variant" color={color} size={size} /> }}
         />
         <Tab.Screen name="Alerts" component={AlertsScreen}
           options={{ tabBarIcon: ({ color, size }) => <MaterialCommunityIcons name="bell-alert" color={color} size={size} /> }}

@@ -2,6 +2,7 @@
   "expo": {
     "name": "SleepMonitor",
     "slug": "SleepMonitor",
+    "scheme": "sleepmonitor",
     "version": "0.1.0",
     "orientation": "portrait",
     "icon": "./assets/sleepmonitor-icon.png",

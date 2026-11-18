@@ -84,6 +84,12 @@ export function SleepProvider({ children, patientId = null }) {
   // Last reading per payload patientId — powers the roster's LIVE badge; only the streaming patient updates here.
   const [patientSnapshots, setPatientSnapshots] = useState({});
 
+  // Same snapshots, additionally indexed by payload deviceId — the doctor roster
+  // joins GET /patients devices[].device_id against this (publisher T4 contract
+  // puts deviceId on every message). The patientId index above is what the
+  // patient's own views read; it is intentionally untouched.
+  const [deviceSnapshots, setDeviceSnapshots] = useState({});
+
   // Optional AI recommendation (post-night guidance band, non QoS tier)
   const [aiRecommendations, setAiRecommendations] = useState({});
 
@@ -273,6 +279,29 @@ export function SleepProvider({ children, patientId = null }) {
         };
       });
     }
+
+    // Mirror of the block above, keyed by deviceId so the roster can join
+    // bound watches to live traffic without touching the patientId index.
+    if (data.deviceId) {
+      setDeviceSnapshots(prev => {
+        const prior = prev[data.deviceId] || {};
+        return {
+          ...prev,
+          [data.deviceId]: isStatsOnly
+            ? { ...prior, lastSeen: now }
+            : {
+                ...prior,
+                lastSeen:  now,
+                tier:      data.tier,
+                spo2:      data.spo2,
+                heartRate: data.heartRate,
+                hrv:       data.hrv,
+                topic:     data.topic,
+                timestamp: data.timestamp,
+              },
+        };
+      });
+    }
   };
 
   useEffect(() => {
@@ -325,6 +354,7 @@ export function SleepProvider({ children, patientId = null }) {
       latencyStats,
       sleepTimeline,
       patientSnapshots,
+      deviceSnapshots,
       // Raw per-patient map — doctor screens pick their patient's entry here
       // (aiRecommendation below is only for the patient-app provider).
       aiRecommendations,

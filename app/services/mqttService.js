@@ -1,5 +1,6 @@
 import Paho from 'paho-mqtt';
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import { getMqttEndpoint } from '../config/appConfig';
 
 let client = null;
 let onMessageHandler = null;
@@ -10,10 +11,10 @@ let connecting = false;
 // Bumped on connect/disconnect so a late resolve or broker callback can't resurrect a torn-down connection.
 let generation = 0;
 
-// EXPO_PUBLIC_BROKER_IP (app/.env.development, gitignored — see app/.env.example)
-// is inlined at bundle time: restart `npx expo start` after changing it.
-const BROKER_IP = process.env.EXPO_PUBLIC_BROKER_IP || '192.168.68.68';
-const BROKER_PORT = 9001;          // WebSocket port — important, use 9001 not 1883
+// Broker URL is build-time config (app.config.js `extra` / EXPO_PUBLIC_MQTT_URL,
+// legacy EXPO_PUBLIC_BROKER_IP still honoured — see app/config/appConfig.js);
+// restart `npx expo start` after changing it.
+const { host: BROKER_IP, port: BROKER_PORT, useSSL: BROKER_USE_SSL } = getMqttEndpoint();
 
 // AWS broker runs locked; laptop-dev broker is anonymous (Mosquitto ignores credentials), so the fallback is safe.
 const BROKER_USER = process.env.EXPO_PUBLIC_MQTT_USER || undefined;
@@ -57,7 +58,7 @@ function doConnect(gen) {
     // Explicit: persistent session lets the broker queue QoS 1/2 while disconnected (see getClientId).
     cleanSession: false,
     keepAliveInterval: 30,
-    useSSL: false,
+    useSSL: BROKER_USE_SSL,
     onSuccess: () => {
       connecting = false;
       if (gen !== generation) return;

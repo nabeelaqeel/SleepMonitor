@@ -48,6 +48,7 @@ ci.env.development
 # AWS broker credential file — generated on the server, never committed
 # (mosquitto_passwd -c /config/passwd — see the author-side deployment runbook)
 mosquitto/passwd
+.deployment-role
 
 # EAS release config — real values are filled locally from eas.example.json
 # at deploy time (see the author-side deployment runbook); the repo never
