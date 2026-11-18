@@ -21,6 +21,16 @@ CREATE TABLE users (
     -- Doctor-only pairing code, minted by the auth API on registration
     -- (patients keep NULL). Patients post it to /auth/link-doctor.
     pairing_code  VARCHAR(12) UNIQUE,
+    -- Physical profile for the doctor's patient-detail screen. Nullable:
+    -- doctors have none and patients may not have reported theirs. The
+    -- auth API mirrors these as ADD COLUMN IF NOT EXISTS in ensure_setup
+    -- so databases created before them upgrade on the next API start.
+    -- medical_history keeps one entry per line; the API shapes lines into
+    -- the history records the app renders.
+    age             INTEGER,
+    weight_kg       NUMERIC(5,1),
+    height_cm       NUMERIC(5,1),
+    medical_history TEXT,
     created_at    TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 

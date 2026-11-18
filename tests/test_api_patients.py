@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import uuid
 from datetime import UTC, datetime, timedelta
+from decimal import Decimal
 
 import psycopg2
 import pytest
@@ -217,7 +218,8 @@ def test_roster_shows_linked_patient_with_data_and_zero_data_patient(roster_pg):
     assert set(by_id) == {patient_a, patient_b}
 
     pa = by_id[patient_a]
-    assert set(pa) == {"id", "email", "name", "devices", "last_reading", "last_session"}
+    assert set(pa) == {"id", "email", "name", "devices", "last_reading", "last_session",
+                       "age", "weight", "height", "medicalHistory"}
     assert pa["devices"] == [{"device_id": device_id, "display_name": "Ali's watch"}]
     assert set(pa["last_reading"]) == {"ts", "spo2", "heart_rate"}
     # latest by ts wins over the older reading
@@ -238,6 +240,97 @@ def test_roster_shows_linked_patient_with_data_and_zero_data_patient(roster_pg):
     assert pb["devices"] == []
     assert pb["last_reading"] is None
     assert pb["last_session"] is None
+    # Registered patients carry no physical profile until reported — the
+    # detail screen must render '—', never crash, on these nulls.
+    assert pb["age"] is None
+    assert pb["weight"] is None
+    assert pb["height"] is None
+    assert pb["medicalHistory"] == []
+
+
+def test_ensure_setup_idempotent(roster_pg):
+    """Running ensure_setup repeatedly must not error or duplicate demo rows."""
+    from api.db import ensure_setup
+
+    before = roster_pg.query("SELECT count(*) FROM users")[0][0]
+    # The fixture already ran it once; two more passes must be no-ops.
+    ensure_setup(hash_password)
+    ensure_setup(hash_password)
+    after = roster_pg.query("SELECT count(*) FROM users")[0][0]
+    assert after == before
+
+    counts = roster_pg.query(
+        """
+        SELECT lower(email), count(*)
+        FROM users
+        WHERE lower(email) IN ('doctor@sleep.com', 'patient@sleep.com')
+        GROUP BY lower(email)
+        """
+    )
+    assert dict(counts) == {"doctor@sleep.com": 1, "patient@sleep.com": 1}
+
+
+def test_seeded_patient_profile_reaches_roster(roster_pg):
+    """The demo patient's profile fills on ensure_setup and surfaces under
+    the exact keys PatientDetailScreen reads; the doctor stays profile-less."""
+    from api.config import DEMO_SEEDING_ENABLED
+
+    if not DEMO_SEEDING_ENABLED:
+        pytest.skip("demo seeding disabled — SEED_DEMO_USERS=false")
+
+    from api.db import ensure_setup
+
+    # Null the profile first so the fill-when-NULL seeding path is proven
+    # even though earlier runs already populated the shared dev database.
+    roster_pg.execute(
+        """
+        UPDATE users
+        SET age = NULL, weight_kg = NULL, height_cm = NULL, medical_history = NULL
+        WHERE lower(email) = 'patient@sleep.com'
+        """
+    )
+    ensure_setup(hash_password)
+
+    patient_profile = roster_pg.query(
+        """
+        SELECT age, weight_kg, height_cm, medical_history
+        FROM users WHERE lower(email) = 'patient@sleep.com'
+        """
+    )[0]
+    assert patient_profile == (
+        34, Decimal("78.0"), Decimal("175.0"),
+        "Mild obstructive sleep apnea (AHI 14), diagnosed 2024",
+    )
+
+    doctor_profile = roster_pg.query(
+        """
+        SELECT age, weight_kg, height_cm, medical_history
+        FROM users WHERE lower(email) = 'doctor@sleep.com'
+        """
+    )[0]
+    # Doctors are not patients — no profile is seeded for them.
+    assert doctor_profile == (None, None, None, None)
+
+    headers, doctor_id, _ = register_and_login(roster_pg, "doctor")
+    demo_patient_id = roster_pg.query(
+        "SELECT user_id::text FROM users WHERE lower(email) = 'patient@sleep.com'"
+    )[0][0]
+    link(roster_pg, doctor_id, demo_patient_id)
+
+    r = roster(headers)
+    assert r.status_code == 200
+    entry = next(p for p in r.json()["patients"] if p["id"] == demo_patient_id)
+    assert entry["age"] == 34
+    assert entry["weight"] == 78.0
+    assert entry["height"] == 175.0
+    # History lines shape into the records PatientDetailScreen maps over.
+    assert entry["medicalHistory"] == [{
+        "id": "mh0",
+        "date": "2024",
+        "type": "Diagnosis",
+        "note": "Mild obstructive sleep apnea (AHI 14)",
+        "doctor": "",
+    }]
 
 
 def test_unlinked_patient_absent_even_if_paired_elsewhere(roster_pg):

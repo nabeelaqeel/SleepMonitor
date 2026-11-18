@@ -160,6 +160,9 @@ The `users` table backs the app's login screen (full service guide:
 | `email` | VARCHAR(255), UNIQUE | Lookup key for login |
 | `name`, `role` | VARCHAR | `role` drives which navigator the app renders |
 | `password_hash` | VARCHAR(255), default `''` | **bcrypt** hash in the `$2b$12$` format — cost factor 12, per-user 16-byte salt embedded in the hash; never a plaintext password |
+| `age` | INTEGER, nullable | Physical profile shown on the doctor's patient-detail screen |
+| `weight_kg`, `height_cm` | NUMERIC(5,1), nullable | Sent to the app as `weight` / `height`; BMI is computed client-side, never sent |
+| `medical_history` | TEXT, nullable | One entry per line; the auth API shapes lines into the history records the app renders |
 | `created_at` | TIMESTAMPTZ | |
 
 The `users` table is also the FK parent of everything the ingest pipeline
@@ -176,6 +179,9 @@ Hashes are seeded **by the API at startup**, never in SQL:
   when the column value is still empty (`ADD COLUMN IF NOT EXISTS` in the
   same idempotent pass, so databases created before the column also migrate
   on first API start). Demo seeding is opt-out via `SEED_DEMO_USERS=false`.
+  The same pass adds the physical-profile columns (`age`, `weight_kg`,
+  `height_cm`, `medical_history`) and fills the demo patient's profile
+  where NULL — an edited profile survives API restarts.
 * Because seeding only fires on an empty hash, an API restart never resets a
   password changed later — and until the API runs once, a fresh database
   cannot log anyone in.

@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import { View, Text, ScrollView, TouchableOpacity, ActivityIndicator, StyleSheet, ToastAndroid, Alert } from 'react-native';
+import * as Clipboard from 'expo-clipboard';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
 import VitalCard from '../../components/VitalCard';
 import ReportExportSheet from '../../components/ReportExportSheet';
@@ -72,6 +73,7 @@ export default function PatientDetailScreen({ route }) {
   const { deviceSnapshots, sessionStats, currentData, sleepTimeline, aiRecommendations } = useSleep();
   const [busyKey, setBusyKey] = useState(null); // '<report>-<share|save>' | null
   const [exportPickerOpen, setExportPickerOpen] = useState(false);
+  const [idCopied, setIdCopied] = useState(false);
   const now = useNow();
 
   // Same registry join as the roster card: any bound device streaming makes the
@@ -98,6 +100,8 @@ export default function PatientDetailScreen({ route }) {
   // Roster rows carry no weight/height — BMI renders '—' instead of NaN.
   const hasBodyMetrics = patient.weight != null && patient.height != null;
   const bmi       = hasBodyMetrics ? computeBmi(patient.weight, patient.height) : null;
+  // Chip shows only the UUID tail; the clipboard below always gets the full value.
+  const idShort   = patient.id ? `ID …${patient.id.slice(-4)}` : null;
 
   // Reuses the patient-side session report; it can only cover this patient if
   // they streamed during this app run, so the row stays disabled otherwise.
@@ -128,6 +132,19 @@ export default function PatientDetailScreen({ route }) {
   };
 
   const openExportSheet = () => setExportPickerOpen(true);
+
+  // The login UUID (AI_DEMO_PATIENT_ID) is configured by copying it from this
+  // screen, so the chip keeps the full value on the clipboard, not the short label.
+  const copyPatientId = async () => {
+    if (!patient.id) return;
+    try {
+      await Clipboard.setStringAsync(patient.id);
+      setIdCopied(true);
+      setTimeout(() => setIdCopied(false), 2000);
+    } catch {
+      setIdCopied(false);
+    }
+  };
 
   const sessionArgs = {
     sessionStats,
@@ -202,14 +219,28 @@ export default function PatientDetailScreen({ route }) {
       contentContainerStyle={styles.scroll}
       showsVerticalScrollIndicator={false}
     >
-      {/* Patient identity */}
+      {/* Patient identity — email leads; the UUID shrinks to a copyable tail chip */}
       <View style={styles.identityRow}>
         <View style={styles.avatarWrap}>
           <MaterialCommunityIcons name="account" size={28} color="#818cf8" />
         </View>
-        <View>
+        <View style={styles.identityText}>
           <Text style={styles.patientName}>{patient.name}</Text>
-          <Text style={styles.patientMeta}>ID #{patient.id}{patient.email ? ` · ${patient.email}` : ''}{patient.patientId ? ` · ${patient.patientId}` : ''}</Text>
+          <View style={styles.metaRow}>
+            {patient.email ? <Text style={[styles.patientMeta, styles.metaEmail]} numberOfLines={1}>{patient.email}</Text> : null}
+            {idShort && (
+              <TouchableOpacity style={styles.idChip} onPress={copyPatientId} activeOpacity={0.7}>
+                <MaterialCommunityIcons
+                  name={idCopied ? 'check' : 'content-copy'}
+                  size={12}
+                  color={idCopied ? '#4ade80' : '#818cf8'}
+                />
+                <Text style={[styles.idChipText, idCopied && { color: '#4ade80' }]}>
+                  {idCopied ? 'Copied' : idShort}
+                </Text>
+              </TouchableOpacity>
+            )}
+          </View>
         </View>
       </View>
 
@@ -384,10 +415,37 @@ const styles = StyleSheet.create({
     fontWeight: '700',
     color: '#e2e8f0',
   },
+  identityText: {
+    flex: 1,
+  },
+  metaRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    marginTop: 3,
+  },
+  metaEmail: {
+    flex: 1,
+  },
   patientMeta: {
     fontSize: 12,
     color: '#555',
-    marginTop: 3,
+  },
+  idChip: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    backgroundColor: '#13132a',
+    borderRadius: 20,
+    borderWidth: 1,
+    borderColor: '#2a2a4a',
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+  },
+  idChipText: {
+    fontSize: 11,
+    color: '#818cf8',
+    fontWeight: '500',
   },
   deviceChips: {
     flexDirection: 'row',

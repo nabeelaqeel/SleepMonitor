@@ -4,10 +4,11 @@ One short-lived connection per operation; the app only logs in twice a
 day, so pooling would be overkill. Startup is idempotent — the same
 permissive pattern the ingest worker uses:
 
-  * ensure_setup() adds the password_hash and pairing_code columns when
-    missing, seeds bcrypt hashes for the two demo users (only when the
-    stored hash is empty, so restarts never clobber a password changed
-    later) and mints pairing codes for the demo doctors.
+  * ensure_setup() adds the password_hash, pairing_code and physical-profile
+    columns when missing, seeds bcrypt hashes for the two demo users (only
+    when the stored hash is empty, so restarts never clobber a password
+    changed later), fills the demo patient's profile the same way and mints
+    pairing codes for the demo doctors.
 
 The DATABASE_URL comes from .env.development (same as the ingest worker).
 """
@@ -15,6 +16,7 @@ The DATABASE_URL comes from .env.development (same as the ingest worker).
 from __future__ import annotations
 
 import secrets
+import re
 from contextlib import contextmanager
 
 import psycopg2
@@ -37,6 +39,15 @@ SEED_USERS = [
         "name": "Ali Hassan",
         "role": "patient",
         "password": "1234",
+        # Demo-day physical profile so the doctor's detail screen shows real
+        # Age/Weight/Height/History instead of placeholders. Doctors carry
+        # no profile (they are not patients).
+        "profile": {
+            "age": 34,
+            "weight_kg": 78.0,
+            "height_cm": 175.0,
+            "medical_history": "Mild obstructive sleep apnea (AHI 14), diagnosed 2024",
+        },
     },
 ]
 
@@ -77,6 +88,14 @@ def ensure_setup(hash_password) -> None:
             ADD COLUMN IF NOT EXISTS pairing_code VARCHAR(12) UNIQUE
             """
         )
+        # Physical-profile columns for the roster/detail screen — same
+        # ADD COLUMN IF NOT EXISTS migration path as above, so staging and
+        # production databases created before them upgrade on the next API
+        # start without a down -v reset.
+        cur.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS age INTEGER")
+        cur.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS weight_kg NUMERIC(5,1)")
+        cur.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS height_cm NUMERIC(5,1)")
+        cur.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS medical_history TEXT")
         cur.execute(
             """
             CREATE TABLE IF NOT EXISTS devices (
@@ -126,6 +145,22 @@ def ensure_setup(hash_password) -> None:
                     WHERE email = %s AND pairing_code IS NULL
                     """,
                     (generate_pairing_code(), user["email"]),
+                )
+            # Fill the demo profile only where NULL — the same never-clobber
+            # rule as the hash seeding, so an edited profile survives restarts.
+            profile = user.get("profile")
+            if profile and row is not None:
+                cur.execute(
+                    """
+                    UPDATE users
+                    SET age = COALESCE(age, %s),
+                        weight_kg = COALESCE(weight_kg, %s),
+                        height_cm = COALESCE(height_cm, %s),
+                        medical_history = COALESCE(medical_history, %s)
+                    WHERE email = %s
+                    """,
+                    (profile["age"], profile["weight_kg"], profile["height_cm"],
+                     profile["medical_history"], user["email"]),
                 )
 
 
@@ -315,19 +350,48 @@ def list_devices(patient_id: str) -> list[dict]:
     return [dict(zip(_DEVICE_COLS, row)) for row in rows]
 
 
+# PatientDetailScreen maps over medicalHistory as {id, date, type, note,
+# doctor} records — a bare string would crash its .map, so each TEXT line
+# is shaped into one record. A trailing "diagnosed YYYY" becomes the badge
+# date instead of sitting inside the note.
+_HISTORY_DATE_RE = re.compile(r"[,\s]+(?:diagnosed|treated)\s+(\d{4})$", re.IGNORECASE)
+
+
+def _history_records(medical_history: str | None) -> list[dict]:
+    """Shape users.medical_history lines into the records the app renders."""
+    records = []
+    for index, line in enumerate(x.strip() for x in (medical_history or "").splitlines()):
+        if not line:
+            continue
+        match = _HISTORY_DATE_RE.search(line)
+        note, date = (line[:match.start()].rstrip(" ,"), match.group(1)) if match else (line, "")
+        records.append({
+            # Stable per line order; the app only uses it as a React key.
+            "id": f"mh{index}",
+            "date": date,
+            "type": "Diagnosis",
+            "note": note,
+            "doctor": "",
+        })
+    return records
+
+
 def list_doctor_patients(doctor_id: str) -> list[dict]:
     """Roster for the calling doctor: linked patients + their data snapshot.
 
     One LATERAL query per concern keeps this batched (no per-patient
     round-trips); the latest-reading lookup rides the (patient_id, ts
     DESC) index. LEFT JOINs keep freshly paired patients (no devices, no
-    data) in the roster — completeness beats activity for the demo.
+    data) in the roster — completeness beats activity for the demo. Each
+    row also carries the patient's physical profile under the exact keys
+    the app reads; BMI is computed client-side, never sent.
     """
     with connection() as conn, conn.cursor() as cur:
         cur.execute(
             """
             SELECT
                 u.user_id::text, u.email, u.name,
+                u.age, u.weight_kg, u.height_cm, u.medical_history,
                 COALESCE(dev.devices, '[]'::json),
                 lr.ts, lr.spo2, lr.heart_rate,
                 ls.session_id::text, ls.started_at, ls.ended_at,
@@ -367,12 +431,19 @@ def list_doctor_patients(doctor_id: str) -> list[dict]:
         )
         rows = cur.fetchall()
     patients = []
-    for (uid, email, name, devices, r_ts, spo2, hr,
+    for (uid, email, name, age, weight, height, history,
+         devices, r_ts, spo2, hr,
          s_id, started_at, ended_at, total, missing) in rows:
         patients.append({
             "id": uid,
             "email": email,
             "name": name,
+            # NUMERIC arrives as Decimal — float keeps the JSON numbers plain
+            # for the app's `${weight} kg` style rendering.
+            "age": age,
+            "weight": None if weight is None else float(weight),
+            "height": None if height is None else float(height),
+            "medicalHistory": _history_records(history),
             "devices": devices,
             "last_reading": None if r_ts is None else {
                 "ts": r_ts,
