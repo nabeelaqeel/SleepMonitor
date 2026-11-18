@@ -262,6 +262,20 @@ done
 [ -z "$missing" ] || die "baked env misses:$missing — fill the source (eas.json preview.env or the --env-file) before building"
 for key in "${!BAKED[@]}"; do
   case "${BAKED[$key]}" in
+    SET_ME_GOOGLE_CLIENT_ID)
+      # a truthy-but-bogus client id must not bake: GOOGLE_CONFIGURED is
+      # Boolean(GOOGLE_CLIENT_ID), so it would enable the Google button and
+      # OAuth would fail at runtime — refuse until the real value lands.
+      if [ "$DRY" = 1 ]; then
+        say "   ⚠ EXPO_PUBLIC_GOOGLE_CLIENT_ID is the placeholder ('${BAKED[$key]}') — the REAL run will refuse:"
+        say "     in Google Cloud Console create an OAuth client (Web application) with"
+        say "     authorized redirect URI sleepmonitor:// and paste that client ID into"
+        say "     ${BAKED_SOURCE} (the server .env must carry the SAME GOOGLE_CLIENT_ID),"
+        say "     or remove the key from the profile to build email-only"
+      else
+        die "EXPO_PUBLIC_GOOGLE_CLIENT_ID is the placeholder ('${BAKED[$key]}') — in Google Cloud Console create an OAuth client (Web application) with authorized redirect URI sleepmonitor:// and paste that client ID into ${BAKED_SOURCE} (the server .env must carry the SAME GOOGLE_CLIENT_ID) — or remove the key from the profile to build email-only"
+      fi
+    ;;
     *SET_ME*|*SET\ ME*|"")
       die "$key is still a placeholder ('${BAKED[$key]}') — a locally built APK with dummy endpoints is useless"
     ;;
