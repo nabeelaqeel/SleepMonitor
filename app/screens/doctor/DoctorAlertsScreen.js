@@ -45,7 +45,7 @@ export default function DoctorAlertsScreen() {
         </Text>
         {caption && (
           <View style={styles.sessionRow}>
-            <View style={[styles.sessionDot, { backgroundColor: liveId ? '#22c55e' : '#6b7280' }]} />
+            <View style={[styles.sessionDot, { backgroundColor: liveDeviceId ? '#22c55e' : '#6b7280' }]} />
             <Text style={styles.sessionText}>{caption}</Text>
           </View>
         )}
