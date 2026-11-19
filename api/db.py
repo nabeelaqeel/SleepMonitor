@@ -189,6 +189,26 @@ def get_user_by_email(email: str) -> dict | None:
     return dict(zip(_USER_COLS, rows[0]))
 
 
+def get_user_by_id(user_id: str) -> dict | None:
+    """Row for an exact user_id; None when unknown.
+
+    Endpoints that must tell "row deleted after token issuance" (401)
+    apart from "row exists but the asked-for thing is absent" need this
+    — the JWT carries no email, so get_user_by_email can't serve them.
+    """
+    with connection() as conn, conn.cursor() as cur:
+        cur.execute(
+            f"""
+            SELECT {', '.join(_USER_COLS)}
+            FROM users
+            WHERE user_id = %s
+            """,
+            (user_id,),
+        )
+        row = cur.fetchone()
+    return dict(zip(_USER_COLS, row)) if row else None
+
+
 # Digits 2-9 and letters minus I/L/O keep codes readable when a patient
 # types them from a phone screen or reads one aloud (no 0/O, 1/I/l pairs).
 _PAIRING_ALPHABET = "23456789ABCDEFGHJKLMNPQRSTUVWXYZ"
@@ -305,6 +325,30 @@ def link_doctor(patient_id: str, doctor_id: str) -> None:
             """,
             (doctor_id, patient_id),
         )
+
+
+def get_doctor_of_patient(patient_id: str) -> dict | None:
+    """The doctor currently linked to this patient; None when unlinked.
+
+    Inverse of link_doctor. A patient may be linked to several doctors —
+    the newest assignment wins so "my doctor" stays deterministic. The
+    users row is joined live, never snapshotted at link time, so a later
+    rename is visible on the very next call.
+    """
+    with connection() as conn, conn.cursor() as cur:
+        cur.execute(
+            f"""
+            SELECT {', '.join(_USER_COLS)}
+            FROM doctor_patients dp
+            JOIN users ON users.user_id = dp.doctor_id
+            WHERE dp.patient_id = %s
+            ORDER BY dp.assigned_at DESC
+            LIMIT 1
+            """,
+            (patient_id,),
+        )
+        row = cur.fetchone()
+    return dict(zip(_USER_COLS, row)) if row else None
 
 
 _DEVICE_COLS = ("device_id", "patient_id", "display_name", "created_at")

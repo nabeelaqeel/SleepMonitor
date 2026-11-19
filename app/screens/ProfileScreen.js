@@ -13,8 +13,8 @@ import { MaterialCommunityIcons } from '@expo/vector-icons';
 import { updateProfileName } from '../auth/apiAuth';
 import { DISCLAIMER, PROFILE, aboutBulletText } from '../config/displayText';
 
-// Shared identity screen for both roles; the App-info section (patient only) reuses
-// DISCLAIMER.about so AboutScreen's wording stays the single source of truth.
+// Shared identity screen for both roles; the App-info section renders
+// DISCLAIMER.about so the app info lives in one place for both navigators.
 export default function ProfileScreen({ user, onLogout, onUserUpdated }) {
   const [editing, setEditing] = useState(false);
   const [draft, setDraft]     = useState('');
@@ -27,7 +27,6 @@ export default function ProfileScreen({ user, onLogout, onUserUpdated }) {
   const roleLabel = Object.hasOwn(PROFILE.roleLabels, role) ? PROFILE.roleLabels[role] : (role || '—');
   const badgeIcon = role === 'doctor' ? 'doctor' : 'account-heart';
   const initial = name.trim().charAt(0).toUpperCase() || email.trim().charAt(0).toUpperCase() || '?';
-  const shortId = user && user.id ? `${String(user.id).slice(0, 8)}…` : '—';
 
   function startEdit() {
     setDraft(name);
@@ -118,7 +117,6 @@ export default function ProfileScreen({ user, onLogout, onUserUpdated }) {
                   <MaterialCommunityIcons name={badgeIcon} size={12} color="#818cf8" />
                   <Text style={styles.roleBadgeText}>{roleLabel}</Text>
                 </View>
-                <Text style={styles.userId} numberOfLines={1}>ID {shortId}</Text>
               </View>
             </View>
           </View>
@@ -161,29 +159,27 @@ export default function ProfileScreen({ user, onLogout, onUserUpdated }) {
           <Text style={styles.logoutText}>{PROFILE.logout}</Text>
         </TouchableOpacity>
 
-        {role === 'patient' && (
-          <>
-            <View style={[styles.sectionRow, styles.sectionGap]}>
-              <MaterialCommunityIcons name="information-outline" size={22} color="#818cf8" />
-              <Text style={styles.sectionTitle}>{PROFILE.sectionAppInfo}</Text>
-            </View>
-            <View style={styles.infoCard}>
-              <Text style={styles.infoTitle}>{DISCLAIMER.about.title}</Text>
-              <Text style={styles.infoIntro}>{DISCLAIMER.about.intro}</Text>
-              {DISCLAIMER.about.bullets.map((bullet, i) => (
-                <View key={i} style={styles.bulletRow}>
-                  <Text style={styles.bulletDot}>•</Text>
-                  <Text style={styles.bulletText}>{aboutBulletText(bullet)}</Text>
-                </View>
-              ))}
-            </View>
-            <View style={styles.closingCard}>
-              <MaterialCommunityIcons name="alert-circle-outline" size={16} color="#fbbf24" />
-              <Text style={styles.closingText}>{DISCLAIMER.about.closing}</Text>
-            </View>
-            <Text style={styles.footer}>{DISCLAIMER.footer}</Text>
-          </>
-        )}
+        <>
+          <View style={[styles.sectionRow, styles.sectionGap]}>
+            <MaterialCommunityIcons name="information-outline" size={22} color="#818cf8" />
+            <Text style={styles.sectionTitle}>{PROFILE.sectionAppInfo}</Text>
+          </View>
+          <View style={styles.infoCard}>
+            <Text style={styles.infoTitle}>{DISCLAIMER.about.title}</Text>
+            <Text style={styles.infoIntro}>{DISCLAIMER.about.intro}</Text>
+            {DISCLAIMER.about.bullets.map((bullet, i) => (
+              <View key={i} style={styles.bulletRow}>
+                <Text style={styles.bulletDot}>•</Text>
+                <Text style={styles.bulletText}>{aboutBulletText(bullet)}</Text>
+              </View>
+            ))}
+          </View>
+          <View style={styles.closingCard}>
+            <MaterialCommunityIcons name="alert-circle-outline" size={16} color="#fbbf24" />
+            <Text style={styles.closingText}>{DISCLAIMER.about.closing}</Text>
+          </View>
+          <Text style={styles.footer}>{DISCLAIMER.footer}</Text>
+        </>
       </ScrollView>
     </SafeAreaView>
   );
@@ -244,7 +240,6 @@ const styles = StyleSheet.create({
     paddingVertical: 3,
   },
   roleBadgeText: { fontSize: 11, fontWeight: '600', color: '#818cf8', letterSpacing: 0.3 },
-  userId:        { fontSize: 11, color: '#555', flexShrink: 1 },
 
   errorWrap: { flexDirection: 'row', alignItems: 'center', gap: 6, marginTop: 12 },
   errorText: { color: '#f87171', fontSize: 13, flex: 1 },

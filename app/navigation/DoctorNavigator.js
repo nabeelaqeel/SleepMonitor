@@ -8,7 +8,6 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import PatientListScreen   from '../screens/doctor/PatientListScreen';
 import PatientDetailScreen from '../screens/doctor/PatientDetailScreen';
 import DoctorAlertsScreen  from '../screens/doctor/DoctorAlertsScreen';
-import AboutScreen         from '../screens/AboutScreen';
 import ProfileScreen       from '../screens/ProfileScreen';
 
 import { PROFILE } from '../config/displayText';
@@ -106,16 +105,6 @@ export default function DoctorNavigator({ onLogout, user, onUserUpdated }) {
         >
           {() => <ProfileScreen user={user} onLogout={onLogout} onUserUpdated={onUserUpdated} />}
         </Tab.Screen>
-
-        <Tab.Screen
-          name="About"
-          component={AboutScreen}
-          options={{
-            tabBarIcon: ({ color, size }) => (
-              <MaterialCommunityIcons name="information-outline" color={color} size={size} />
-            ),
-          }}
-        />
       </Tab.Navigator>
     </NavigationContainer>
   );

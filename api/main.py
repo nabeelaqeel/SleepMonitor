@@ -12,6 +12,7 @@ Endpoints:
     POST /auth/google         → {user, token} | {"needs_role": true} | 401 bad token | 503 unconfigured
     GET  /auth/pairing-code   → the doctor's pairing code | 401 | 403
     POST /auth/link-doctor    → patient attaches to a doctor | 401 | 403 | 404 | 422
+    GET  /auth/my-doctor      → the caller's linked doctor (or null) | 401
     PATCH /auth/me            → rename self (name only) | 401 | 422
     POST /devices/bind        → patient binds a device (registry) | 401 | 403 | 409 | 422
     GET  /devices             → the patient's bound devices | 401 | 403
@@ -41,8 +42,10 @@ from api.db import (
     create_user,
     ensure_setup,
     find_user_by_pairing_code,
+    get_doctor_of_patient,
     get_or_create_pairing_code,
     get_user_by_email,
+    get_user_by_id,
     link_doctor,
     list_devices,
     list_doctor_alerts,
@@ -148,6 +151,19 @@ def _session_response(user: dict) -> dict:
     return {
         "user": safe_user,
         "token": create_token(safe_user["id"], safe_user["role"]),
+    }
+
+
+def _doctor_summary(doctor: dict) -> dict:
+    """Exactly the three doctor fields the app renders.
+
+    Shared by POST /auth/link-doctor (link time) and GET /auth/my-doctor
+    (every refresh) so the two bodies can never drift apart.
+    """
+    return {
+        "id": str(doctor["user_id"]),
+        "email": doctor["email"],
+        "name": doctor["name"],
     }
 
 
@@ -293,10 +309,23 @@ def link_to_doctor(req: LinkDoctorRequest, authorization: str = Header(default="
     if doctor["role"] != "doctor":
         raise HTTPException(status_code=422, detail="That pairing code does not belong to a doctor")
     link_doctor(str(claims["sub"]), str(doctor["user_id"]))
-    return {
-        "linked": True,
-        "doctor": {"id": str(doctor["user_id"]), "email": doctor["email"], "name": doctor["name"]},
-    }
+    return {"linked": True, "doctor": _doctor_summary(doctor)}
+
+
+@app.get("/auth/my-doctor")
+def my_doctor(authorization: str = Header(default="")):
+    """The caller's linked doctor, re-read fresh on every call.
+
+    Role-agnostic — a doctor caller has no linked doctor and gets
+    {doctor: null}. The doctor's CURRENT name comes back, never a
+    link-time snapshot, so renames surface on the next refresh.
+    """
+    claims = require_bearer(authorization)
+    if get_user_by_id(str(claims["sub"])) is None:
+        # Valid signature but the user row is gone — the token is no longer usable.
+        raise HTTPException(status_code=401, detail="Invalid or expired token")
+    doctor = get_doctor_of_patient(str(claims["sub"]))
+    return {"doctor": _doctor_summary(doctor) if doctor else None}
 
 
 @app.patch("/auth/me")

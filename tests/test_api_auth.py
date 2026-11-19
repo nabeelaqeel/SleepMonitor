@@ -2,12 +2,14 @@
 
 test_api_smoke.py proves the import chain and the two cheapest guards
 (health probe, verify-without-header). This file covers the real routes —
-/auth/login, /auth/verify and PATCH /auth/me — for the happy path and
-every documented 401/422 shape, while keeping CI hermetic:
+/auth/login, /auth/verify, PATCH /auth/me and GET /auth/my-doctor — for
+the happy path and every documented 401/422 shape, while keeping CI
+hermetic:
 
-  * only api.main.get_user_by_email and api.main.update_user_name are
-    faked (monkeypatch) — Postgres is never touched; bcrypt and the JWT
-    layer run for real, so the login→verify round-trip is a genuine pass
+  * only api.main.get_user_by_email, api.main.update_user_name,
+    api.main.get_user_by_id and api.main.get_doctor_of_patient are faked
+    (monkeypatch) — Postgres is never touched; bcrypt and the JWT layer
+    run for real, so the login→verify round-trip is a genuine pass
     through security.py.
   * the unknown-email case deliberately does NOT fake get_dummy_hash —
     the 401 still burns the real bcrypt cost, so the no-user-enumeration
@@ -32,7 +34,7 @@ from jose import jwt as jose_jwt
 import api.main
 from api.config import JWT_SECRET
 from api.main import app
-from api.security import hash_password
+from api.security import create_token, hash_password
 
 # Module-level on purpose: one app import for the whole test session.
 # NOT entered as a context manager — that is what triggers the lifespan.
@@ -279,3 +281,149 @@ def test_patch_me_trims_name_for_storage_and_response(known_user, renamer):
     assert r.status_code == 200
     assert r.json()["user"]["name"] == "Padded Name"  # response shape
     assert renamer["name"] == "Padded Name"  # value handed to the DB layer
+
+
+DOCTOR_ID = "22222222-2222-2222-2222-222222222222"
+DOCTOR_EMAIL = "dr.linked@sleep.com"
+DOCTOR_NAME = "Dr. Original"
+PATIENT_ID = "33333333-3333-3333-3333-333333333333"
+PATIENT_EMAIL = "pat.linked@sleep.com"
+
+
+def my_doctor(token: str | None):
+    """GET /auth/my-doctor with a Bearer token (None omits the header)."""
+    headers = {} if token is None else {"Authorization": f"Bearer {token}"}
+    return client.get("/auth/my-doctor", headers=headers)
+
+
+@pytest.fixture
+def linked_doctor(monkeypatch):
+    """In-memory users + doctor_patients stand-in for the my-doctor routes.
+
+    get_doctor_of_patient re-reads the doctor dict on every call — the
+    fresh read the endpoint promises — and update_user_name renames it
+    in place, so the renamed-doctor regression cannot pass against a
+    stale link-time snapshot by accident. Tokens are minted with the
+    real create_token, so expiry/signature handling stays genuine.
+    """
+    doctor = {
+        "user_id": DOCTOR_ID,
+        "email": DOCTOR_EMAIL,
+        "name": DOCTOR_NAME,
+        "role": "doctor",
+        "password_hash": "",
+    }
+
+    def fake_get_doctor_of_patient(patient_id: str):
+        return dict(doctor) if patient_id == PATIENT_ID else None
+
+    def fake_get_user_by_id(user_id: str):
+        if user_id == PATIENT_ID:
+            return {
+                "user_id": PATIENT_ID,
+                "email": PATIENT_EMAIL,
+                "name": "Pat Link",
+                "role": "patient",
+                "password_hash": "",
+            }
+        return dict(doctor) if user_id == DOCTOR_ID else None
+
+    def fake_rename(user_id: str, name: str):
+        if user_id != DOCTOR_ID:
+            return None
+        doctor["name"] = name
+        return dict(doctor)
+
+    monkeypatch.setattr(api.main, "get_doctor_of_patient", fake_get_doctor_of_patient)
+    monkeypatch.setattr(api.main, "get_user_by_id", fake_get_user_by_id)
+    monkeypatch.setattr(api.main, "update_user_name", fake_rename)
+    return doctor
+
+
+def test_my_doctor_returns_current_three_field_doctor(linked_doctor):
+    """Linked patient → EXACTLY the {id, email, name} doctor object."""
+    r = my_doctor(create_token(PATIENT_ID, "patient"))
+    assert r.status_code == 200
+    body = r.json()
+    assert set(body) == {"doctor"}
+    # Exact key set — pins the same shape POST /auth/link-doctor returns.
+    assert body["doctor"] == {
+        "id": DOCTOR_ID,
+        "email": DOCTOR_EMAIL,
+        "name": DOCTOR_NAME,
+    }
+
+
+def test_my_doctor_shows_renamed_doctor_not_link_time_name(linked_doctor):
+    """Regression: a doctor renamed AFTER linking must surface on the next fetch.
+
+    The rename goes through the real PATCH /auth/me handler; the refresh
+    then reads the doctor row live, so a stale link-time snapshot (the
+    bug this endpoint exists to fix) would fail here.
+    """
+    renamed = client.patch(
+        "/auth/me",
+        json={"name": "Dr. Renamed"},
+        headers={"Authorization": f"Bearer {create_token(DOCTOR_ID, 'doctor')}"},
+    )
+    assert renamed.status_code == 200
+    assert renamed.json()["user"]["name"] == "Dr. Renamed"
+
+    r = my_doctor(create_token(PATIENT_ID, "patient"))
+    assert r.status_code == 200
+    assert r.json()["doctor"] == {
+        "id": DOCTOR_ID,
+        "email": DOCTOR_EMAIL,
+        "name": "Dr. Renamed",
+    }
+
+
+def test_my_doctor_returns_null_for_unlinked_patient(linked_doctor, monkeypatch):
+    """A patient whose row exists but has no doctor_patients row → null."""
+    monkeypatch.setattr(api.main, "get_doctor_of_patient", lambda _pid: None)
+    r = my_doctor(create_token(PATIENT_ID, "patient"))
+    assert r.status_code == 200
+    assert r.json() == {"doctor": None}
+
+
+def test_my_doctor_returns_null_for_doctor_caller(linked_doctor):
+    """Role-agnostic: a doctor has no linked doctor and gets null, not 403."""
+    r = my_doctor(create_token(DOCTOR_ID, "doctor"))
+    assert r.status_code == 200
+    assert r.json() == {"doctor": None}
+
+
+def test_my_doctor_requires_bearer_header():
+    """A missing header or wrong scheme is 401 before any lookup runs."""
+    for headers in ({}, {"Authorization": "Token abc123"}):
+        r = client.get("/auth/my-doctor", headers=headers)
+        assert r.status_code == 401
+        assert "Bearer" in r.json()["detail"]
+
+
+def test_my_doctor_rejects_expired_and_forged_tokens():
+    """Expired and forged-signature tokens are 401 like /auth/verify's."""
+    now = int(datetime.now(UTC).timestamp())
+    expired = jose_jwt.encode(
+        {"sub": PATIENT_ID, "role": "patient", "iat": now - 13 * 3600, "exp": now - 3600},
+        JWT_SECRET,
+        algorithm="HS256",
+    )
+    forged = jose_jwt.encode(
+        {"sub": PATIENT_ID, "role": "patient", "iat": now, "exp": now + 3600},
+        "an-entirely-different-secret",
+        algorithm="HS256",
+    )
+    for token in (expired, forged, "not-a-jwt"):
+        r = my_doctor(token)
+        assert r.status_code == 401
+        assert r.json()["detail"] == "Invalid or expired token"
+
+
+def test_my_doctor_401_when_user_row_gone(monkeypatch):
+    """A valid, unexpired token whose users row was deleted since issuance."""
+    monkeypatch.setattr(api.main, "get_user_by_id", lambda _uid: None)
+    monkeypatch.setattr(api.main, "get_doctor_of_patient", lambda _pid: None)
+    r = my_doctor(create_token(PATIENT_ID, "patient"))
+    assert r.status_code == 401
+    assert r.json()["detail"] == "Invalid or expired token"

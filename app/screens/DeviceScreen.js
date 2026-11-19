@@ -12,10 +12,10 @@ import {
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useFocusEffect } from '@react-navigation/native';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
-import { fetchDevices, bindDevice, linkDoctor } from '../auth/apiAuth';
+import { fetchDevices, bindDevice, linkDoctor, getMyDoctor } from '../auth/apiAuth';
 
-// The API owns the linkage; this cache only mirrors the last linkDoctor
-// response so the card survives remounts — re-linking (idempotent) refreshes it.
+// The API owns the linkage; this cache mirrors the last known doctor so the
+// card survives remounts and offline — refreshed on link and on screen focus.
 const LINKED_DOCTOR_KEY = 'linked_doctor';
 
 function formatDate(iso) {
@@ -76,9 +76,18 @@ export default function DeviceScreen() {
   useFocusEffect(
     useCallback(() => {
       load();
-      // Linked-doctor mirror: re-read from storage, never re-fetched (no GET for it).
+      // Cache paints instantly; /auth/my-doctor then refreshes the name so a
+      // doctor rename shows up — on failure or no link the cache is kept.
       AsyncStorage.getItem(LINKED_DOCTOR_KEY)
         .then(raw => raw && setLinkedDoctor(JSON.parse(raw)))
+        .catch(() => {})
+        .then(() => getMyDoctor())
+        .then(body => {
+          if (body && body.doctor) {
+            setLinkedDoctor(body.doctor);
+            return AsyncStorage.setItem(LINKED_DOCTOR_KEY, JSON.stringify(body.doctor));
+          }
+        })
         .catch(() => {});
       return () => {};
     }, [])

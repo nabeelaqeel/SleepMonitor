@@ -392,3 +392,8 @@ export async function linkDoctor(code) {
     fallback: 'Could not link to doctor',
   });
 }
+
+/** GET /auth/my-doctor (patient) — body.doctor is null when nothing is linked. */
+export async function getMyDoctor() {
+  return authedFetch('/auth/my-doctor', { fallback: 'Could not load your doctor' });
+}
