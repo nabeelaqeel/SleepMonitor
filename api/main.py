@@ -12,6 +12,7 @@ Endpoints:
     POST /auth/google         → {user, token} | {"needs_role": true} | 401 bad token | 503 unconfigured
     GET  /auth/pairing-code   → the doctor's pairing code | 401 | 403
     POST /auth/link-doctor    → patient attaches to a doctor | 401 | 403 | 404 | 422
+    PATCH /auth/me            → rename self (name only) | 401 | 422
     POST /devices/bind        → patient binds a device (registry) | 401 | 403 | 409 | 422
     GET  /devices             → the patient's bound devices | 401 | 403
     GET  /patients            → the doctor's roster (linked patients + data snapshot) | 401 | 403
@@ -31,7 +32,7 @@ from typing import Annotated, Literal
 
 from fastapi import Depends, FastAPI, Header, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, StringConstraints
 
 from api import config
 from api.db import (
@@ -46,6 +47,7 @@ from api.db import (
     list_devices,
     list_doctor_alerts,
     list_doctor_patients,
+    update_user_name,
 )
 from api.google_auth import (
     GoogleTokenError,
@@ -116,18 +118,33 @@ class BindDeviceRequest(BaseModel):
     display_name: str | None = Field(default=None, max_length=100)
 
 
+class UpdateNameRequest(BaseModel):
+    # strip runs before the length check, so "   " is 422 (min_length) and a
+    # 300-char padded name is judged on its trimmed form — users.name is
+    # VARCHAR(255) NOT NULL, and an empty rename must never reach the DB.
+    name: Annotated[
+        str,
+        StringConstraints(min_length=1, max_length=255, strip_whitespace=True),
+    ]
+
+
+def _safe_user(user: dict) -> dict:
+    """Exactly the four non-sensitive fields — password_hash never leaves the server."""
+    return {
+        "id": str(user["user_id"]),
+        "email": user["email"],
+        "name": user["name"],
+        "role": user["role"],
+    }
+
+
 def _session_response(user: dict) -> dict:
     """The {user, token} body shared by login, register and Google sign-in.
 
     Exactly the four non-sensitive fields — password_hash never leaves the
     server, and the JWT carries the role straight from the users row.
     """
-    safe_user = {
-        "id": str(user["user_id"]),
-        "email": user["email"],
-        "name": user["name"],
-        "role": user["role"],
-    }
+    safe_user = _safe_user(user)
     return {
         "user": safe_user,
         "token": create_token(safe_user["id"], safe_user["role"]),
@@ -280,6 +297,21 @@ def link_to_doctor(req: LinkDoctorRequest, authorization: str = Header(default="
         "linked": True,
         "doctor": {"id": str(doctor["user_id"]), "email": doctor["email"], "name": doctor["name"]},
     }
+
+
+@app.patch("/auth/me")
+def update_my_name(req: UpdateNameRequest, authorization: str = Header(default="")):
+    """Rename the caller; id, email and role are immutable through this path.
+
+    No token reissue — the JWT carries only sub+role, and neither claim
+    changes with a rename.
+    """
+    claims = require_bearer(authorization)
+    user = update_user_name(str(claims["sub"]), req.name)
+    if user is None:
+        # Valid signature but the user row is gone — the token is no longer usable.
+        raise HTTPException(status_code=401, detail="Invalid or expired token")
+    return {"user": _safe_user(user)}
 
 
 @app.post("/devices/bind")

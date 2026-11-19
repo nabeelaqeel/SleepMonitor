@@ -100,6 +100,20 @@ export const DISCLAIMER = {
 // AsyncStorage key for the first-launch acknowledgement — changing it silently resets the acknowledgement on every device.
 export const ACK_STORAGE_KEY = 'disclaimer_ack_v1';
 
+// Profile screen (patient + doctor navigators): identity card and inline name edit.
+export const PROFILE = {
+  tabTitle:       'Profile',
+  sectionAccount: 'Account',
+  sectionAppInfo: 'App info',
+  roleLabels:     { doctor: 'Doctor', patient: 'Patient' },
+  save:           'Save',
+  cancel:         'Cancel',
+  logout:         'Logout',
+  errEmptyName:   'Enter a name first.',
+  errUnauth:      'Your session has expired — sign in again.',
+  errSaveFailed:  'Could not update your name.',
+};
+
 // Save is Android-only — iOS saves via the share sheet's native "Save to Files".
 export const EXPORT_SHEET_TEXT = {
   title:  'Export report',

@@ -15,8 +15,8 @@ import { MaterialCommunityIcons } from '@expo/vector-icons';
 import { SleepProvider } from './context/SleepContext';
 import { getStoredUser, logout, startSessionWatch } from './auth/apiAuth';
 import LoginScreen             from './screens/LoginScreen';
-import AboutScreen             from './screens/AboutScreen';
 import AcknowledgementScreen   from './screens/AcknowledgementScreen';
+import ProfileScreen           from './screens/ProfileScreen';
 import DoctorNavigator from './navigation/DoctorNavigator';
 
 import HomeScreen    from './screens/HomeScreen';
@@ -24,11 +24,11 @@ import DeviceScreen  from './screens/DeviceScreen';
 import AlertsScreen  from './screens/AlertsScreen';
 import ReportScreen  from './screens/ReportScreen';
 import NetworkScreen from './screens/NetworkScreen';
-import { ACK_STORAGE_KEY } from './config/displayText';
+import { ACK_STORAGE_KEY, PROFILE } from './config/displayText';
 
 const Tab = createBottomTabNavigator();
 
-function PatientNavigator({ onLogout }) {
+function PatientNavigator({ onLogout, user, onUserUpdated }) {
   // Edge-to-edge: our tabBarStyle overrides bottom-tabs' safe-area padding, so
   // feed the Android system-nav-bar inset back in (large with 3-button nav only).
   const { bottom } = useSafeAreaInsets();
@@ -73,14 +73,16 @@ function PatientNavigator({ onLogout }) {
         <Tab.Screen name="Network" component={NetworkScreen}
           options={{ tabBarIcon: ({ color, size }) => <MaterialCommunityIcons name="wifi" color={color} size={size} /> }}
         />
-        <Tab.Screen name="About" component={AboutScreen}
+        <Tab.Screen name="Profile"
           options={{
-            title: 'About',
+            title: PROFILE.tabTitle,
             tabBarIcon: ({ color, size }) => (
-              <MaterialCommunityIcons name="information-outline" color={color} size={size} />
+              <MaterialCommunityIcons name="account-circle" color={color} size={size} />
             ),
           }}
-        />
+        >
+          {() => <ProfileScreen user={user} onLogout={onLogout} onUserUpdated={onUserUpdated} />}
+        </Tab.Screen>
       </Tab.Navigator>
     </NavigationContainer>
   );
@@ -155,7 +157,7 @@ export default function App() {
     return (
       <SafeAreaProvider>
         <SleepProvider>
-          <DoctorNavigator onLogout={handleLogout} />
+          <DoctorNavigator onLogout={handleLogout} user={user} onUserUpdated={setUser} />
         </SleepProvider>
       </SafeAreaProvider>
     );
@@ -164,7 +166,7 @@ export default function App() {
   return (
     <SafeAreaProvider>
       <SleepProvider patientId={user.patientId || user.id}>
-        <PatientNavigator onLogout={handleLogout} />
+        <PatientNavigator onLogout={handleLogout} user={user} onUserUpdated={setUser} />
       </SleepProvider>
     </SafeAreaProvider>
   );

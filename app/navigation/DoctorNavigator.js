@@ -9,6 +9,9 @@ import PatientListScreen   from '../screens/doctor/PatientListScreen';
 import PatientDetailScreen from '../screens/doctor/PatientDetailScreen';
 import DoctorAlertsScreen  from '../screens/doctor/DoctorAlertsScreen';
 import AboutScreen         from '../screens/AboutScreen';
+import ProfileScreen       from '../screens/ProfileScreen';
+
+import { PROFILE } from '../config/displayText';
 
 const Tab   = createBottomTabNavigator();
 const Stack = createNativeStackNavigator();
@@ -45,7 +48,7 @@ function PatientsStack({ onLogout }) {
   );
 }
 
-export default function DoctorNavigator({ onLogout }) {
+export default function DoctorNavigator({ onLogout, user, onUserUpdated }) {
   // Same edge-to-edge inset handling as PatientNavigator in App.js.
   const { bottom } = useSafeAreaInsets();
 
@@ -53,7 +56,8 @@ export default function DoctorNavigator({ onLogout }) {
     <NavigationContainer>
       <Tab.Navigator
         screenOptions={{
-          // Both tabs render their own headers, so the navigator stays bare.
+          // Screens render their own headers; Profile opts back into the
+          // navigator header (per-screen override) so both roles see one look.
           headerShown: false,
           tabBarStyle: {
             backgroundColor: '#0a0a0f',
@@ -86,6 +90,22 @@ export default function DoctorNavigator({ onLogout }) {
             ),
           }}
         />
+
+        <Tab.Screen
+          name="Profile"
+          options={{
+            headerShown: true,
+            title: PROFILE.tabTitle,
+            headerStyle:      { backgroundColor: '#0a0a0f' },
+            headerTintColor:  '#e2e8f0',
+            headerTitleStyle: { fontWeight: '600' },
+            tabBarIcon: ({ color, size }) => (
+              <MaterialCommunityIcons name="account-circle" color={color} size={size} />
+            ),
+          }}
+        >
+          {() => <ProfileScreen user={user} onLogout={onLogout} onUserUpdated={onUserUpdated} />}
+        </Tab.Screen>
 
         <Tab.Screen
           name="About"

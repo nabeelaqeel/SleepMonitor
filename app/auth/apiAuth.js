@@ -174,6 +174,55 @@ export async function registerAccount({ email, password, role }) {
   }
 }
 
+/** PATCH /auth/me — updates the signed-in user's display name. Returns the
+ *  updated user, or null when the session is invalid/expired (401 or no stored
+ *  token); 422 and network failures throw so the screen can show a message. */
+export async function updateProfileName(newName) {
+  assertSecureEndpoint();
+  const token = await getStoredToken();
+  if (!token) return null; // same verdict as a 401 — no session to update
+
+  const controller = new AbortController();
+  const abortTimer = setTimeout(() => controller.abort(), LOGIN_TIMEOUT_MS);
+
+  try {
+    const res = await fetch(`${API_URL}/auth/me`, {
+      method: 'PATCH',
+      headers: {
+        Authorization: `Bearer ${token}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ name: newName.trim() }),
+      signal: controller.signal,
+    });
+
+    if (res.status === 401) return null;
+    if (res.status === 422) {
+      let detail = null;
+      try { ({ detail } = await res.json()); } catch { /* empty body falls through */ }
+      throw new Error(describeValidationError(detail, 'Name update rejected'));
+    }
+    if (!res.ok) throw new Error(`Name update server error (HTTP ${res.status})`);
+
+    const { user } = await res.json();
+    // Persisted here (not in the screen) so the next launch shows the new name on every path.
+    await storeUser(user);
+    return user;
+  } catch (err) {
+    if (err && err.name === 'AbortError') {
+      throw new Error(
+        `Profile server did not respond within ${LOGIN_TIMEOUT_MS / 1000}s (${API_URL}).`
+      );
+    }
+    if (err instanceof TypeError) {
+      throw new Error(`Cannot reach the server (${API_URL}). Is the API running?`);
+    }
+    throw err;
+  } finally {
+    clearTimeout(abortTimer);
+  }
+}
+
 /** Local-only validation: user present AND token unexpired; clears the stored pair on anything stale. */
 export async function checkSession() {
   try {

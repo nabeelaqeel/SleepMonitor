@@ -224,6 +224,27 @@ def create_user(email: str, name: str, role: str, password_hash: str) -> dict | 
     return dict(zip(_USER_COLS, row))
 
 
+def update_user_name(user_id: str, name: str) -> dict | None:
+    """Rename the caller; None when user_id is unknown.
+
+    Only `name` is mutable here — id, email and role never move through
+    this path, so the bearer token (sub+role only) needs no reissue.
+    Returns the row shaped like get_user_by_email.
+    """
+    with connection() as conn, conn.cursor() as cur:
+        cur.execute(
+            f"""
+            UPDATE users
+            SET name = %s
+            WHERE user_id = %s
+            RETURNING {', '.join(_USER_COLS)}
+            """,
+            (name, user_id),
+        )
+        row = cur.fetchone()
+    return dict(zip(_USER_COLS, row)) if row else None
+
+
 def get_or_create_pairing_code(user_id: str) -> str | None:
     """Return the doctor's pairing code, minting one on first use.
 
