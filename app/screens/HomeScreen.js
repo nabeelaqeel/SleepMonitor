@@ -32,7 +32,11 @@ const NO_DATA_TIER  = {
 };
 
 export default function HomeScreen() {
-  const { currentData, spo2History, aiRecommendation } = useSleep();
+  const { currentData, spo2History, aiRecommendation, networkStats } = useSleep();
+
+  // MQTT socket state from the connectMQTT status callback (SleepContext);
+  // measured delivery/latency diagnostics stay on the admin Network screen.
+  const connected = networkStats.connected;
 
   // 'Waiting...' is the SleepContext initial lastUpdated sentinel; it holds
   // until the first own-patient reading passes the scoping gate.
@@ -66,6 +70,19 @@ export default function HomeScreen() {
               {noData ? currentData.lastUpdated : `Live · ${currentData.lastUpdated}`}
             </Text>
           </View>
+        </View>
+
+        {/* Connection badge — small status pill, not a diagnostics screen */}
+        <View style={styles.connWrap}>
+          <View style={[styles.connPill, connected ? styles.connPillOn : styles.connPillOff]}>
+            <View style={[styles.connDot, { backgroundColor: connected ? '#4ade80' : '#f87171' }]} />
+            <Text style={[styles.connText, { color: connected ? '#4ade80' : '#f87171' }]}>
+              {connected ? 'Connected' : 'Not connected'}
+            </Text>
+          </View>
+          {!connected && (
+            <Text style={styles.connHint}>Data won't reach the cloud until reconnected</Text>
+          )}
         </View>
 
         {/* Tier status card */}
@@ -131,7 +148,7 @@ export default function HomeScreen() {
             <Text style={styles.alertTitle}>Immediate alert sent</Text>
             <Text style={styles.alertBody}>
               SpO2 dropped to {currentData.spo2}% at {currentData.timestamp}.
-              Transmitted via MQTT QoS 2 — guaranteed delivery.
+              Sent with the highest delivery reliability.
             </Text>
           </View>
         )}
@@ -193,6 +210,18 @@ const styles = StyleSheet.create({
   liveRow:     { flexDirection: 'row', alignItems: 'center', gap: 6 },
   liveDot:     { width: 7, height: 7, borderRadius: 4 },
   liveText:    { fontSize: 12, color: '#555' },
+  connWrap:    { marginBottom: 12 },
+  connPill:    {
+    flexDirection: 'row', alignItems: 'center', gap: 6,
+    alignSelf: 'flex-start',
+    borderRadius: 12, paddingVertical: 4, paddingHorizontal: 10,
+    borderWidth: 0.5, borderColor: '#1e1e30',
+  },
+  connPillOn:  { backgroundColor: '#0a2010' },
+  connPillOff: { backgroundColor: '#3d1010' },
+  connDot:     { width: 7, height: 7, borderRadius: 4 },
+  connText:    { fontSize: 11, fontWeight: '600' },
+  connHint:    { fontSize: 11, color: '#6b7280', marginTop: 4 },
   tierCard:    {
     borderRadius: 14, borderWidth: 1, padding: 16,
     marginBottom: 10, flexDirection: 'row',

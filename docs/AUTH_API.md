@@ -8,7 +8,7 @@ that bcrypt-verifies passwords and issues short-lived JWTs.
 > section has the terminal-by-terminal version (the API is Terminal 3).
 > Database schema details live in [`DATABASE.md`](DATABASE.md#users--login).
 
-**Last updated:** 2026-11-04
+**Last updated:** 2026-11-19
 **Branch:** `feature/db-backed-login`
 
 ---
@@ -95,6 +95,11 @@ and provision accounts separately). Three consequences:
 | GET | `/auth/health` | Liveness probe |
 | POST | `/auth/login` | Verify credentials, `{user, token}` or 401 |
 | GET | `/auth/verify` (Authorization: Bearer) | Decode/validate a JWT (claims echo or 401) |
+| GET | `/admin/users` (admin) | Every account — id, name, email, role, created_at |
+| POST | `/admin/users` (admin) | Provision an account with any role (admin included) |
+| POST | `/admin/users/{id}/reset-password` (admin) | Set a new password for any account |
+| GET | `/admin/health` (admin) | API + DB + broker status, last data received |
+| GET | `/admin/qos-sessions` (admin) | Recent QoS delivery accounting (20 newest) |
 
 ### `POST /auth/login`
 
@@ -122,6 +127,102 @@ which accounts exist.
 |---|---|---|---|
 | `doctor@sleep.com` | `1234` | doctor | `00000000-0000-0000-0000-000000000001` |
 | `patient@sleep.com` | `1234` | patient | `00000000-0000-0000-0000-000000000002` |
+| `admin@sleep.com` | `1234` | admin | `00000000-0000-0000-0000-000000000003` |
+
+---
+
+## Admin role (system operator)
+
+The three roles partition the system by scope:
+
+| Role | Scope | Typical caller |
+|---|---|---|
+| `patient` | **my sleep** — own devices, sessions, readings | the watch owner |
+| `doctor` | **my patients** — the roster they are linked to | clinician |
+| `admin` | **the system itself** — every account, provisioning, pipeline health | operator |
+
+**Provisioning rule: no self-service admin.** `POST /auth/register` and
+`POST /auth/google` still validate the role as `doctor|patient` only —
+requesting `admin` there is a 422, so an admin account can never be
+created from the app or an unauthenticated request. An admin exists only
+via the `admin@sleep.com` seed row or via `POST /admin/users` called by an
+existing admin. Every `/admin/*` endpoint checks the JWT `role` claim and
+answers 403 otherwise (401 without a valid bearer).
+
+### `POST /auth/login` as the seeded admin
+
+```bash
+curl -s -X POST http://localhost:8000/auth/login \
+  -H 'Content-Type: application/json' \
+  -d '{"email":"admin@sleep.com","password":"1234"}'
+```
+
+Keep the returned token in an `Authorization: Bearer <token>` header for
+every call below.
+
+### `GET /admin/users`
+
+```json
+{"users":[{"id":"00000000-…-01","email":"doctor@sleep.com",
+           "name":"Dr. Ahmad","role":"doctor",
+           "created_at":"2026-11-19T10:00:00+00:00"}]}
+```
+
+Exactly `id / email / name / role / created_at`, oldest first — password
+hashes are never selected, so they cannot appear in a response.
+
+### `POST /admin/users`
+
+```bash
+curl -s -X POST http://localhost:8000/admin/users \
+  -H 'Content-Type: application/json' \
+  -H "Authorization: Bearer $ADMIN_TOKEN" \
+  -d '{"email":"dr.new@sleep.com","name":"Dr. New","password":"s3cret-pass","role":"doctor"}'
+```
+
+Body: `email`, `password` (min 8 chars — same strength floor as register),
+`role` (`patient|doctor|admin`), optional `name` (falls back to the email
+prefix like register). Validation mirrors `/auth/register` exactly:
+200 `{"user":{id,email,name,role}}`, 409 `Email already registered`, 422
+on a short password or unknown role. The created account logs in via
+`/auth/login` like any other; no token is returned at provision time.
+
+### `POST /admin/users/{user_id}/reset-password`
+
+Body: `{"password": "new-password-8+"}` (same 8-char floor → 422). Sets
+the stored bcrypt hash; the old password stops verifying on the next
+login. 200 `{"user":{id,email,name,role}}`, 404 unknown/malformed
+`user_id`, 401/403 as above.
+
+### `GET /admin/health`
+
+```json
+{"status":"ok",
+ "api":{"status":"ok"},
+ "database":{"reachable":true,"last_data_received":"2026-11-19T09:59:58+00:00"},
+ "broker":{"host":"broker","port":1883,"reachable":true}}
+```
+
+Always answers 200 and reports per component (a health endpoint must
+describe failures, not raise them): `status` is `"ok"` only when both the
+database and the broker answer, `"degraded"` otherwise. The broker probe
+is a plain TCP connect to `MQTT_HOST:MQTT_PORT` — the same
+`.env.development` keys the compose stack and ingest worker use. `last_data_received`
+is the newest `readings.ts` and doubles as the ingest-liveness proxy
+(`null` while the pipeline has never persisted a reading).
+
+### `GET /admin/qos-sessions`
+
+```json
+{"sessions":[{"session_id":"…","expected_readings":214,"received_readings":212,
+              "missing_readings":2,"delivery_pct":99.1,
+              "computed_at":"2026-11-19T09:55:00+00:00"}]}
+```
+
+The 20 newest `session_stats` rows (newest `computed_at` first) straight
+from the ingest worker's delivery accounting: expected = last publisher
+seq + 1, received = rows persisted, missing = QoS 0 packets dropped in
+transit; `delivery_pct` is `null` for a session with nothing expected.
 
 ---
 
@@ -130,7 +231,7 @@ which accounts exist.
 | Claim | Meaning |
 |---|---|
 | `sub` | the user UUID |
-| `role` | `doctor` or `patient` (mirrors `App.js` routing) |
+| `role` | `doctor`, `patient` or `admin` (mirrors `App.js` routing; admin is operator-only) |
 | `iat` | issued-at (UTC) |
 | `exp` | issued-at + 12h — re-login required after expiry |
 
@@ -225,5 +326,7 @@ database can bootstrap itself and is converted to a bcrypt hash at startup.
 * **Symmetric secret-only auth.** HS256 keeps the same secret on server(s);
   RS256/ES256 (asymmetric) suits multi-service deployments — plausible
   post-thesis work, not needed for one API.
-* **No account endpoints.** Registration, password change and refresh tokens
-  are out of scope for a single-user system (one doctor, one patient by design).
+* **No account endpoints.** Self-service password change and refresh tokens
+  are out of scope for a single-user system (one doctor, one patient by
+  design); password reset is admin-driven only via
+  `POST /admin/users/{id}/reset-password`.

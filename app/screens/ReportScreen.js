@@ -10,7 +10,7 @@ import { buildSessionReportPdf, exportSessionReport } from '../services/exportSe
 import { buildPatternReportPdf, exportPatternReport } from '../services/exportPatternReport';
 import { canSaveToDevice, savePdfToDevice, SaveCancelledError } from '../services/saveToDevice';
 import ReportExportSheet from '../components/ReportExportSheet';
-import { tierShortLabel, topicDisplayLabel, EXPORT_SHEET_TEXT } from '../config/displayText';
+import { tierShortLabel, EXPORT_SHEET_TEXT } from '../config/displayText';
 
 export default function ReportScreen() {
   const { sessionStats, currentData, sleepTimeline, aiRecommendation } = useSleep();
@@ -239,35 +239,6 @@ export default function ReportScreen() {
           </View>
         </View>
 
-        {/* QoS transmission summary */}
-        <Text style={styles.sectionLabel}>QoS transmission summary</Text>
-        <View style={styles.qosCard}>
-          <QoSRow
-            topic={topicDisplayLabel('sleep/critical')}
-            qos="QoS 2"
-            count={sessionStats.critical}
-            color="#f87171"
-          />
-          <QoSRow
-            topic={topicDisplayLabel('sleep/important')}
-            qos="QoS 1"
-            count={sessionStats.important}
-            color="#fbbf24"
-          />
-          <QoSRow
-            topic={topicDisplayLabel('sleep/normal')}
-            qos="QoS 0"
-            count={sessionStats.normal}
-            color="#4ade80"
-          />
-          <QoSRow
-            topic={topicDisplayLabel('sleep/background')}
-            qos="QoS 0"
-            count={sessionStats.background}
-            color="#9ca3af"
-          />
-        </View>
-
         {/* SpO2 over session */}
         <Text style={styles.sectionLabel}>SpO2 over session</Text>
         <View style={styles.timelineCard}>
@@ -382,17 +353,6 @@ function TimelineChart({ data, valueKey, colorFn, barColor, height = 80 }) {
   );
 }
 
-function QoSRow({ topic, qos, count, color }) {
-  return (
-    <View style={styles.qosRow}>
-      <View style={[styles.qosDot, { backgroundColor: color }]} />
-      <Text style={styles.qosTopic}>{topic}</Text>
-      <Text style={styles.qosLabel}>{qos}</Text>
-      <Text style={styles.qosCount}>{count} msgs</Text>
-    </View>
-  );
-}
-
 const styles = StyleSheet.create({
   container:    { flex: 1, backgroundColor: '#0a0a0f' },
   scroll:       { padding: 20, paddingBottom: 40 },
@@ -459,19 +419,6 @@ const styles = StyleSheet.create({
   legendItem:   { flexDirection: 'row', alignItems: 'center', gap: 5 },
   legendDot:    { width: 7, height: 7, borderRadius: 4 },
   legendText:   { fontSize: 11, color: '#888' },
-  qosCard:      {
-    backgroundColor: '#13131f', borderRadius: 12,
-    padding: 16, borderWidth: 0.5,
-    borderColor: '#1e1e30', gap: 12,
-  },
-  qosRow:       { flexDirection: 'row', alignItems: 'center', gap: 8 },
-  qosDot:       { width: 7, height: 7, borderRadius: 4 },
-  qosTopic:     { fontSize: 12, color: '#ccc', flex: 1, fontFamily: 'monospace' },
-  qosLabel:     {
-    fontSize: 10, color: '#555', backgroundColor: '#1a1a2e',
-    paddingVertical: 2, paddingHorizontal: 6, borderRadius: 6,
-  },
-  qosCount:     { fontSize: 11, color: '#555', minWidth: 50, textAlign: 'right' },
   timelineCard: {
     backgroundColor: '#13131f',
     borderRadius: 12,

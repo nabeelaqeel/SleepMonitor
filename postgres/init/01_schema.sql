@@ -7,13 +7,19 @@
 CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
 
 -- ── Users ─────────────────────────────────────────────────────
--- Both doctors and patients are stored here. Role determines
--- which navigator is shown in the React Native app.
+-- Doctors, patients and system admins are stored here. Role determines
+-- which navigator the React Native app shows; admins operate the system
+-- itself and are provisioned (by this seed or another admin), never
+-- self-registered. The CHECK is explicitly named users_role_check so
+-- migrations can target it deterministically — an unnamed inline CHECK
+-- would be auto-named the same way, but only while it stays the table's
+-- sole CHECK constraint.
 CREATE TABLE users (
     user_id       UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
     email         VARCHAR(255) UNIQUE NOT NULL,
     name          VARCHAR(255) NOT NULL,
-    role          VARCHAR(20) NOT NULL CHECK (role IN ('doctor', 'patient')),
+    role          VARCHAR(20) NOT NULL CONSTRAINT users_role_check
+                  CHECK (role IN ('doctor', 'patient', 'admin')),
     -- bcrypt hash; empty for the seeded rows — the auth API seeds the real
     -- hash of the demo password on startup (SQL cannot compute bcrypt),
     -- so the API must run at least once before anyone can log in.
@@ -136,7 +142,8 @@ CREATE TABLE session_stats (
 -- Remove before production.
 INSERT INTO users (user_id, email, name, role) VALUES
     ('00000000-0000-0000-0000-000000000001', 'doctor@sleep.com',  'Dr. Ahmad',  'doctor'),
-    ('00000000-0000-0000-0000-000000000002', 'patient@sleep.com', 'Ali Hassan', 'patient');
+    ('00000000-0000-0000-0000-000000000002', 'patient@sleep.com', 'Ali Hassan', 'patient'),
+    ('00000000-0000-0000-0000-000000000003', 'admin@sleep.com',   'System Admin', 'admin');
 
 INSERT INTO doctor_patients (doctor_id, patient_id) VALUES
     ('00000000-0000-0000-0000-000000000001', '00000000-0000-0000-0000-000000000002');

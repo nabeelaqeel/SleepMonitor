@@ -2,9 +2,20 @@ import {
   View, Text, StyleSheet,
   ScrollView,
 } from 'react-native';
-import { SafeAreaView } from 'react-native-safe-area-context';
-import { useSleep } from '../context/SleepContext';
-import { topicDisplayLabel, QOS_LEVEL_TEXT } from '../config/displayText';
+import { useSleep } from '../../context/SleepContext';
+import { topicDisplayLabel, QOS_LEVEL_TEXT } from '../../config/displayText';
+import { getMqttEndpoint } from '../../config/appConfig';
+
+// Resolved once per build from the extra → env → default chain; the card must
+// show what the app actually connects to, never a hardcoded host.
+const BROKER_ENDPOINT = (() => {
+  try {
+    const { host, port } = getMqttEndpoint();
+    return `${host}:${port}`;
+  } catch {
+    return 'Not configured';
+  }
+})();
 
 function formatLatency(ms) {
   if (ms === null || ms === undefined) return '—';
@@ -60,20 +71,17 @@ export default function NetworkScreen() {
   const criticalLatency = latencyStats[2]?.ms ?? null;
 
   return (
-    <SafeAreaView style={styles.container}>
+    <View style={styles.container}>
       <ScrollView
         contentContainerStyle={styles.scroll}
         showsVerticalScrollIndicator={false}
       >
-        <Text style={styles.title}>QoS network status</Text>
-        <Text style={styles.subtitle}>MQTT broker monitoring</Text>
-
         {/* Broker status card */}
         <View style={styles.brokerCard}>
           <View style={styles.brokerTop}>
             <View>
               <Text style={styles.brokerLabel}>Broker address</Text>
-              <Text style={styles.brokerAddress}>localhost:1883</Text>
+              <Text style={styles.brokerAddress}>{BROKER_ENDPOINT}</Text>
             </View>
             <View style={[
               styles.statusBadge,
@@ -171,7 +179,7 @@ export default function NetworkScreen() {
         </Text>
 
       </ScrollView>
-    </SafeAreaView>
+    </View>
   );
 }
 
@@ -255,8 +263,6 @@ function ExplainRow({ level, color, desc }) {
 const styles = StyleSheet.create({
   container:       { flex: 1, backgroundColor: '#0a0a0f' },
   scroll:          { padding: 20, paddingBottom: 40 },
-  title:           { fontSize: 26, fontWeight: '700', color: '#fff', marginBottom: 4 },
-  subtitle:        { fontSize: 13, color: '#555', marginBottom: 22 },
   sectionLabel:    {
     fontSize: 11, color: '#555', marginBottom: 10,
     letterSpacing: 0.5, textTransform: 'uppercase',

@@ -5,9 +5,10 @@ day, so pooling would be overkill. Startup is idempotent — the same
 permissive pattern the ingest worker uses:
 
   * ensure_setup() adds the password_hash, pairing_code and physical-profile
-    columns when missing, seeds bcrypt hashes for the two demo users (only
-    when the stored hash is empty, so restarts never clobber a password
-    changed later), fills the demo patient's profile the same way and mints
+    columns when missing, rebuilds the users role CHECK around the admin
+    role, seeds bcrypt hashes for the three demo users (only when the
+    stored hash is empty, so restarts never clobber a password changed
+    later), fills the demo patient's profile the same way and mints
     pairing codes for the demo doctors.
 
 The DATABASE_URL comes from .env.development (same as the ingest worker).
@@ -49,6 +50,13 @@ SEED_USERS = [
             "height_cm": 175.0,
             "medical_history": "Mild obstructive sleep apnea (AHI 14), diagnosed 2024",
         },
+    },
+    {
+        "user_id": "00000000-0000-0000-0000-000000000003",
+        "email": "admin@sleep.com",
+        "name": "System Admin",
+        "role": "admin",
+        "password": "1234",
     },
 ]
 
@@ -105,6 +113,38 @@ def ensure_setup(hash_password) -> None:
                 display_name VARCHAR(100),
                 created_at   TIMESTAMPTZ NOT NULL DEFAULT NOW()
             )
+            """
+        )
+        # Widen the role CHECK to include 'admin'. The legacy inline CHECK was
+        # auto-named users_role_check (Postgres appends _check1, _check2… only
+        # when de-duplicating), so drop every name variant before re-adding
+        # under one stable explicit name future migrations can target.
+        # Running on every start is cheap on the tiny users table, and a
+        # widening re-add can only admit more values — never a revalidation
+        # failure on rows that passed the narrower set.
+        cur.execute(
+            """
+            DO $$
+            DECLARE legacy text;
+            BEGIN
+                FOR legacy IN
+                    SELECT conname
+                    FROM pg_constraint
+                    WHERE conrelid = 'users'::regclass
+                      AND contype = 'c'
+                      AND conname ~ '^users_role_check(_[0-9]+)?$'
+                LOOP
+                    EXECUTE format('ALTER TABLE users DROP CONSTRAINT %I', legacy);
+                END LOOP;
+            END
+            $$;
+            """
+        )
+        cur.execute(
+            """
+            ALTER TABLE users
+            ADD CONSTRAINT users_role_check
+            CHECK (role IN ('doctor', 'patient', 'admin'))
             """
         )
         for user in SEED_USERS if DEMO_SEEDING_ENABLED else []:
@@ -568,4 +608,121 @@ def list_doctor_alerts(doctor_id: str) -> list[dict]:
         }
         for (alert_id, patient_id, name, severity, spo2, heart_rate,
              ts, session_id) in rows
+    ]
+
+
+# ── Admin (system-operator) queries ────────────────────────────
+# Every /admin/* endpoint routes through these; like the user-scoped ones
+# above they never return password_hash in a shaped response.
+
+def list_users() -> list[dict]:
+    """Every account for GET /admin/users, oldest first.
+
+    Exactly the five operator fields — password_hash is never selected, so
+    it cannot leak into a response shape by accident.
+    """
+    with connection() as conn, conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT user_id::text, email, name, role, created_at
+            FROM users
+            ORDER BY created_at, email
+            """
+        )
+        rows = cur.fetchall()
+    return [
+        {
+            "id": user_id,
+            "email": email,
+            "name": name,
+            "role": role,
+            "created_at": created.astimezone(UTC).isoformat(),
+        }
+        for (user_id, email, name, role, created) in rows
+    ]
+
+
+def update_user_password(user_id: str, password_hash: str) -> dict | None:
+    """Overwrite the stored hash for admin password reset; None when unknown.
+
+    Deliberately separate from update_user_name so a rename can never carry
+    a credential write. Returns the row shaped like get_user_by_email; the
+    hash stays server-side as everywhere else.
+    """
+    with connection() as conn, conn.cursor() as cur:
+        cur.execute(
+            f"""
+            UPDATE users
+            SET password_hash = %s
+            WHERE user_id = %s
+            RETURNING {', '.join(_USER_COLS)}
+            """,
+            (password_hash, user_id),
+        )
+        row = cur.fetchone()
+    return dict(zip(_USER_COLS, row)) if row else None
+
+
+def db_health() -> dict:
+    """DB reachability + newest-reading timestamp for GET /admin/health.
+
+    Wrapped so a down database degrades to reachable=false instead of a
+    500 — a health endpoint must describe failures, not raise them. The
+    MAX(ts) over readings doubles as the ingest-liveness proxy: null means
+    the pipeline has never persisted a reading.
+    """
+    out: dict = {"reachable": False, "last_data_received": None}
+    row = None
+    try:
+        with connection() as conn, conn.cursor() as cur:
+            cur.execute("SELECT 1")
+            cur.fetchone()
+            out["reachable"] = True
+            cur.execute("SELECT MAX(ts) FROM readings")
+            row = cur.fetchone()
+    except psycopg2.Error:
+        return out
+    if row is not None and row[0] is not None:
+        out["last_data_received"] = row[0].astimezone(UTC).isoformat()
+    return out
+
+
+def list_recent_qos_sessions(limit: int = 20) -> list[dict]:
+    """Recent QoS delivery accounting (session_stats), newest computed first.
+
+    GET /admin/qos-sessions — the pipeline-health view of the ingest
+    worker's accounting: expected = last publisher seq + 1, received = rows
+    persisted, missing = QoS 0 packets dropped in transit. delivery_pct is
+    null while nothing was expected, since an empty session has no
+    meaningful delivery ratio. Hard cap keeps it a health view, not an
+    archive.
+    """
+    with connection() as conn, conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT st.session_id::text,
+                   st.expected_readings, st.received_readings, st.missing_readings,
+                   CASE WHEN st.expected_readings > 0
+                        THEN ROUND(st.received_readings * 100.0
+                                   / st.expected_readings, 1)
+                        ELSE NULL END,
+                   st.computed_at
+            FROM session_stats st
+            ORDER BY st.computed_at DESC
+            LIMIT %s
+            """,
+            (limit,),
+        )
+        rows = cur.fetchall()
+    return [
+        {
+            "session_id": session_id,
+            "expected_readings": expected,
+            "received_readings": received,
+            "missing_readings": missing,
+            # ROUND(numeric) arrives as Decimal — float keeps plain JSON.
+            "delivery_pct": None if pct is None else float(pct),
+            "computed_at": computed.astimezone(UTC).isoformat(),
+        }
+        for (session_id, expected, received, missing, pct, computed) in rows
     ]

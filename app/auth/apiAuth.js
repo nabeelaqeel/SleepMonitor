@@ -397,3 +397,33 @@ export async function linkDoctor(code) {
 export async function getMyDoctor() {
   return authedFetch('/auth/my-doctor', { fallback: 'Could not load your doctor' });
 }
+
+// ── Admin endpoints — the JWT role claim must be admin (doctor/patient get 403). ──
+
+/** GET /admin/users — every account (id, email, name, role, created_at; no hashes), oldest first. */
+export async function fetchAdminUsers() {
+  const body = await authedFetch('/admin/users', { fallback: 'Could not load users' });
+  return body.users || [];
+}
+
+/** POST /admin/users — provisions any role; 409/422 surface as readable errors. */
+export async function createAdminUser({ email, password, role, name }) {
+  const payload = { email: email.trim().toLowerCase(), password, role };
+  if (name && name.trim()) payload.name = name.trim();
+  const body = await authedFetch('/admin/users', {
+    method: 'POST',
+    body: payload,
+    fallback: 'Could not create user',
+  });
+  return body.user;
+}
+
+/** POST /admin/users/{id}/reset-password — sets the bcrypt hash; 404/422 surface as readable errors. */
+export async function resetAdminUserPassword(userId, password) {
+  const body = await authedFetch(`/admin/users/${userId}/reset-password`, {
+    method: 'POST',
+    body: { password },
+    fallback: 'Could not reset password',
+  });
+  return body.user;
+}

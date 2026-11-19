@@ -75,6 +75,15 @@ def test_register_bad_role_is_422(pg):
     assert r.status_code == 422
 
 
+def test_register_admin_role_is_422(pg):
+    """Admin is provisioned by seed or another admin, never self-registered."""
+    email = pg.unique_email("reg-admin")
+    r = register(email, "correct-horse-42", "admin")
+    assert r.status_code == 422
+    # nothing was created either
+    assert login(email, "correct-horse-42").status_code == 401
+
+
 def test_register_short_password_is_422(pg):
     email = pg.unique_email("reg-shortpw")
     for password in ("", "1234567"):

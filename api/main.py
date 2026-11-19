@@ -17,19 +17,33 @@ Endpoints:
     POST /devices/bind        → patient binds a device (registry) | 401 | 403 | 409 | 422
     GET  /devices             → the patient's bound devices | 401 | 403
     GET  /patients            → the doctor's roster (linked patients + data snapshot) | 401 | 403
+    GET  /alerts              → the doctor's alert history | 401 | 403
     GET  /auth/verify         → Bearer-token claims echo  |  401
+    GET  /admin/users         → every account (admin) | 401 | 403
+    POST /admin/users         → provision any role (admin) | 401 | 403 | 409 | 422
+    POST /admin/users/{id}/reset-password → set a password (admin) | 401 | 403 | 404 | 422
+    GET  /admin/health        → api + db + broker + last-reading (admin) | 401 | 403
+    GET  /admin/qos-sessions  → recent QoS delivery stats (admin) | 401 | 403
 
 Login flow: bcrypt-verify against users.password_hash, then issue a HS256
 JWT (12h). The password hash never leaves the server. /auth/google is
 config-gated (GOOGLE_CLIENT_ID): unset keeps the LAN demo fully offline.
+
+Roles: patients see their own sleep, doctors their patients, admins the
+system itself. Admins are PROVISIONED — self-service endpoints keep the
+Literal['doctor','patient'] validation, and /admin/* is the only path that
+can mint the admin role (an existing admin is required to call it).
 """
 
 from __future__ import annotations
 
 import logging
+import os
+import socket
 from collections.abc import Callable
 from contextlib import asynccontextmanager
 from typing import Annotated, Literal
+from uuid import UUID
 
 from fastapi import Depends, FastAPI, Header, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
@@ -40,6 +54,7 @@ from api.db import (
     DEMO_SEEDING_ENABLED,
     bind_device,
     create_user,
+    db_health,
     ensure_setup,
     find_user_by_pairing_code,
     get_doctor_of_patient,
@@ -50,7 +65,10 @@ from api.db import (
     list_devices,
     list_doctor_alerts,
     list_doctor_patients,
+    list_recent_qos_sessions,
+    list_users,
     update_user_name,
+    update_user_password,
 )
 from api.google_auth import (
     GoogleTokenError,
@@ -131,6 +149,25 @@ class UpdateNameRequest(BaseModel):
     ]
 
 
+class AdminCreateUserRequest(BaseModel):
+    email: str
+    # Same strength floor as register — an admin provisions real accounts.
+    password: str = Field(min_length=8)
+    # Any role, admin included: this guarded endpoint is the ONLY path that
+    # can mint an admin (self-service endpoints keep Literal['doctor','patient']).
+    role: Literal["patient", "doctor", "admin"]
+    # Optional display name; None falls back to the email prefix like register.
+    name: Annotated[
+        str,
+        StringConstraints(min_length=1, max_length=255, strip_whitespace=True),
+    ] | None = None
+
+
+class AdminResetPasswordRequest(BaseModel):
+    # Same strength floor as register; 422 fires before the handler runs.
+    password: str = Field(min_length=8)
+
+
 def _safe_user(user: dict) -> dict:
     """Exactly the four non-sensitive fields — password_hash never leaves the server."""
     return {
@@ -182,6 +219,40 @@ def require_bearer(authorization: str) -> dict:
     if claims is None:
         raise HTTPException(status_code=401, detail="Invalid or expired token")
     return claims
+
+
+def _require_admin(authorization: str) -> dict:
+    """Shared gate for every /admin endpoint — the doctor-gated pattern.
+
+    Admins are system operators, provisioned by seed or by another admin;
+    there is no self-service path to this role, so a non-admin bearer gets
+    the same 403 any gated endpoint returns.
+    """
+    claims = require_bearer(authorization)
+    if claims.get("role") != "admin":
+        raise HTTPException(status_code=403, detail="Admin role required")
+    return claims
+
+
+def _broker_probe() -> dict:
+    """TCP-connect to the MQTT broker exactly as the stack configures it.
+
+    Reads MQTT_HOST/MQTT_PORT — the same .env.development keys the compose
+    stack and the ingest worker use (config.py already loaded the file).
+    The read lives here because only this probe needs it; a 1 s timeout
+    keeps the health endpoint fast even against a filtered host.
+    """
+    host = os.getenv("MQTT_HOST", "localhost")
+    raw_port = os.getenv("MQTT_PORT", "1883")
+    try:
+        port = int(raw_port)
+    except ValueError:
+        return {"host": host, "port": raw_port, "reachable": False}
+    try:
+        with socket.create_connection((host, port), timeout=1.0):
+            return {"host": host, "port": port, "reachable": True}
+    except OSError:
+        return {"host": host, "port": port, "reachable": False}
 
 
 @app.get("/auth/health")
@@ -403,3 +474,100 @@ def verify(authorization: str = Header(default="")):
     """Validate a token sent as `Authorization: Bearer <token>`."""
     claims = require_bearer(authorization)
     return {"sub": claims.get("sub"), "role": claims.get("role")}
+
+
+# ── Admin — the system-operator role ───────────────────────────
+# patient = my sleep, doctor = my patients, admin = the system itself.
+# Every endpoint below is gated by _require_admin; none ever returns a
+# password hash.
+
+@app.get("/admin/users")
+def admin_list_users(authorization: str = Header(default="")):
+    """Every account, oldest first — the operator's directory view.
+
+    Exactly id/email/name/role/created_at; password_hash is never selected
+    in list_users, so it cannot leak into a response shape by accident.
+    """
+    _require_admin(authorization)
+    return {"users": list_users()}
+
+
+@app.post("/admin/users")
+def admin_create_user(
+    req: AdminCreateUserRequest, authorization: str = Header(default="")
+):
+    """Provision an account with any role — the sole source of new admins.
+
+    Validation and duplicate handling mirror /auth/register exactly
+    (bcrypt hash, lowercase email, 409 on a taken address); the created
+    account logs in like any other. No token is returned here — the
+    provisioned user signs in themselves.
+    """
+    _require_admin(authorization)
+    user = create_user(
+        email=req.email,
+        name=req.name or req.email.split("@", 1)[0],
+        role=req.role,
+        password_hash=hash_password(req.password),
+    )
+    if user is None:
+        raise HTTPException(status_code=409, detail="Email already registered")
+    return {"user": _safe_user(user)}
+
+
+@app.post("/admin/users/{user_id}/reset-password")
+def admin_reset_password(
+    user_id: str, req: AdminResetPasswordRequest,
+    authorization: str = Header(default=""),
+):
+    """Set a new password for any account; the old one stops verifying.
+
+    Strength rules match register (min_length=8 → 422 before the handler).
+    No token reissue needed — the JWT carries only sub+role, neither of
+    which a password reset changes.
+    """
+    _require_admin(authorization)
+    try:
+        UUID(user_id)
+    except ValueError:
+        # Malformed path id — psycopg2 would raise on the uuid cast (500);
+        # report it as simply unknown instead.
+        raise HTTPException(status_code=404, detail="Unknown user")
+    user = update_user_password(user_id, hash_password(req.password))
+    if user is None:
+        raise HTTPException(status_code=404, detail="Unknown user")
+    return {"user": _safe_user(user)}
+
+
+@app.get("/admin/health")
+def admin_health(authorization: str = Header(default="")):
+    """System view: API liveness, DB reachability + newest reading, broker.
+
+    Always answers 200 and describes each component — a health endpoint
+    must report failures, not raise them. `status` is "ok" only when both
+    the database and the broker answer; `database.last_data_received`
+    (newest readings row) is the ingest-liveness proxy, null while the
+    pipeline has never persisted a reading.
+    """
+    _require_admin(authorization)
+    database = db_health()
+    broker = _broker_probe()
+    return {
+        "status": "ok" if database["reachable"] and broker["reachable"]
+        else "degraded",
+        "api": {"status": "ok"},
+        "database": database,
+        "broker": broker,
+    }
+
+
+@app.get("/admin/qos-sessions")
+def admin_qos_sessions(authorization: str = Header(default="")):
+    """Recent QoS delivery accounting (session_stats), newest computed first.
+
+    Cap of 20 — a pipeline-health view over the ingest worker's accounting,
+    not an archive. delivery_pct is null for an empty session (nothing was
+    expected, so no meaningful ratio).
+    """
+    _require_admin(authorization)
+    return {"sessions": list_recent_qos_sessions()}

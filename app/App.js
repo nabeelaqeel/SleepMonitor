@@ -18,12 +18,12 @@ import LoginScreen             from './screens/LoginScreen';
 import AcknowledgementScreen   from './screens/AcknowledgementScreen';
 import ProfileScreen           from './screens/ProfileScreen';
 import DoctorNavigator from './navigation/DoctorNavigator';
+import AdminNavigator  from './navigation/AdminNavigator';
 
 import HomeScreen    from './screens/HomeScreen';
 import DeviceScreen  from './screens/DeviceScreen';
 import AlertsScreen  from './screens/AlertsScreen';
 import ReportScreen  from './screens/ReportScreen';
-import NetworkScreen from './screens/NetworkScreen';
 import { ACK_STORAGE_KEY, PROFILE } from './config/displayText';
 
 const Tab = createBottomTabNavigator();
@@ -69,9 +69,6 @@ function PatientNavigator({ onLogout, user, onUserUpdated }) {
         />
         <Tab.Screen name="Report" component={ReportScreen}
           options={{ tabBarIcon: ({ color, size }) => <MaterialCommunityIcons name="chart-bar" color={color} size={size} /> }}
-        />
-        <Tab.Screen name="Network" component={NetworkScreen}
-          options={{ tabBarIcon: ({ color, size }) => <MaterialCommunityIcons name="wifi" color={color} size={size} /> }}
         />
         <Tab.Screen name="Profile"
           options={{
@@ -158,6 +155,18 @@ export default function App() {
       <SafeAreaProvider>
         <SleepProvider>
           <DoctorNavigator onLogout={handleLogout} user={user} onUserUpdated={setUser} />
+        </SleepProvider>
+      </SafeAreaProvider>
+    );
+  }
+
+  // Admin = the system itself: same provider mounting as the doctor (no
+  // patientId scoping) so the System tab's pipeline diagnostics stay live.
+  if (user.role === 'admin') {
+    return (
+      <SafeAreaProvider>
+        <SleepProvider>
+          <AdminNavigator onLogout={handleLogout} user={user} onUserUpdated={setUser} />
         </SleepProvider>
       </SafeAreaProvider>
     );

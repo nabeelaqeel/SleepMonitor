@@ -49,6 +49,24 @@ export function topicDisplayLabel(topic) {
     : topic;
 }
 
+// EventLog cards: what the user reads instead of a topic string. Keys are the
+// REAL broker topics; values are patient-facing (no topics, no QoS numbers).
+// Kept separate from TOPIC_DISPLAY_LABELS, which the diagnostics screens still
+// use to show topic-shaped names.
+export const TOPIC_EVENT_LABELS = {
+  'sleep/critical':   'Critical alert',
+  'sleep/important':  'Important alert',
+  'sleep/normal':     'Low-priority alert',
+  'sleep/background': 'Background update',
+};
+
+export function topicEventLabel(topic) {
+  if (typeof topic !== 'string' || topic.length === 0) return '—';
+  return Object.hasOwn(TOPIC_EVENT_LABELS, topic)
+    ? TOPIC_EVENT_LABELS[topic]
+    : topic;
+}
+
 // Keys are screen rows (qos2 / qos1 / qos0) — the QoS numbers themselves stay.
 export const QOS_LEVEL_TEXT = {
   qos2: {
@@ -125,7 +143,7 @@ export const EXPORT_SHEET_TEXT = {
   saveToast: 'Report saved to your device',
   session: {
     title:       'Live session report',
-    subtitle:    'What’s streaming now — tier counts, QoS delivery, timeline',
+    subtitle:    'What’s streaming now — tier counts, delivery reliability, timeline',
     unavailable: 'No session recorded yet',
   },
   pattern: {

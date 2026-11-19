@@ -3,7 +3,7 @@ import {
   View, Text, StyleSheet,
   FlatList, TouchableOpacity,
 } from 'react-native';
-import { tierShortLabel, topicDisplayLabel } from '../config/displayText';
+import { tierShortLabel, topicEventLabel } from '../config/displayText';
 
 const TIER_STYLE = {
   Critical:   { border: '#ef4444', badge: '#3d1010', badgeText: '#f87171' },
@@ -88,7 +88,7 @@ function EventItem({ event, patientLabel }) {
         <Text style={styles.valueText}>HR {event.hr} bpm</Text>
       </View>
       <Text style={styles.reason}>{event.reason}</Text>
-      <Text style={styles.topic}>{topicDisplayLabel(event.topic)}</Text>
+      <Text style={styles.topic}>{topicEventLabel(event.topic)}</Text>
     </View>
   );
 }
@@ -127,7 +127,7 @@ const styles = StyleSheet.create({
   valueText:      { fontSize: 13, color: '#e5e5e5', fontWeight: '500' },
   valueSep:       { fontSize: 13, color: '#444' },
   reason:         { fontSize: 11, color: '#555', marginBottom: 4, fontStyle: 'italic' },
-  topic:          { fontSize: 10, color: '#333', fontFamily: 'monospace' },
+  topic:          { fontSize: 10, color: '#333' },
   emptyWrap:      { alignItems: 'center', marginTop: 60 },
   empty:          { color: '#444', fontSize: 13, textAlign: 'center' },
 });
