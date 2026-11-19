@@ -17,6 +17,10 @@ export default function ReportScreen() {
   const [exportPickerOpen, setExportPickerOpen] = useState(false);
   const [busyKey, setBusyKey] = useState(null); // '<report>-<share|save>' | null
 
+  // Same empty-state rule as HomeScreen: before the first own-patient reading
+  // the "current" cards must not show the SleepContext placeholder as real.
+  const noData = currentData.lastUpdated === 'Waiting...';
+
   const total = sessionStats.total || 1;
 
   const hrValues = sleepTimeline.map(d => d.heartRate);
@@ -79,7 +83,15 @@ export default function ReportScreen() {
 
   const openExportSheet = () => setExportPickerOpen(true);
 
-  const sessionArgs = { sessionStats, currentData, sleepTimeline };
+  // The PDF builders read currentData directly — pass zeros/'—' instead of
+  // the SleepContext placeholder when no own reading has arrived yet.
+  const sessionArgs = {
+    sessionStats,
+    currentData: noData
+      ? { ...currentData, tier: '—', spo2: 0, heartRate: 0 }
+      : currentData,
+    sleepTimeline,
+  };
 
   const handleShareSession = () =>
     runExport('session-share', () => exportSessionReport(sessionArgs));
@@ -174,12 +186,12 @@ export default function ReportScreen() {
           />
           <SummaryCard
             label="Current SpO2"
-            value={`${currentData.spo2}%`}
-            color={currentData.spo2 < 90 ? '#f87171' : '#4ade80'}
+            value={noData ? '0%' : `${currentData.spo2}%`}
+            color={noData ? '#6b7280' : (currentData.spo2 < 90 ? '#f87171' : '#4ade80')}
           />
           <SummaryCard
             label="Current HR"
-            value={`${currentData.heartRate} bpm`}
+            value={noData ? '0 bpm' : `${currentData.heartRate} bpm`}
             color="#9ca3af"
           />
           <SummaryCard
@@ -189,7 +201,7 @@ export default function ReportScreen() {
           />
           <SummaryCard
             label="Current tier"
-            value={tierShortLabel(currentData.tier)}
+            value={noData ? '—' : tierShortLabel(currentData.tier)}
             color="#818cf8"
           />
         </View>

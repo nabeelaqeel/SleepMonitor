@@ -96,6 +96,13 @@ export function SleepProvider({ children, patientId = null }) {
   // Measurement state as refs, so per-message churn never re-renders.
   const pendingRef  = useRef({});                       // pingId → { t0, qos, at }
   const samplesRef  = useRef({ 0: [], 1: [], 2: [] });  // qos → [{ t, value }]
+
+  // The MQTT callback registers once (useEffect []), so it closes over the
+  // FIRST render's patientId — null on the login screen. React reuses this
+  // provider instance across the login → session transition, so the gate
+  // reads the current account through a ref instead of the stale closure.
+  const patientIdRef = useRef(patientId);
+  patientIdRef.current = patientId;
   const deliveryRef = useRef({
     sessionId: null,
     base:  {},   // tierKey → stats[tier] at (or just before) first sight
@@ -125,10 +132,10 @@ export function SleepProvider({ children, patientId = null }) {
       acc.base  = {};
       acc.seqs  = {};
       acc.count = {};
-      if (patientId) {
+      if (patientIdRef.current) {
         setAiRecommendations(prev => ({
           ...prev,
-          [patientId]: AWAITING_AI_RECOMMENDATION,
+          [patientIdRef.current]: AWAITING_AI_RECOMMENDATION,
         }));
       }
     }
@@ -193,7 +200,13 @@ export function SleepProvider({ children, patientId = null }) {
     // genuine readings (seq, classified out-of-band) — only stats is stats-only.
     const isStatsOnly = topic === 'sleep/background' && data.seq === undefined;
 
-    if (!isStatsOnly) {
+    // Patient mode shows only readings attributed to this account; doctor mode
+    // (patientId null) sees the whole stream. Link diagnostics and the roster
+    // snapshot indexes below stay ungated on purpose.
+    const account = patientIdRef.current;
+    const isOwnPatient = !account || data.patientId === account;
+
+    if (!isStatsOnly && isOwnPatient) {
       setCurrentData({
         tier:        data.tier,
         spo2:        data.spo2,
@@ -234,13 +247,17 @@ export function SleepProvider({ children, patientId = null }) {
             duration:  '—',
             topic:     data.topic,
             reason:    data.reason || '',
+            // Publish epoch-ms: the payload timestamp is minute-precision, so
+            // the doctor's Alerts tab needs this to dedupe the row against its
+            // persisted GET /alerts copy.
+            tsMs:      data.publishedAt,
           };
           return [newEvent, ...prev].slice(0, 50);
         });
       }
     }
 
-    if (data.stats) {
+    if (data.stats && isOwnPatient) {
       setSessionStats({
         critical:   data.stats.critical,
         important:  data.stats.important,

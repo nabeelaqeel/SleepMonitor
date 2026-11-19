@@ -1,18 +1,34 @@
+import { useCallback, useState } from 'react';
 import { View, Text, StyleSheet } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
+import { useFocusEffect } from '@react-navigation/native';
 import EventLog from '../../components/EventLog';
 import { useSleep, PATIENT_LIVE_WINDOW_MS } from '../../context/SleepContext';
 import { useNow } from '../../hooks/useNow';
 import { useRoster } from './rosterLive';
+import { mergeAlerts } from './alertHistory';
+import { fetchAlertHistory } from '../../auth/apiAuth';
 import { alertSubtitleCounts } from '../../config/displayText';
 
-// The doctor's alert inbox. The app currently receives a single live stream, so
-// this list is that session's events, captioned with the owning patient — the
-// roster names them via the deviceId their watch publishes under.
+// The doctor's alert inbox: persisted history (GET /alerts) merged with the
+// live eventLog, captioned with the currently-streaming patient — the roster
+// names them via the deviceId their watch publishes under.
 export default function DoctorAlertsScreen() {
   const { eventLog, sessionStats, deviceSnapshots } = useSleep();
   const now = useNow();
   const roster = useRoster();
+
+  // Persisted alert history. null = first fetch still in flight or it failed —
+  // the screen then shows the live log alone, as before (degrade, never block).
+  const [history, setHistory] = useState(null);
+
+  useFocusEffect(useCallback(() => {
+    let cancelled = false;
+    fetchAlertHistory()
+      .then(rows => { if (!cancelled) setHistory(rows); })
+      .catch(() => { /* keep whatever history we have; live rows still show */ });
+    return () => { cancelled = true; };
+  }, []));
 
   // Freshest streaming device; fall back to the most recently seen one so the
   // caption still names the session after it ends.
@@ -36,6 +52,8 @@ export default function DoctorAlertsScreen() {
       : `Session ended — ${streamerLabel} · ${sessionId}`
     : null;
 
+  const events = mergeAlerts(eventLog, history, roster);
+
   return (
     <SafeAreaView style={styles.container}>
       <View style={styles.header}>
@@ -52,8 +70,8 @@ export default function DoctorAlertsScreen() {
       </View>
 
       <EventLog
-        events={eventLog}
-        emptyMessage="No live session yet — alerts appear here while a patient streams."
+        events={events}
+        emptyMessage="No alerts recorded yet — Critical/Important events appear here."
       />
     </SafeAreaView>
   );

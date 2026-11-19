@@ -44,6 +44,7 @@ from api.db import (
     get_user_by_email,
     link_doctor,
     list_devices,
+    list_doctor_alerts,
     list_doctor_patients,
 )
 from api.google_auth import (
@@ -318,6 +319,22 @@ def patients_roster(authorization: str = Header(default="")):
     if claims.get("role") != "doctor":
         raise HTTPException(status_code=403, detail="Only doctors list their patients")
     return {"patients": list_doctor_patients(str(claims["sub"]))}
+
+
+@app.get("/alerts")
+def alerts_history(authorization: str = Header(default="")):
+    """The calling doctor's alert history across linked patients, newest first.
+
+    Hard cap of 50 alerts — a recent-events feed, not an archive
+    (docs/DATABASE.md: only Critical/Important events are ever stored).
+    """
+    claims = require_bearer(authorization)
+    if claims.get("role") != "doctor":
+        raise HTTPException(
+            status_code=403,
+            detail="Only doctors list their patients' alerts",
+        )
+    return {"alerts": list_doctor_alerts(str(claims["sub"]))}
 
 
 @app.get("/auth/verify")

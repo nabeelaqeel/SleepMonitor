@@ -22,6 +22,9 @@
 # Default source is the `preview` profile of app/eas.json, i.e. exactly
 # what `eas build --profile preview` would bake. --env-file swaps in a
 # dotenv file for LAN/dev-broker experiments (shell values override dotenv).
+# JS-source freshness: gradle's up-to-date check misses JS-only edits in the
+#   generated project — the app's JS/JSON sources are fingerprinted too and
+#   force-invalidate the bundler outputs when that fingerprint moves.
 #
 # Staging variant (--staging): the same app built under applicationId
 # com.aqeel.sleepmonitor.staging with launcher label "SleepMonitor Staging",
@@ -63,7 +66,7 @@ while [ $# -gt 0 ]; do
     --env-file)    [ $# -ge 2 ] || { echo "--env-file needs a path argument" >&2; exit 2; }
                    ENV_FILE="$2"; shift 2 ;;
     --env-file=*)  ENV_FILE="${1#*=}"; shift ;;
-    -h|--help)     sed -n '2,32p' "$0"; exit 0 ;;
+    -h|--help)     sed -n '2,35p' "$0"; exit 0 ;;
     *) echo "unknown flag: $1 (see --help)" >&2; exit 2 ;;
   esac
 done
@@ -305,15 +308,20 @@ for key in "${!BAKED[@]}"; do
 done
 say "── (exported — these exact values will be baked into the APK)"
 
-# ── baked-env fingerprint guard ──────────────────────────────
+# ── baked-env + JS-source fingerprint guards ─────────────────
 # Endpoints are NOT gradle task inputs: editing eas.json alone leaves
 # :app:createBundleReleaseJsAndAssets UP-TO-DATE (observed live: after the
 # server IP change the APK still baked the old bundle). The fingerprint of
 # the exact exported values is the validity signal — when it moves, the
 # bundler's outputs AND its caches are force-invalidated so the new values
 # re-bake; when it matches, none of this runs and rebuilds stay cheap.
+# Same hazard for the JS SOURCES: gradle's up-to-date check misses JS-only
+# edits in this generated-project flow (observed live: a context edit
+# shipped the previous session's bundle until app/android/app/build was
+# wiped by hand) — so the sources are fingerprinted too, with the same
+# write-after-success stamp discipline, and invalidate the same outputs.
 invalidate_bundle_outputs() {
-  say "   (env values are not gradle inputs — invalidating bundler outputs + metro cache:"
+  say "   (${1} — invalidating bundler outputs + metro cache:"
   say "    without this, the previously baked JS bundle ships again)"
   rm -rf "$ANDROID/app/build/generated/assets/createBundle${FLAVOR_CAP}${VARIANT_CAP}JsAndAssets"
   rm -rf "$ANDROID/app/build/intermediates/sourcemaps/react"
@@ -326,6 +334,28 @@ CURRENT_FP="$(for key in $(printf '%s\n' "${!BAKED[@]}" | sort); do
               done | sha256sum | cut -d' ' -f1)"
 PREV_FP="$(cat "$STAMP_FILE" 2>/dev/null || true)"
 
+# JS-source fingerprint: the tracked .js/.json files under app/ (node_modules/,
+# android/, builds/ and the other ignored dirs hold no bundle inputs), plus
+# app.json / app.config.js / package.json — already covered by the globs.
+# NUL-delimited and sorted so the hash is order-stable; not a git checkout,
+# fall back to find with the same artifact dirs pruned.
+js_src_fingerprint() {
+  (
+    cd "$APP" || exit 1
+    { if git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+        git ls-files -z -- '*.js' '*.json'
+      else
+        find . \( -path ./node_modules -o -path ./android -o -path ./builds \
+                  -o -path ./dist -o -path ./web-build -o -path ./.expo \) -prune \
+            -o \( -name '*.js' -o -name '*.json' \) -type f -print0 \
+            | sed -z 's|^\./||'
+      fi; } | sort -z | xargs -0 -r sha256sum -- | sha256sum | cut -d' ' -f1
+  )
+}
+STAMP_JS_FILE="$ANDROID/.baked-js-src-stamp"
+CURRENT_JS_FP="$(js_src_fingerprint)" || die "could not fingerprint the app's JS/JSON sources — fix the checkout state, then re-run"
+PREV_JS_FP="$(cat "$STAMP_JS_FILE" 2>/dev/null || true)"
+
 if [ "$DRY" = 1 ]; then
   say "── baked-env fingerprint: ${CURRENT_FP:0:16}…"
   if [ -z "$PREV_FP" ]; then
@@ -336,11 +366,21 @@ if [ "$DRY" = 1 ]; then
   else
     say "   matches the last build — no JS invalidation needed"
   fi
+  say "── js-source fingerprint: ${CURRENT_JS_FP:0:16}…"
+  if [ -z "$PREV_JS_FP" ]; then
+    say "   no stamp yet — the real run invalidates the JS bundle BEFORE building:"
+    say "   existing outputs here may have been baked from different JS sources"
+  elif [ "$PREV_JS_FP" != "$CURRENT_JS_FP" ]; then
+    say "   differs from the last build — the real run will invalidate the JS bundle so the edited sources re-bake"
+  else
+    say "   matches the last build — no JS invalidation needed"
+  fi
 else
-  # The STAMP is written only after a successful, artifact-producing build:
-  # writing it up-front would record the new fingerprint even when Gradle
+  # Stamps are written only after a successful, artifact-producing build:
+  # writing them up-front would record the new fingerprints even when Gradle
   # failed after the bundler outputs were cleared, and the next run would
   # then consider the (possibly stale) baked bundle valid.
+  INVAL_REASON=""
   if [ "$PREV_FP" != "$CURRENT_FP" ]; then
     if [ -z "$PREV_FP" ]; then
       # No stamp does NOT mean a clean state: this android dir may pre-date
@@ -348,10 +388,23 @@ else
       # regenerated). Its bundle could carry OTHER values — invalidate it,
       # same recipe as the fingerprint-changed case.
       say "── no fingerprint stamp on this app/android — invalidating defensively before the first tracked build"
+      INVAL_REASON="no baked-env stamp on this app/android"
     else
       say "── baked EXPO_PUBLIC_* changed since the last build (…${PREV_FP:0:16} → …${CURRENT_FP:0:16})"
+      INVAL_REASON="baked EXPO_PUBLIC_* values are not gradle inputs"
     fi
-    invalidate_bundle_outputs
+  fi
+  if [ "$PREV_JS_FP" != "$CURRENT_JS_FP" ]; then
+    if [ -z "$PREV_JS_FP" ]; then
+      say "── no JS-source stamp on this app/android — invalidating defensively before the first tracked build"
+      INVAL_REASON="${INVAL_REASON:+$INVAL_REASON; }no JS-source stamp on this app/android"
+    else
+      say "── app JS sources changed since the last build (…${PREV_JS_FP:0:16} → …${CURRENT_JS_FP:0:16})"
+      INVAL_REASON="${INVAL_REASON:+$INVAL_REASON; }app JS sources changed (gradle's up-to-date check misses JS edits in the generated project)"
+    fi
+  fi
+  if [ -n "$INVAL_REASON" ]; then
+    invalidate_bundle_outputs "$INVAL_REASON"
   fi
 fi
 
@@ -411,8 +464,9 @@ run "${TO_RUN[@]}" || die "gradle build FAILED — the error above names the mis
 
 [ -f "$APK_SRC" ] || die "gradle reported success but $APK_SRC is absent — inspect app/android/app/build/outputs/"
 
-# fingerprint stamp: NOW (a real APK exists at $APK_SRC), not before Gradle ran
+# fingerprint stamps: NOW (a real APK exists at $APK_SRC), not before Gradle ran
 printf '%s\n' "$CURRENT_FP" > "$STAMP_FILE"
+printf '%s\n' "$CURRENT_JS_FP" > "$STAMP_JS_FILE"
 
 cp "$APK_SRC" "$OUT_DIR/$NAME"
 cp "$APK_SRC" "$OUT_DIR/$LATEST"                  # stable name for adb install commands

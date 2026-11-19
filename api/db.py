@@ -15,9 +15,10 @@ The DATABASE_URL comes from .env.development (same as the ingest worker).
 
 from __future__ import annotations
 
-import secrets
 import re
+import secrets
 from contextlib import contextmanager
+from datetime import UTC
 
 import psycopg2
 
@@ -459,3 +460,47 @@ def list_doctor_patients(doctor_id: str) -> list[dict]:
             },
         })
     return patients
+
+
+def list_doctor_alerts(doctor_id: str) -> list[dict]:
+    """Alert history for the calling doctor's linked patients, newest first.
+
+    Scoped by the doctor_patients join exactly like list_doctor_patients,
+    so alerts of unlinked patients never leak across doctors. Hard cap of
+    50 rows, no pagination — the Alerts tab renders a recent-events feed,
+    not an archive.
+    """
+    with connection() as conn, conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT a.alert_id, a.patient_id::text, u.name,
+                   a.severity, a.spo2, a.heart_rate, a.ts, a.session_id::text
+            FROM alerts a
+            JOIN users u
+                 ON u.user_id = a.patient_id AND u.role = 'patient'
+            JOIN doctor_patients dp
+                 ON dp.patient_id = a.patient_id AND dp.doctor_id = %s::uuid
+            ORDER BY a.ts DESC
+            LIMIT 50
+            """,
+            (doctor_id,),
+        )
+        rows = cur.fetchall()
+    # Alerts ride idx_alerts_patient_ts; FLOAT columns arrive as Python
+    # floats, so only the UUIDs and the ISO timestamp need shaping.
+    return [
+        {
+            "alert_id": alert_id,
+            "patient_id": patient_id,
+            "patient_name": name,
+            "severity": severity,
+            "spo2": spo2,
+            "heart_rate": heart_rate,
+            # Contract fixes UTC: normalize so a non-UTC server clock can't
+            # shift the offset the app receives.
+            "ts": ts.astimezone(UTC).isoformat(),
+            "session_id": session_id,
+        }
+        for (alert_id, patient_id, name, severity, spo2, heart_rate,
+             ts, session_id) in rows
+    ]

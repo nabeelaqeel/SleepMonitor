@@ -141,11 +141,12 @@ export default function App() {
   }
 
   if (!user) {
+    // No provider pre-login: it would run in doctor mode (patientId null),
+    // ingest the whole stream, and the instance survives into the patient
+    // session — carrying another patient's data across the login boundary.
     return (
       <SafeAreaProvider>
-        <SleepProvider>
-          <LoginScreen onLoginSuccess={handleLoginSuccess} />
-        </SleepProvider>
+        <LoginScreen onLoginSuccess={handleLoginSuccess} />
       </SafeAreaProvider>
     );
   }

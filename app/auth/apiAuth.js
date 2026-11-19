@@ -304,6 +304,12 @@ export async function fetchPatients() {
   return body.patients || [];
 }
 
+/** GET /alerts (doctor) — persisted Critical/Important alert history, ts DESC, max 50. */
+export async function fetchAlertHistory() {
+  const body = await authedFetch('/alerts', { fallback: 'Could not load alert history' });
+  return body.alerts || [];
+}
+
 /** GET /devices (patient) — bound watches, oldest first. */
 export async function fetchDevices() {
   const body = await authedFetch('/devices', { fallback: 'Could not load devices' });

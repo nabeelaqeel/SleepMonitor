@@ -22,15 +22,34 @@ const TIER_CONFIG = {
 // Code identifiers (band/tier keys, currentData.tier comparisons, sleep/<tier>
 // topics) stay untouched — user-facing wording lives in config/displayText.js.
 
+// No-data styling: the SleepContext initial state is a placeholder, so before
+// this account's own first reading arrives everything renders explicitly empty
+// in neutral gray — never placeholder values colored like real readings.
+const NO_DATA_COLOR = '#6b7280';
+const NO_DATA_TIER  = {
+  bg: '#13131f', text: '#9ca3af', border: '#374151',
+  label: '—', dot: NO_DATA_COLOR,
+};
+
 export default function HomeScreen() {
   const { currentData, spo2History, aiRecommendation } = useSleep();
 
-  const tier      = TIER_CONFIG[currentData.tier] || TIER_CONFIG.Normal;
-  const spo2Color = currentData.spo2 < 90 ? '#f87171'
+  // 'Waiting...' is the SleepContext initial lastUpdated sentinel; it holds
+  // until the first own-patient reading passes the scoping gate.
+  const noData = currentData.lastUpdated === 'Waiting...';
+
+  const tier      = noData ? NO_DATA_TIER
+                  : TIER_CONFIG[currentData.tier] || TIER_CONFIG.Normal;
+  const spo2Color = noData ? NO_DATA_COLOR
+                  : currentData.spo2 < 90 ? '#f87171'
                   : currentData.spo2 < 95 ? '#fbbf24' : '#4ade80';
-  const hrColor   = currentData.heartRate < 40
+  const hrColor   = noData ? NO_DATA_COLOR
+                  : currentData.heartRate < 40
                  || currentData.heartRate > 100 ? '#f87171' : '#4ade80';
-  const hrvColor  = currentData.hrv < 20 ? '#fbbf24' : '#4ade80';
+  const hrvColor  = noData ? NO_DATA_COLOR
+                  : currentData.hrv < 20 ? '#fbbf24' : '#4ade80';
+  const sparkMin  = noData ? null : Math.min(...spo2History);
+  const sparkMax  = noData ? null : Math.max(...spo2History);
 
   return (
     <SafeAreaView style={styles.container}>
@@ -43,7 +62,9 @@ export default function HomeScreen() {
           <Text style={styles.appTitle}>Sleep monitor</Text>
           <View style={styles.liveRow}>
             <View style={[styles.liveDot, { backgroundColor: tier.dot }]} />
-            <Text style={styles.liveText}>Live · {currentData.lastUpdated}</Text>
+            <Text style={styles.liveText}>
+              {noData ? currentData.lastUpdated : `Live · ${currentData.lastUpdated}`}
+            </Text>
           </View>
         </View>
 
@@ -70,22 +91,22 @@ export default function HomeScreen() {
         <View style={styles.grid}>
           <VitalCard
             label="SpO2"
-            value={`${currentData.spo2}%`}
+            value={`${noData ? 0 : currentData.spo2}%`}
             color={spo2Color}
           />
           <VitalCard
             label="Heart rate"
-            value={`${currentData.heartRate} bpm`}
+            value={`${noData ? 0 : currentData.heartRate} bpm`}
             color={hrColor}
           />
           <VitalCard
             label="HRV (RMSSD)"
-            value={`${currentData.hrv} ms`}
+            value={`${noData ? 0 : currentData.hrv} ms`}
             color={hrvColor}
           />
           <VitalCard
             label="Motion"
-            value={currentData.motion || 'Low'}
+            value={noData ? '—' : (currentData.motion || 'Low')}
             color="#9ca3af"
           />
         </View>
@@ -93,13 +114,13 @@ export default function HomeScreen() {
         {/* SpO2 sparkline */}
         <Text style={styles.sectionLabel}>SpO2 trend — last 10 readings</Text>
         <View style={styles.sparkCard}>
-          <SparkLine data={spo2History} />
+          <SparkLine data={noData ? [] : spo2History} />
           <View style={styles.sparkLegend}>
-            <Text style={styles.sparkMin}>
-              Min: {Math.min(...spo2History)}%
+            <Text style={[styles.sparkMin, noData && { color: NO_DATA_COLOR }]}>
+              Min: {sparkMin == null ? '—' : `${sparkMin}%`}
             </Text>
-            <Text style={styles.sparkMax}>
-              Max: {Math.max(...spo2History)}%
+            <Text style={[styles.sparkMax, noData && { color: NO_DATA_COLOR }]}>
+              Max: {sparkMax == null ? '—' : `${sparkMax}%`}
             </Text>
           </View>
         </View>
