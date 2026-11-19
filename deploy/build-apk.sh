@@ -36,6 +36,9 @@
 #   "app/android"). `npx expo prebuild --clean` regenerates it INCLUDING a
 #   fresh debug keystore — every phone running an older local build would
 #   then need a one-off uninstall before installing again.
+#   Keystore pinning: the registered SHA-1 (Google Android OAuth client) is
+#   pinned by deploy/debug.keystore — copy it back over
+#   app/android/app/debug.keystore after any prebuild (never regenerate).
 #
 # First build is slow (NDK C++ across 4 ABIs, gradle warms its cache);
 # later rebuilds are minutes. Script never creates or rotates secrets —

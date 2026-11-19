@@ -1,21 +1,28 @@
-// Google sign-in: expo-auth-session fetches an id_token, which is handed to
-// POST /auth/google where the API verifies it against its GOOGLE_CLIENT_ID.
+// Google sign-in: native Play-Services sign-in (@react-native-google-signin/
+// google-signin) — no browser involved. The previous expo-auth-session
+// browser flow could never work on Android: Google rejects custom-scheme
+// redirects for WEB-type clients (Error 400: invalid_request) and ANDROID-type
+// clients have no browser flow at all. The native flow returns an id_token
+// whose `aud` is the WEB client id, handed to POST /auth/google where the API
+// verifies it against its GOOGLE_CLIENT_ID — server contract unchanged.
 // The app only ever handles public client IDs — no client secret lives here.
 
-import { useEffect, useRef, useState } from 'react';
+import { useState, useRef } from 'react';
+import { Platform } from 'react-native';
 import Constants from 'expo-constants';
-// expo-auth-session 7.x no longer exports the Google provider from its main
-// entry, and the shim file is lowercase — Linux resolution is case-sensitive.
-import { ResponseType } from 'expo-auth-session';
-import { useIdTokenAuthRequest } from 'expo-auth-session/providers/google';
+import {
+  GoogleSignin,
+  isErrorWithCode,
+  isSuccessResponse,
+  statusCodes,
+} from '@react-native-google-signin/google-signin';
 import { API_URL, GOOGLE_CLIENT_ID, GOOGLE_CONFIGURED } from '../config/appConfig';
 import { secureStoreToken } from './apiAuth';
 
 const GOOGLE_TIMEOUT_MS = 15000;
 
-// The SDK's redirect scheme is makeRedirectUri()-based (expo-auth-session 7.x
-// has no auth proxy left), which needs a real app scheme — Expo Go cannot
-// complete Google OAuth, so the screen shows that up front instead.
+// The native Google module is absent in Expo Go — the screen shows that
+// up front instead.
 export const RUNNING_IN_EXPO_GO =
   Constants.executionEnvironment === 'storeClient' || Constants.appOwnership === 'expo';
 
@@ -61,61 +68,49 @@ export async function googleSignIn(idToken, role) {
   }
 }
 
-/** OAuth hook + /auth/google handoff for the login screen. */
+/** Native Google errors → displayable message; null = stay silent (user backed
+ *  out, or a flow is already running). Code '10' is Play-Services DEVELOPER_ERROR:
+ *  the APK's package + signing SHA-1 is not registered in Google Cloud Console. */
+function describeGoogleError(err) {
+  if (!isErrorWithCode(err)) return (err && err.message) || 'Google sign-in failed';
+  switch (err.code) {
+    case statusCodes.SIGN_IN_CANCELLED:
+    case statusCodes.IN_PROGRESS:
+      return null;
+    case statusCodes.PLAY_SERVICES_NOT_AVAILABLE:
+      return 'Google Play Services is missing or outdated on this device — Google sign-in needs it.';
+    case '10':
+      return 'Google rejected this app: its package name + signing SHA-1 is not registered in the Google Cloud Console yet.';
+    default:
+      return err.message || 'Google sign-in failed';
+  }
+}
+
+/** Native Play-Services sign-in + /auth/google handoff for the login screen. */
 export function useGoogleSignIn({ onSession, onError }) {
   const [needsRole, setNeedsRole] = useState(false);
   const [unavailable, setUnavailable] = useState(false);
   const [loading, setLoading] = useState(false);
   const pendingTokenRef = useRef(null);
 
-  // Implicit id_token flow for every platform (no client secret exists here —
-  // a code exchange against a Web client would require one server-side).
-  const [, response, promptAsync] = useIdTokenAuthRequest(
-    {
-      clientId: GOOGLE_CLIENT_ID || 'not-configured',
-      responseType: ResponseType.IdToken,
-      scopes: ['openid', 'email', 'profile'],
-    },
-    {}
-  );
-
-  useEffect(() => {
-    if (!response) return undefined;
-    if (response.type !== 'success') {
-      if (response.type === 'error') {
-        onError('Google sign-in failed: ' + ((response.error && response.error.message) || 'unknown error'));
+  /** Server handoff for a verified id_token (needs-role flow included). */
+  async function handleIdToken(idToken) {
+    setLoading(true);
+    try {
+      const result = await googleSignIn(idToken);
+      if (result.unavailable) setUnavailable(true);
+      else if (result.needsRole) {
+        pendingTokenRef.current = idToken;
+        setNeedsRole(true);
+      } else {
+        onSession(result.user);
       }
-      return undefined;
+    } catch (err) {
+      onError(err.message || 'Google sign-in failed');
+    } finally {
+      setLoading(false);
     }
-    const idToken = response.params && response.params.id_token;
-    if (!idToken) {
-      onError(
-        'Google did not return an ID token — add this app\'s redirect URI to the OAuth client ' +
-        '(sleepmonitor:// for the app, https://auth.expo.io for web).'
-      );
-      return undefined;
-    }
-    let cancelled = false;
-    (async () => {
-      setLoading(true);
-      try {
-        const result = await googleSignIn(idToken);
-        if (cancelled) return;
-        if (result.unavailable) setUnavailable(true);
-        else if (result.needsRole) {
-          pendingTokenRef.current = idToken;
-          setNeedsRole(true);
-        } else {
-          onSession(result.user);
-        }
-      } catch (err) {
-        if (!cancelled) onError(err.message || 'Google sign-in failed');
-      } finally {
-        if (!cancelled) setLoading(false);
-      }
-    })();
-    return () => { cancelled = true; };
-  }, [response]);
+  }
 
   /** First-login role choice — re-posts the SAME id_token with role attached. */
   async function chooseRole(role) {
@@ -147,16 +142,32 @@ export function useGoogleSignIn({ onSession, onError }) {
     setUnavailable(false);
     if (RUNNING_IN_EXPO_GO) {
       onError(
-        'Google sign-in needs a development build or the web app — Expo Go cannot ' +
-        'complete the OAuth redirect (the auth proxy was removed from the SDK).'
+        'Google sign-in needs a development build or the release APK — Expo Go cannot ' +
+        'load the native Google module.'
       );
+      return;
+    }
+    if (Platform.OS === 'web') {
+      onError('Google sign-in runs on the Android/iOS app only — the web build supports email sign-in.');
       return;
     }
     if (!GOOGLE_CONFIGURED) return;
     try {
-      await promptAsync();
+      // webClientId is the WEB-type console client — the id_token Google
+      // returns carries it as `aud`, which is what the API expects.
+      GoogleSignin.configure({ webClientId: GOOGLE_CLIENT_ID });
+      await GoogleSignin.hasPlayServices({ showPlayServicesUpdateDialog: true });
+      const response = await GoogleSignin.signIn();
+      if (!isSuccessResponse(response)) return; // user closed the account sheet
+      const idToken = response.data && response.data.idToken;
+      if (!idToken) {
+        onError("Google returned no ID token — this build's webClientId is missing or invalid.");
+        return;
+      }
+      await handleIdToken(idToken);
     } catch (err) {
-      onError('Google sign-in could not open: ' + (err.message || 'unknown error'));
+      const message = describeGoogleError(err);
+      if (message) onError(message);
     }
   }
 
