@@ -21,14 +21,14 @@ export const TIER_LONG_LABELS = {
   Critical:   'Critical',
   Important:  'Moderate',
   Normal:     'Low Priority',
-  Background: 'Backgroud',
+  Background: 'Background',
 };
 
 export const TIER_SHORT_LABELS = {
   Critical:   'Critical',
   Important:  'Moderate',
   Normal:     'Low Priority',
-  Background: 'Backgroud',
+  Background: 'Background',
 };
 
 export const OFFLINE_TIER_LABEL = 'Offline — no live session';
